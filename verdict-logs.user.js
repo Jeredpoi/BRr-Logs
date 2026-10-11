@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.5
+// @version      0.8.6
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.5
+// @version      0.8.6
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.8.5';
+const VERSION = '0.8.6';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -269,9 +269,14 @@ const Layer = {
 function copyNick(el, nick) {
     el.style.cursor = 'copy';
     el.title = 'Нажми — скопировать ник';
+    // сайт может переиспользовать ячейку под другую строку — ник берём свежий, обработчик один
+    el._vdlNick = nick;
+    if (el._vdlCopy) return;
+    el._vdlCopy = true;
     el.addEventListener('click', e => {
         e.preventDefault();
         e.stopPropagation();
+        const nick = el._vdlNick;
         navigator.clipboard.writeText(nick).then(
             () => toast('Ник скопирован: ' + nick),
             () => toast('Не удалось скопировать', 'err')
@@ -932,12 +937,23 @@ html body .vs__search::placeholder { color: rgba(232,234,238,.5) !important; }
 html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
 html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background: linear-gradient(color-mix(in srgb, ${acc} 16%, transparent), color-mix(in srgb, ${acc} 16%, transparent)), var(--vd-glass, rgba(18,20,27,.42)) !important; }`;
         document.head.appendChild(st);
-        const deco = U.debounce(() => {
-            this.placeHead();
-            this.decorate();
-        }, 200);
-        new MutationObserver(deco).observe(document.body, { childList: true, subtree: true });
-        this.decorate();
+        let queued = false;
+        const run = () => {
+            queued = false;
+            mo.disconnect();
+            try {
+                this.placeHead();
+                this.decorate();
+            } finally {
+                mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+            }
+        };
+        const mo = new MutationObserver(() => {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(run);
+        });
+        run();
         this.quickDates();
         this.fromHash();
         addEventListener('hashchange', () => this.fromHash());
@@ -1040,9 +1056,32 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
         }
     },
 
+    // текст ячейки без наших добавок (⌕, «Трейд #…», ×N); подсвеченный текст — свой
+    rawOf(td) {
+        let s = '';
+        td.childNodes.forEach(n => {
+            if (n.nodeType === 3) s += n.nodeValue;
+            else if (n.nodeType === 1 && !/\bvdl-(mini|trade|cnt)\b/.test(n.className)) s += n.textContent;
+        });
+        return s.replace(/\s+/g, ' ').trim();
+    },
+    // сайт (Vue) переиспользует ячейки под новые строки — снимаем всё наше и разбираем заново
+    reset(td) {
+        td.querySelectorAll(':scope > .vdl-mini, :scope > .vdl-trade, :scope > .vdl-cnt').forEach(x => x.remove());
+        td.querySelectorAll(':scope > .vdl-hl').forEach(p => {
+            while (p.firstChild) td.insertBefore(p.firstChild, p);
+            p.remove();
+        });
+        ['vdl', 'hk', 'hv', 'trade', 'money', 'vdlSig'].forEach(k => delete td.dataset[k]);
+        td.classList.remove('vdl-done');
+        const tr = td.closest('tr');
+        if (tr) tr.classList.remove('vdl-done');
+    },
+
     decorate() {
         const c = this.cfg();
         document.querySelectorAll('td').forEach(td => {
+            if (td.dataset.vdlSig !== undefined && td.dataset.vdlSig !== this.rawOf(td)) this.reset(td);
             if (!td.dataset.vdl) {
                 const t = td.textContent.trim();
                 let mode = '',
@@ -1096,6 +1135,7 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                     if (/^-?\d{4,}$/.test(raw)) node.textContent = raw.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
                 }
             }
+            td.dataset.vdlSig = this.rawOf(td);
         });
         this.recolor();
     },
@@ -1133,9 +1173,8 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                     if (h != null && !pill && txt) {
                         pill = document.createElement('span');
                         pill.className = 'vdl-hl';
-                        pill.textContent = txt.textContent.trim();
                         td.insertBefore(pill, txt);
-                        txt.textContent = ' ';
+                        pill.appendChild(txt);
                         pill.onmouseenter = () => this.hot(type, val, true);
                         pill.onmouseleave = () => this.hot(type, val, false);
                     }
@@ -1160,7 +1199,7 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                         td.appendChild(cnt);
                     } else if (h == null && cnt) cnt.remove();
                     if (cnt) {
-                        cnt.textContent = '×' + n;
+                        if (cnt.textContent !== '×' + n) cnt.textContent = '×' + n;
                         cnt.style.background = `hsl(${h},68%,45%)`;
                     }
                     if (h == null && pill) {
