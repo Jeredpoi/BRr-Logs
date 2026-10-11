@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.2
+// @version      0.8.3
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.2
+// @version      0.8.3
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.8.2';
+const VERSION = '0.8.3';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -914,8 +914,9 @@ const LogsPage = {
 /* Bootstrap 5.3 красит ячейки светлой заливкой через inset box-shadow поверх любого фона — убираем, ячейки тёмные */
 html body table td, html body table th { box-shadow: none !important; --bs-table-bg-type: transparent; --bs-table-bg-state: transparent; --bs-table-accent-bg: transparent; --bs-table-striped-bg: transparent; --bs-table-hover-bg: transparent; }
 html body :is(#log-table, table), html body :is(#log-table, table) tbody, html body :is(#log-table, table) tbody tr { background: transparent !important; --bs-table-bg: transparent; }
-html body :is(#log-table, table) tbody :is(.first-row, tr) td { background: rgba(14,15,21,.86) !important; color: #e4e6eb; }
-html body :is(#log-table, table) tbody :is(.second-row, tr) td[colspan] { background: rgba(8,9,13,.9) !important; color: #cfd2d8; }
+/* ячейки — стекло темы VERDICT (как блоки на форуме): полупрозрачные, фон просвечивает */
+html body :is(#log-table, table) tbody :is(.first-row, tr) td { background: var(--vd-glass, rgba(18,20,27,.42)) !important; backdrop-filter: blur(10px) saturate(1.15); -webkit-backdrop-filter: blur(10px) saturate(1.15); color: #e4e6eb; }
+html body :is(#log-table, table) tbody :is(.second-row, tr) td[colspan] { background: linear-gradient(rgba(0,0,0,.2), rgba(0,0,0,.2)), var(--vd-glass, rgba(18,20,27,.42)) !important; color: #cfd2d8; }
 /* выпадающие списки фильтров (vue-select и любые listbox): тёмные вместо белых */
 html body :is(.vs__dropdown-toggle, .vs__dropdown-menu, [role="listbox"], .multiselect__content-wrapper, .multiselect__tags) { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; }
 html body :is(.vs__dropdown-option, [role="listbox"] [role="option"], [role="listbox"] li, .multiselect__option) { background: transparent !important; color: #e8eaee !important; }
@@ -923,7 +924,7 @@ html body :is(.vs__dropdown-option--highlight, .vs__dropdown-option--selected, [
 html body :is(.vs__search, .vs__selected) { color: #e8eaee !important; background: transparent !important; border: 0 !important; }
 html body .vs__search::placeholder { color: rgba(232,234,238,.5) !important; }
 html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
-html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background: color-mix(in srgb, ${acc} 14%, rgba(10,11,16,.6)) !important; }`;
+html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background: linear-gradient(color-mix(in srgb, ${acc} 16%, transparent), color-mix(in srgb, ${acc} 16%, transparent)), var(--vd-glass, rgba(18,20,27,.42)) !important; }`;
         document.head.appendChild(st);
         const deco = U.debounce(() => this.decorate(), 200);
         new MutationObserver(deco).observe(document.body, { childList: true, subtree: true });
