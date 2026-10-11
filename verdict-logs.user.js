@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.6
+// @version      0.9.0
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.6
+// @version      0.9.0
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.8.6';
+const VERSION = '0.9.0';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -332,6 +332,22 @@ const LOGS_UI_CSS = `
 .vdl-more { margin: 6px 0 4px 14px; padding-left: 12px; border-left: 2px solid color-mix(in srgb, var(--acc) 45%, transparent); }
 .vdl-more .vdl-row { padding: 6px 2px; }
 .vdl-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.vdl-hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; align-items: end; height: 70px; padding: 10px 2px 4px; }
+.vdl-hours i { display: block; border-radius: 3px 3px 1px 1px; background: color-mix(in srgb, var(--acc) 70%, transparent); min-height: 3px; }
+.vdl-hours i.z { background: rgba(255,255,255,.07); }
+.vdl-hours-l { display: grid; grid-template-columns: repeat(4, 1fr) auto; font-size: 10.5px; color: var(--tx-3); padding: 0 2px 8px; }
+.vdl-bar { display: grid; grid-template-columns: minmax(120px, 220px) 1fr 54px; gap: 10px; align-items: center; padding: 6px 2px; font-size: 12.5px; }
+.vdl-bar .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx-2); }
+.vdl-bar .tr { height: 8px; border-radius: 99px; background: rgba(255,255,255,.06); overflow: hidden; }
+.vdl-bar .tr b { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--acc), color-mix(in srgb, var(--acc) 50%, var(--acc2))); }
+.vdl-bar .n { text-align: right; font-weight: 700; color: var(--tx); }
+.vdl-money { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; }
+.vdl-money .k { padding: 9px 11px; border-radius: 11px; border: 1px solid var(--line); background: rgba(255,255,255,.03); }
+.vdl-money .k small { display: block; font-size: 10.5px; color: var(--tx-3); }
+.vdl-money .k b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vdl-money .k b + small { margin-top: 2px; }
+.vdl-pos { color: #3ecf8e; } .vdl-neg { color: #ff6b6b; }
+@media (max-width: 700px) { .vdl-sum, .vdl-money { grid-template-columns: repeat(2, 1fr); } .vdl-bar { grid-template-columns: 1fr 1fr 44px; } }
 .vdl-btns .btn { height: 28px; font-size: 12px; padding: 0 10px; }
 @media (max-width: 760px) { .vdl-sum { grid-template-columns: repeat(2, 1fr); } .vdl-row { grid-template-columns: 1fr; } .vdl-btns { justify-content: flex-start; } }
 `;
@@ -343,7 +359,12 @@ const Api = {
         const m = location.pathname.match(/\/gslogs\/(\d+)/);
         return m ? m[1] : Store.get('server', '');
     },
-    async page(params, offset) {
+    page(params, offset) {
+        const p = (this._q || Promise.resolve()).then(() => this._page(params, offset));
+        this._q = p.catch(() => {});
+        return p;
+    },
+    async _page(params, offset) {
         const wait = 1100 - (Date.now() - this.last);
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
         this.last = Date.now();
@@ -354,9 +375,15 @@ const Api = {
         const r = await fetch(`/gslogs/${this.server()}/api/list-game-logs/?${q}`, { credentials: 'include' });
         if (r.status === 401 || r.status === 403) throw new Error('сайт логов не пускает — войди заново');
         if (!r.ok) {
+            // сайт мог не понять сортировку «сначала новые» — пробуем обычную, но остаёмся на ней, только если она сработала
             if (this.order === '-time') {
                 this.order = 'time';
-                return this.page(params, offset);
+                try {
+                    return await this._page(params, offset);
+                } catch (e) {
+                    this.order = '-time';
+                    throw e;
+                }
             }
             throw new Error('сайт логов ответил ' + r.status);
         }
@@ -465,6 +492,42 @@ const devOf = r => {
 };
 const sameNick = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 
+// деньги и категории из записи API (названия полей — как в фильтрах сайта)
+const numOf = v => {
+    if (v == null || v === '') return NaN;
+    const n = Number(String(v).replace(/[\s ]/g, '').replace(',', '.'));
+    return Number.isFinite(n) ? n : NaN;
+};
+const amtOf = r => numOf(r.transaction_amount ?? r.amount);
+const balOf = r => numOf(r.balance_after ?? r.player_balance_after);
+const fmtMoney = n => (n < 0 ? '−' : n > 0 ? '+' : '') + String(Math.abs(Math.round(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const fmtNum = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+let CATS = null;
+function catName(r) {
+    // список категорий сайт может подгрузить позже — перечитываем, пока не найдём
+    if (!CATS || Object.keys(CATS).length < 2) {
+        CATS = { 38: 'Подключения / Отключения' };
+        document.querySelectorAll('select option').forEach(o => {
+            if (/^\d+$/.test(o.value) && o.textContent.trim()) CATS[o.value] = o.textContent.trim();
+        });
+    }
+    const c = r.category;
+    return r.category_name || (c && typeof c === 'object' && (c.name || c.title)) || (typeof c === 'string' && c) || CATS[r.category_id] || (r.category_id != null ? 'Категория #' + r.category_id : 'Без категории');
+}
+// час по Москве
+const mskHour = t => new Date(t + 3 * 3600e3).getUTCHours();
+function hoursHtml(times) {
+    const hrs = Array(24).fill(0);
+    times.forEach(t => t && hrs[mskHour(t)]++);
+    const max = Math.max(...hrs);
+    const peak = max ? hrs.indexOf(max) : -1;
+    return {
+        peak,
+        html: `<div class="vdl-hours">${hrs.map((n, h) => `<i class="${n ? '' : 'z'}" style="height:${max ? Math.max(6, Math.round((n / max) * 100)) : 6}%" title="${h}:00–${h}:59 МСК — ${n}"></i>`).join('')}</div>
+               <div class="vdl-hours-l"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>`
+    };
+}
+
 // длительность между временами
 function durHM(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -481,8 +544,10 @@ function sessionsOf(rows) {
     const out = [];
     let open = null;
     ev.forEach(e => {
-        if (e.on) open = e;
-        else if (e.off && open) {
+        if (e.on) {
+            if (open) out.push({ start: open.t, end: null, ip: open.ip, lost: true });
+            open = e;
+        } else if (e.off && open) {
             out.push({ start: open.t, end: e.t, ip: open.ip });
             open = null;
         } else if (e.off) out.push({ start: null, end: e.t, ip: e.ip });
@@ -494,11 +559,13 @@ function sessionsOf(rows) {
 const Panel = {
     open(mode = 'nick', value = '') {
         Layer.closeModals();
+        // поколение окна: результаты проверки из закрытого окна в новое не попадают
+        this._gen = (this._gen || 0) + 1;
         this.days = this.days || Store.get('days', 30);
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
             <div class="m-head"><span class="vic" style="--c:var(--acc);width:34px;height:34px;border-radius:10px">${icon('shield', 16)}</span>
-              <div><div class="m-title">Аналитика по IP</div><div class="m-sub">Сервер ${U.esc(Api.server() || '?')} · данные с сайта логов под твоим входом</div></div>
+              <div><div class="m-title">Аналитика</div><div class="m-sub">Сервер ${U.esc(Api.server() || '?')} · данные с сайта логов под твоим входом</div></div>
               <span style="flex:1"></span><button class="btn" data-a="mail" title="Идея, ошибка или вопрос разработчику">${icon('chat', 14)}Разработчику</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
               <div class="vdl-form">
@@ -547,22 +614,38 @@ const Panel = {
         if (value) go();
         else setTimeout(() => q.focus(), 50);
     },
+    stale() {
+        return this.busy && this._runGen !== this._gen;
+    },
     prog(t) {
-        if (this.scrim) this.scrim.querySelector('.vdl-prog').textContent = t;
+        if (this.scrim && !this.stale()) this.scrim.querySelector('.vdl-prog').textContent = t;
     },
     out(html) {
+        if (this.stale()) throw new Error('окно закрыто');
         const o = this.scrim && this.scrim.querySelector('.vdl-out');
         if (o) o.innerHTML = html;
         return o;
     },
-    async run(fn) {
-        if (this.busy) return toast('Подожди, предыдущая проверка ещё идёт', 'info');
+    // box — блок вложенной проверки («Кто ещё с этого IP»): ошибка пишется в него, а не поверх отчёта
+    async run(fn, box) {
+        if (this.busy) {
+            toast('Подожди, предыдущая проверка ещё идёт', 'info');
+            return false;
+        }
         this.busy = true;
+        this._runGen = this._gen;
         try {
             await fn();
+            return true;
         } catch (e) {
+            if (this.stale()) return false;
             this.prog('');
-            this.out(`<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(e.message)}</div>`);
+            const msg = `${icon('x', 14)} Не получилось: ${U.esc(e.message)}`;
+            if (box) {
+                box.hidden = false;
+                box.innerHTML = `<div class="sub" style="margin:4px 0">${msg}</div>`;
+            } else this.out(`<div class="card" style="padding:14px">${msg}</div>`);
+            return false;
         } finally {
             this.busy = false;
         }
@@ -614,6 +697,8 @@ const Panel = {
               <div class="sec"><h4>IP-адреса игрока</h4><div class="card" data-l="ips">${ips.length ? '' : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>'}</div></div>
               <div class="sec"><h4>Устройства (APPMDID)</h4><div class="card" data-l="devs">${devs.length ? '' : '<div class="vdl-row"><div class="main sub">В подключениях нет APPMDID</div></div>'}</div></div>
               <div class="sec"><h4>Сессии (вход / выход)</h4><div class="card" data-l="ses"></div></div>
+              <div class="sec"><h4>Когда играет (по входам, МСК)</h4><div class="card" data-l="hrs"></div></div>
+              <div class="sec"><h4>Деньги и активность за период</h4><div class="card" data-l="act"><div class="vdl-row"><div class="main"><button class="btn" data-a="loadact">${icon('search', 13)}Посчитать деньги и категории</button><div class="sub">Все записи игрока за ${this.days} дн.: приход и расход, баланс, крупные операции, чем занимался</div></div></div></div></div>
               <div class="sec"><h4>Трейды игрока</h4><div class="card" data-l="tr"><div class="vdl-row"><div class="main"><button class="btn" data-a="loadtr">${icon('search', 13)}Показать трейды игрока</button></div></div></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
             const li = o.querySelector('[data-l="ips"]');
@@ -622,20 +707,36 @@ const Panel = {
             devs.slice(0, 15).forEach(g => ld.appendChild(this.devRow(g, nick)));
             // сессии
             const ses = sessionsOf(rows);
+            const full = ses.filter(x => x.start && x.end);
+            const total = full.reduce((a, x) => a + (x.end - x.start), 0);
+            const longest = full.reduce((a, x) => Math.max(a, x.end - x.start), 0);
+            this.report.ses = { n: ses.length, total, avg: full.length ? total / full.length : 0, longest };
             const sb = o.querySelector('[data-l="ses"]');
             sb.innerHTML = ses.length
-                ? ses
+                ? `<div class="vdl-row"><div class="main"><div class="ttl">${ses.length} ${plural(ses.length, 'сессия', 'сессии', 'сессий')} · в игре ${durHM(total)}</div>
+                     <div class="sub">в среднем ${full.length ? durHM(total / full.length) : '—'} · самая долгая ${longest ? durHM(longest) : '—'}${full.length < ses.length ? ` · без пары вход/выход: ${ses.length - full.length}` : ''}</div></div></div>` +
+                  ses
                       .slice(0, 12)
                       .map(
                           x =>
-                              `<div class="vdl-row"><div class="main"><div class="ttl">${x.start ? fmtDate(x.start) : '?'} — ${x.end ? fmtDate(x.end) : 'ещё в игре'}</div><div class="sub">${x.start && x.end ? durHM(x.end - x.start) : 'нет пары'}${x.ip ? ' · ' + U.esc(x.ip) : ''}</div></div></div>`
+                              `<div class="vdl-row"><div class="main"><div class="ttl">${x.start ? fmtDate(x.start) : '?'} — ${x.end ? fmtDate(x.end) : x.lost ? '?' : 'ещё в игре'}</div><div class="sub">${x.start && x.end ? durHM(x.end - x.start) : x.lost ? 'выход не записан' : x.start ? 'выхода пока нет' : 'вход раньше периода'}${x.ip ? ' · ' + U.esc(x.ip) : ''}</div></div></div>`
                       )
                       .join('')
                 : '<div class="vdl-row"><div class="main sub">Нет подключений за период</div></div>';
+            // часы активности по входам (если входов нет — по всем записям)
+            const starts = rows.filter(r => /подключ/i.test(r.transaction_desc || '')).map(r => new Date(r.time).getTime());
+            const H = hoursHtml(starts.length ? starts : rows.map(r => new Date(r.time).getTime()));
+            this.report.peak = H.peak;
+            o.querySelector('[data-l="hrs"]').innerHTML = rows.length
+                ? `${H.html}<div class="sub" style="padding:0 2px 8px">${H.peak >= 0 ? `Чаще всего заходит в ${String(H.peak).padStart(2, '0')}:00–${String(H.peak).padStart(2, '0')}:59 МСК` : ''}${starts.length ? '' : ' · по всем записям, входов нет'}</div>`
+                : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>';
+            // деньги и категории — по кнопке (много страниц)
+            o.querySelector('[data-a="loadact"]').onclick = e => this.activity(e.currentTarget, o.querySelector('[data-l="act"]'), base);
             // трейды игрока — по кнопке
             o.querySelector('[data-a="loadtr"]').onclick = async e => {
-                e.currentTarget.disabled = true;
-                e.currentTarget.textContent = 'Гружу…';
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                btn.textContent = 'Гружу…';
                 try {
                     const tr = await Api.all({ ...sel, transaction_desc__ilike: '%TradeID%', ...Api.range(this.days) }, 6, (pp, nn) => this.prog(`Трейды: страница ${pp}, записей ${nn}…`));
                     this.prog('');
@@ -656,15 +757,63 @@ const Panel = {
                               .join('')
                         : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>';
                     box.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
+                    this.report.trades = list.length;
                 } catch (err) {
                     this.prog('');
                     toast('Трейды: ' + err.message, 'err');
-                    e.currentTarget.disabled = false;
-                    e.currentTarget.textContent = 'Показать трейды игрока';
+                    btn.disabled = false;
+                    btn.innerHTML = `${icon('search', 13)}Показать трейды игрока`;
                 }
             };
             o.querySelector('[data-a="copy"]').onclick = () => this.copy();
         });
+    },
+
+    // деньги и категории игрока: все его записи за период (до 500)
+    async activity(btn, box, base) {
+        btn.disabled = true;
+        btn.textContent = 'Считаю…';
+        const gen = this._gen;
+        try {
+            const LIM = 10;
+            const rows = await Api.all(base, LIM, (p, n) => gen === this._gen && this.prog(`Все записи игрока: страница ${p}, записей ${n}…`));
+            if (gen !== this._gen) return;
+            this.prog('');
+            if (!rows.length) {
+                box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>';
+                return;
+            }
+            const capped = rows.length >= LIM * API_PAGE;
+            const ops = rows.map(r => ({ r, a: amtOf(r), t: new Date(r.time).getTime() || 0 })).filter(x => Number.isFinite(x.a) && x.a !== 0);
+            const inc = ops.filter(x => x.a > 0).reduce((s, x) => s + x.a, 0);
+            const exp = ops.filter(x => x.a < 0).reduce((s, x) => s + x.a, 0);
+            const bals = rows.map(r => ({ b: balOf(r), t: new Date(r.time).getTime() || 0 })).filter(x => Number.isFinite(x.b)).sort((a, b) => a.t - b.t);
+            const b0 = bals[0], b1 = bals[bals.length - 1];
+            const big = ops.slice().sort((a, b) => Math.abs(b.a) - Math.abs(a.a)).slice(0, 6);
+            const cats = group(rows, catName).slice(0, 8);
+            const cmax = cats.length ? cats[0].n : 1;
+            this.report.money = { inc, exp, b0: b0 && b0.b, b1: b1 && b1.b, n: rows.length, capped };
+            this.report.cats = cats.map(g => `${g.k} — ${g.n}`);
+            const cls = n => (n > 0 ? 'vdl-pos' : n < 0 ? 'vdl-neg' : '');
+            box.innerHTML = `
+              <div class="vdl-money">
+                <div class="k"><small>Пришло</small><b class="vdl-pos">${ops.length ? fmtMoney(inc) : '—'}</b></div>
+                <div class="k"><small>Ушло</small><b class="vdl-neg">${ops.length ? fmtMoney(exp) : '—'}</b></div>
+                <div class="k"><small>Итог по операциям</small><b class="${cls(inc + exp)}">${ops.length ? fmtMoney(inc + exp) : '—'}</b></div>
+                <div class="k"><small>Баланс сейчас</small><b>${b1 ? fmtNum(b1.b) : '—'}</b>${b0 && b0 !== b1 ? `<small>в начале периода ${fmtNum(b0.b)}</small>` : ''}</div>
+              </div>
+              ${ops.length ? '' : '<div class="sub" style="padding:0 2px 8px">Денежных операций за период нет (или сайт не отдаёт сумму)</div>'}
+              ${big.length ? `<div class="sub" style="padding:4px 2px">Крупные операции</div>${big.map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="${cls(x.a)}">${fmtMoney(x.a)}</span><span class="vdl-tag">${U.esc(catName(x.r))}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(String(x.r.transaction_desc || '').slice(0, 140))}</div></div></div>`).join('')}` : ''}
+              <div class="sub" style="padding:10px 2px 4px">Чем занимался (записей по категориям)</div>
+              ${cats.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`).join('')}
+              <div class="sub" style="padding:8px 2px">${rows.length} записей${capped ? ' — показаны последние 500, за весь период их больше' : ''}</div>`;
+        } catch (err) {
+            if (gen !== this._gen) return;
+            this.prog('');
+            toast('Деньги и категории: ' + err.message, 'err');
+            btn.disabled = false;
+            btn.innerHTML = `${icon('search', 13)}Посчитать деньги и категории`;
+        }
     },
 
     byIp(ip, into, except) {
@@ -674,13 +823,14 @@ const Panel = {
             this.prog('');
             const nicks = group(rows, r => r.player_name);
             if (into) return this.fillMore(into, nicks, except, 'IP', ip);
+            const devN = group(rows, devOf).length;
             this.report = { kind: 'ip', ip, days: this.days, nicks };
             const o = this.out(`
               <div class="card" style="padding:12px 14px;margin-bottom:12px"><div class="ttl"><span class="vdl-mono">${U.esc(ip)}</span></div><div class="sub" data-geo>определяю провайдера…</div></div>
               <div class="vdl-sum">
                 <div class="k"><small>Записей</small><b>${rows.length}</b></div>
                 <div class="k"><small>Аккаунтов</small><b>${nicks.length}</b></div>
-                <div class="k"><small>Устройств</small><b>${group(rows, devOf).length}</b></div>
+                <div class="k"><small>Устройств</small><b>${devN}</b></div>
                 <div class="k"><small>Период</small><b style="font-size:15px">${this.days} дн.</b></div>
               </div>
               <div class="sec"><h4>Аккаунты с этого IP</h4><div class="card" data-l="nicks"></div></div>
@@ -694,7 +844,7 @@ const Panel = {
             if (!nicks.length) l.innerHTML = '<div class="vdl-row"><div class="main sub">С этого IP за период никто не заходил</div></div>';
             nicks.forEach(g => l.appendChild(this.nickRow(g)));
             o.querySelector('[data-a="copy"]').onclick = () => this.copy();
-        });
+        }, into);
     },
 
     byDev(dev, into, except) {
@@ -714,7 +864,7 @@ const Panel = {
             const l = o.querySelector('[data-l="nicks"]');
             if (!nicks.length) l.innerHTML = '<div class="vdl-row"><div class="main sub">Ничего не нашлось</div></div>';
             nicks.forEach(g => l.appendChild(this.nickRow(g)));
-        });
+        }, into);
     },
 
     async ipRows(ip, onPage) {
@@ -740,9 +890,10 @@ const Panel = {
             const el = r.querySelector('[data-geo]');
             if (el) el.innerHTML = Geo.html(x);
         });
-        r.querySelector('[data-a="who"]').onclick = e => {
-            e.currentTarget.disabled = true;
-            this.byIp(g.k, r.querySelector('.vdl-more'), nick);
+        r.querySelector('[data-a="who"]').onclick = async e => {
+            const btn = e.currentTarget;
+            btn.disabled = true;
+            btn.disabled = await this.byIp(g.k, r.querySelector('.vdl-more'), nick);
         };
         return r;
     },
@@ -752,9 +903,10 @@ const Panel = {
             <div class="sub">${fmtDate(g.first)} — ${fmtDate(g.last)}</div></div>
           <div class="vdl-btns"><button class="btn" data-a="who">${icon('search', 13)}Кто ещё с устройства</button></div>
         </div><div class="vdl-more" hidden></div></div>`);
-        r.querySelector('[data-a="who"]').onclick = e => {
-            e.currentTarget.disabled = true;
-            this.byDev(g.k, r.querySelector('.vdl-more'), nick);
+        r.querySelector('[data-a="who"]').onclick = async e => {
+            const btn = e.currentTarget;
+            btn.disabled = true;
+            btn.disabled = await this.byDev(g.k, r.querySelector('.vdl-more'), nick);
         };
         return r;
     },
@@ -781,8 +933,12 @@ const Panel = {
         if (!r) return;
         const L = [];
         if (r.kind === 'nick') {
-            L.push(`Игрок ${r.nick} — подключения за ${r.days} дн. (сервер ${Api.server()})`);
+            L.push(`Игрок ${r.nick}${r.id ? ` (ID ${r.id})` : ''} — за ${r.days} дн. (сервер ${Api.server()})`);
             L.push(`IP-адресов: ${r.ips.length}, устройств: ${r.devs.length}`);
+            if (r.ses && r.ses.n) L.push(`Сессий: ${r.ses.n}, в игре ${durHM(r.ses.total)}, в среднем ${durHM(r.ses.avg)}${r.peak >= 0 ? `, чаще всего в ${r.peak}:00 МСК` : ''}`);
+            if (r.money) L.push(`Деньги: пришло ${fmtMoney(r.money.inc)}, ушло ${fmtMoney(r.money.exp)}${Number.isFinite(r.money.b0) ? `, баланс ${fmtNum(r.money.b0)} → ${fmtNum(r.money.b1)}` : ''}${r.money.capped ? ' (по последним 500 записям)' : ''}`);
+            if (r.cats && r.cats.length) L.push('Категории: ' + r.cats.join('; '));
+            if (r.trades != null) L.push(`Трейдов: ${r.trades}`);
             r.ips.slice(0, 15).forEach(g =>
                 L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}${g.geo ? ` · ${[g.geo.country, g.geo.city].filter(Boolean).join(', ')} · ${g.geo.isp}${g.geo.host ? ' (хостинг/VPN?)' : ''}` : ''}`)
             );
@@ -959,11 +1115,11 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
         addEventListener('hashchange', () => this.fromHash());
     },
     fromHash() {
-        const m = location.hash.match(/^#vd-(nick|ip|dev)=(.+)$/);
+        const m = location.hash.match(/^#vd-(nick|id|ip|dev)=(.+)$/);
         if (!m) return;
         const v = decodeURIComponent(m[2]);
         history.replaceState(null, '', location.pathname + location.search);
-        if (m[1] === 'nick' && !/^[A-Za-z]+_[A-Za-z]+$/.test(v)) Panel.open('nick', '') || (Panel.scrim.querySelector('[data-a="q"]').value = v);
+        if (m[1] === 'nick' && !/^[A-Za-z0-9]+_[A-Za-z0-9]+$/.test(v)) Panel.open('nick', '') || (Panel.scrim.querySelector('[data-a="q"]').value = v);
         else Panel.open(m[1], v);
     },
 
@@ -980,16 +1136,17 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                 return d.getTime() - 3 * 3600e3 - back * 864e5;
             };
             const ranges = [
-                ['Сегодня', mskMid(0), Date.now()],
-                ['Вчера', mskMid(1), mskMid(0)],
-                ['7 дней', Date.now() - 7 * 864e5, Date.now()],
-                ['30 дней', Date.now() - 30 * 864e5, Date.now()]
+                ['Сегодня', () => [mskMid(0), Date.now()]],
+                ['Вчера', () => [mskMid(1), mskMid(0)]],
+                ['7 дней', () => [Date.now() - 7 * 864e5, Date.now()]],
+                ['30 дней', () => [Date.now() - 30 * 864e5, Date.now()]]
             ];
-            ranges.forEach(([lbl, a, b]) => {
+            ranges.forEach(([lbl, get]) => {
                 const bt = document.createElement('button');
                 bt.type = 'button';
                 bt.textContent = lbl;
                 bt.onclick = () => {
+                    const [a, b] = get();
                     const u = new URL(location.href);
                     u.searchParams.set('tstart', Math.round(a));
                     u.searchParams.set('tend', Math.round(b));
@@ -1030,7 +1187,6 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
             });
             n.money = scrim.querySelector('[data-money]').checked;
             Store.set('mark', n);
-            document.querySelectorAll('.vdl-done').forEach(() => {});
             this.decorate();
         };
         scrim.querySelectorAll('input').forEach(i => i.addEventListener('change', save));
@@ -1221,7 +1377,9 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
 
 const TradeView = {
     async open(id) {
-        Layer.closeModals();
+        // открывается поверх отчёта (закрыл — вернулся к нему); прежнее окно трейда убираем
+        if (this.scrim) this.scrim.remove();
+        let rows = [];
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal">
             <div class="m-head"><span class="vic" style="--c:var(--acc);width:34px;height:34px;border-radius:10px">${icon('shield', 16)}</span>
@@ -1231,18 +1389,25 @@ const TradeView = {
         ));
         const close = () => {
             scrim.remove();
-            this.scrim = null;
+            if (this.scrim === scrim) this.scrim = null;
         };
         scrim.querySelector('[data-a="x"]').onclick = close;
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
+        scrim.querySelector('[data-a="copy"]').onclick = () => {
+            const L = rows.map(r => `${fmtDate(r.time)} · ${r.player_name || '—'} · ${String(r.transaction_desc || '').replace(/^\[TradeID:\s*\d+\]\s*/, '')}`);
+            navigator.clipboard.writeText(`Трейд #${id}\n` + L.join('\n')).then(
+                () => toast('Скопировано'),
+                () => toast('Не удалось', 'err')
+            );
+        };
         try {
             // один трейд по его номеру; широкий период, чтобы захватить весь обмен
-            const rows = await Api.all(
+            rows = await Api.all(
                 { transaction_desc__ilike: `%TradeID: ${id}%`, time__gte: new Date(Date.now() - 180 * 864e5).toISOString(), time__lte: new Date().toISOString() },
                 6
             );
             rows.sort((a, b) => new Date(a.time) - new Date(b.time));
-            if (!this.scrim) return;
+            if (this.scrim !== scrim) return;
             scrim.querySelector('.vdl-prog').textContent = rows.length ? `${rows.length} записей · участники: ${[...new Set(rows.map(r => r.player_name).filter(Boolean))].join(', ')}` : '';
             const box = scrim.querySelector('.vdl-tv');
             box.innerHTML = rows.length
@@ -1253,18 +1418,9 @@ const TradeView = {
                       .join('')
                 : '<div class="vdl-tv-row"><span class="ds">По этому номеру трейда записей не нашлось (мог быть давно).</span></div>';
             box.querySelectorAll('.who').forEach(w => copyNick(w, w.textContent.trim()));
-            this.rows = rows;
-            this.id = id;
         } catch (e) {
-            if (this.scrim) scrim.querySelector('.vdl-prog').textContent = 'Не загрузилось: ' + e.message;
+            if (this.scrim === scrim) scrim.querySelector('.vdl-prog').textContent = 'Не загрузилось: ' + e.message;
         }
-        scrim.querySelector('[data-a="copy"]').onclick = () => {
-            const L = (this.rows || []).map(r => `${fmtDate(r.time)} · ${r.player_name || '—'} · ${String(r.transaction_desc || '').replace(/^\[TradeID:\s*\d+\]\s*/, '')}`);
-            navigator.clipboard.writeText(`Трейд #${this.id}\n` + L.join('\n')).then(
-                () => toast('Скопировано'),
-                () => toast('Не удалось', 'err')
-            );
-        };
     }
 };
 
@@ -1358,8 +1514,11 @@ addEventListener(
     'keydown',
     e => {
         if (e.key === 'Escape' && Layer._root) {
-            const sc = Layer._root.querySelector('.scrim');
-            if (sc) Layer.closeModals();
+            const top = [...Layer._root.querySelectorAll('.scrim')].pop();
+            if (!top) return;
+            top.remove();
+            if (Panel.scrim === top) Panel.scrim = null;
+            if (TradeView.scrim === top) TradeView.scrim = null;
         }
     },
     true
