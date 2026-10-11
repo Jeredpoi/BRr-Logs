@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.6.2
-// @description  Аналитика по IP, подсветка повторов и просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
+// @version      0.7.0
+// @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
 // @match        https://forum.blackrussia.online/*

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.6.2
-// @description  Аналитика по IP, подсветка повторов и просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
+// @version      0.7.0
+// @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
 // @match        https://forum.blackrussia.online/*
@@ -23,8 +23,8 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.6.2
-// @description  Аналитика по IP, подсветка повторов и просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
+// @version      0.7.0
+// @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
 // @match        https://forum.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.6.2';
+const VERSION = '0.7.0';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -460,6 +460,32 @@ const devOf = r => {
 };
 const sameNick = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 
+// длительность между временами
+function durHM(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    const h = Math.floor(s / 3600),
+        m = Math.floor((s % 3600) / 60);
+    return h ? `${h} ч ${m} мин` : `${m} мин`;
+}
+// сессии игрока из логов подключений: пары подключился/отключился
+function sessionsOf(rows) {
+    const ev = rows
+        .map(r => ({ t: new Date(r.time).getTime(), on: /подключ/i.test(r.transaction_desc), off: /отключ/i.test(r.transaction_desc), ip: r.player_ip }))
+        .filter(e => (e.on || e.off) && e.t)
+        .sort((a, b) => a.t - b.t);
+    const out = [];
+    let open = null;
+    ev.forEach(e => {
+        if (e.on) open = e;
+        else if (e.off && open) {
+            out.push({ start: open.t, end: e.t, ip: open.ip });
+            open = null;
+        } else if (e.off) out.push({ start: null, end: e.t, ip: e.ip });
+    });
+    if (open) out.push({ start: open.t, end: null, ip: open.ip });
+    return out.reverse();
+}
+
 const Panel = {
     open(mode = 'nick', value = '') {
         Layer.closeModals();
@@ -561,11 +587,56 @@ const Panel = {
               ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}</div>` : ''}
               <div class="sec"><h4>IP-адреса игрока</h4><div class="card" data-l="ips">${ips.length ? '' : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>'}</div></div>
               <div class="sec"><h4>Устройства (APPMDID)</h4><div class="card" data-l="devs">${devs.length ? '' : '<div class="vdl-row"><div class="main sub">В подключениях нет APPMDID</div></div>'}</div></div>
+              <div class="sec"><h4>Сессии (вход / выход)</h4><div class="card" data-l="ses"></div></div>
+              <div class="sec"><h4>Трейды игрока</h4><div class="card" data-l="tr"><div class="vdl-row"><div class="main"><button class="btn" data-a="loadtr">${icon('search', 13)}Показать трейды игрока</button></div></div></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
             const li = o.querySelector('[data-l="ips"]');
             ips.slice(0, 30).forEach(g => li.appendChild(this.ipRow(g, nick)));
             const ld = o.querySelector('[data-l="devs"]');
             devs.slice(0, 15).forEach(g => ld.appendChild(this.devRow(g, nick)));
+            // сессии
+            const ses = sessionsOf(rows);
+            const sb = o.querySelector('[data-l="ses"]');
+            sb.innerHTML = ses.length
+                ? ses
+                      .slice(0, 12)
+                      .map(
+                          x =>
+                              `<div class="vdl-row"><div class="main"><div class="ttl">${x.start ? fmtDate(x.start) : '?'} — ${x.end ? fmtDate(x.end) : 'ещё в игре'}</div><div class="sub">${x.start && x.end ? durHM(x.end - x.start) : 'нет пары'}${x.ip ? ' · ' + U.esc(x.ip) : ''}</div></div></div>`
+                      )
+                      .join('')
+                : '<div class="vdl-row"><div class="main sub">Нет подключений за период</div></div>';
+            // трейды игрока — по кнопке
+            o.querySelector('[data-a="loadtr"]').onclick = async e => {
+                e.currentTarget.disabled = true;
+                e.currentTarget.textContent = 'Гружу…';
+                try {
+                    const tr = await Api.all({ player_name__exact: nick, transaction_desc__ilike: '%TradeID%', ...Api.range(this.days) }, 6, (pp, nn) => this.prog(`Трейды: страница ${pp}, записей ${nn}…`));
+                    this.prog('');
+                    const byT = new Map();
+                    tr.forEach(r => {
+                        const m = String(r.transaction_desc || '').match(/TradeID:\s*(\d+)/);
+                        if (!m) return;
+                        const g = byT.get(m[1]) || { id: m[1], n: 0, last: 0 };
+                        g.n++;
+                        g.last = Math.max(g.last, new Date(r.time).getTime() || 0);
+                        byT.set(m[1], g);
+                    });
+                    const list = [...byT.values()].sort((a, b) => b.last - a.last);
+                    const box = o.querySelector('[data-l="tr"]');
+                    box.innerHTML = list.length
+                        ? list
+                              .map(g => `<div class="vdl-row"><div class="main"><div class="ttl">Трейд #${g.id}<span class="vdl-tag">${g.n} зап.</span></div><div class="sub">${fmtDate(g.last)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`)
+                              .join('')
+                        : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>';
+                    box.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
+                } catch (err) {
+                    this.prog('');
+                    toast('Трейды: ' + err.message, 'err');
+                    e.currentTarget.disabled = false;
+                    e.currentTarget.textContent = 'Показать трейды игрока';
+                }
+            };
             o.querySelector('[data-a="copy"]').onclick = () => this.copy();
         });
     },
