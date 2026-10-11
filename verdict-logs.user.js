@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.2.0
+// @version      0.2.1
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -21,7 +21,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.2.0
+// @version      0.2.1
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -36,7 +36,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const MAIL = 'https://script.google.com/macros/s/AKfycbx-yEBIw_o_NKjnie7loXBJbcawRA0nU-eCHAKe9DHcxWyRrMhhvJo_DShtxZFJPiHT2Q/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -831,7 +831,10 @@ async function main() {
     if (!acc.allowed) {
         if (!ON_LOGS) return;
         if (acc.state === 'no') return notice('Доступ закрыт', 'Разработчик закрыл тебе «VERDICT Логи».');
-        if (acc.state === 'error') return notice('Не проверить доступ', `Нет связи с разработчиком: ${U.esc(acc.why || '')}. Попробуй обновить страницу позже.`, acc.code);
+        if (acc.state === 'error') {
+            if (/ключ|Неизвестное/i.test(acc.why || '')) return notice('Сервер не обновлён', 'На сервере разработчика старая версия почты — проверка доступа к логам там ещё не появилась. Напиши разработчику.', acc.code);
+            return notice('Не проверить доступ', `Нет связи с разработчиком: ${U.esc(acc.why || '')}. Попробуй обновить страницу позже.`, acc.code);
+        }
         return notice('Доступ не выдан', 'Отправь этот код разработчику. Как только он откроет доступ, обнови страницу (до пары минут).', acc.code);
     }
     if (ON_LOGS) LogsPage.start(info);
