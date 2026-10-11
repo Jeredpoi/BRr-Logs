@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.3
+// @version      0.8.4
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.3
+// @version      0.8.4
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.8.3';
+const VERSION = '0.8.4';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -891,15 +891,21 @@ const LogsPage = {
         if (srv) Store.set('server', srv);
         Layer.accent(info);
         const acc = info.accent || '#e5484d';
-        const wrap = Layer.add(U.h(`<div class="vdl-dock"></div>`));
-        const fab = U.h(`<button class="vdl-fab" title="Аналитика по IP, нику и устройству">${icon('shield', 15)}Аналитика IP</button>`);
-        const cog = U.h(`<button class="vdl-fab vdl-cog" title="Подсветка и оформление">${icon('spark', 15)}</button>`);
-        wrap.append(fab, cog);
-        fab.onclick = () => Panel.open();
-        cog.onclick = () => this.settings();
+        // кнопки — в шапке сайта рядом с «Black Log · сервер»; без шапки — внизу слева
+        const head = (this.head = document.createElement('span'));
+        head.className = 'vdl-head';
+        head.innerHTML = `<button type="button" class="vdl-hbtn" title="Аналитика по игроку, ID, IP и устройству">${icon('shield', 14)}Аналитика</button><button type="button" class="vdl-hbtn vdl-hcog" title="Подсветка и оформление">${icon('spark', 14)}</button>`;
+        head.firstElementChild.onclick = () => Panel.open();
+        head.lastElementChild.onclick = () => this.settings();
+        this.placeHead();
         const st = document.createElement('style');
-        st.textContent = `.vdl-dock { position: fixed; left: 18px; bottom: 18px; z-index: 2147483000; display: flex; gap: 8px; }
-.vdl-cog { padding: 0 12px; }
+        st.textContent = `.vdl-head { display: inline-flex; align-items: center; gap: 6px; margin: 0 12px; vertical-align: middle; }
+.vdl-head.float { position: fixed; left: 18px; bottom: 18px; z-index: 2147483000; margin: 0; }
+.vdl-hbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 999px; border: 0; font: 700 12.5px/1 Inter, "Segoe UI", system-ui, sans-serif; color: #fff; cursor: pointer; white-space: nowrap;
+  background: linear-gradient(135deg, ${acc}, color-mix(in srgb, ${acc} 55%, #3aa0ff)); box-shadow: 0 6px 16px -8px ${acc}; }
+.vdl-hbtn:hover { filter: brightness(1.1); }
+.vdl-hcog { padding: 0 8px; background: rgba(255,255,255,.08); border: 1px solid color-mix(in srgb, ${acc} 40%, transparent); box-shadow: none; }
+.vdl-hcog:hover { background: ${acc}; }
 .vdl-mini { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 6px; vertical-align: middle; border-radius: 6px; border: 1px solid color-mix(in srgb, ${acc} 45%, transparent); background: color-mix(in srgb, ${acc} 16%, transparent); color: #fff; font-size: 11px; cursor: pointer; opacity: .75; }
 .vdl-mini:hover { opacity: 1; background: ${acc}; }
 .vdl-hl { border-radius: 6px; padding: 1px 6px; transition: box-shadow .12s, filter .12s; }
@@ -926,7 +932,10 @@ html body .vs__search::placeholder { color: rgba(232,234,238,.5) !important; }
 html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
 html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background: linear-gradient(color-mix(in srgb, ${acc} 16%, transparent), color-mix(in srgb, ${acc} 16%, transparent)), var(--vd-glass, rgba(18,20,27,.42)) !important; }`;
         document.head.appendChild(st);
-        const deco = U.debounce(() => this.decorate(), 200);
+        const deco = U.debounce(() => {
+            this.placeHead();
+            this.decorate();
+        }, 200);
         new MutationObserver(deco).observe(document.body, { childList: true, subtree: true });
         this.decorate();
         this.quickDates();
@@ -1012,6 +1021,23 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
         const close = () => scrim.remove();
         scrim.querySelector('[data-a="x"]').onclick = close;
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
+    },
+
+    placeHead() {
+        const head = this.head;
+        if (!head) return;
+        const brand = document.querySelector('nav .navbar-brand, .navbar-brand');
+        if (brand) {
+            const next = brand.nextElementSibling;
+            const anchor = next && /\bbadge\b/.test(next.className) ? next : brand;
+            if (head.previousElementSibling !== anchor || head.classList.contains('float')) {
+                head.classList.remove('float');
+                anchor.after(head);
+            }
+        } else if (!head.isConnected) {
+            head.classList.add('float');
+            document.body.appendChild(head);
+        }
     },
 
     decorate() {
