@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.6.0
+// @version      0.6.1
 // @description  Аналитика по IP, подсветка повторов и просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.6.0
+// @version      0.6.1
 // @description  Аналитика по IP, подсветка повторов и просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -258,6 +258,20 @@ const Layer = {
         el.style.setProperty('--ui-alpha', info.menuGlass ?? 0.4);
     }
 };
+
+// клик по нику копирует его
+function copyNick(el, nick) {
+    el.style.cursor = 'copy';
+    el.title = 'Нажми — скопировать ник';
+    el.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        navigator.clipboard.writeText(nick).then(
+            () => toast('Ник скопирован: ' + nick),
+            () => toast('Не удалось скопировать', 'err')
+        );
+    });
+}
 
 function toast(text, kind = 'ok') {
     const map = { ok: ['check', '#2fbf71'], err: ['x', '#e5484d'], info: ['spark', 'var(--acc)'] };
@@ -903,6 +917,7 @@ const LogsPage = {
                 if (mode) {
                     td.dataset.hk = mode;
                     td.dataset.hv = val;
+                    if (mode === 'nick') copyNick(td.querySelector('a') || td, val);
                     const b = document.createElement('span');
                     b.className = 'vdl-mini';
                     b.title = { ip: 'Кто ещё заходил с этого IP', nick: 'IP и устройства игрока', dev: 'Кто ещё с этого устройства' }[mode];
@@ -1058,6 +1073,7 @@ const TradeView = {
                       )
                       .join('')
                 : '<div class="vdl-tv-row"><span class="ds">По этому номеру трейда записей не нашлось (мог быть давно).</span></div>';
+            box.querySelectorAll('.who').forEach(w => copyNick(w, w.textContent.trim()));
             this.rows = rows;
             this.id = id;
         } catch (e) {
