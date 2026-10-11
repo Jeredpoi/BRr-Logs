@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.2.1
+// @version      0.3.0
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
-// @match        https://forum.blackrussia.online/members/*
+// @match        https://forum.blackrussia.online/*
+// @updateURL    https://raw.githubusercontent.com/Jeredpoi/BRr-Logs/main/verdict-logs.meta.js
+// @downloadURL  https://raw.githubusercontent.com/Jeredpoi/BRr-Logs/main/verdict-logs.user.js
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -21,11 +23,13 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.2.1
+// @version      0.3.0
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
-// @match        https://forum.blackrussia.online/members/*
+// @match        https://forum.blackrussia.online/*
+// @updateURL    https://raw.githubusercontent.com/Jeredpoi/BRr-Logs/main/verdict-logs.meta.js
+// @downloadURL  https://raw.githubusercontent.com/Jeredpoi/BRr-Logs/main/verdict-logs.user.js
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -36,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.2.1';
+const VERSION = '0.3.0';
 const MAIL = 'https://script.google.com/macros/s/AKfycbx-yEBIw_o_NKjnie7loXBJbcawRA0nU-eCHAKe9DHcxWyRrMhhvJo_DShtxZFJPiHT2Q/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -822,6 +826,8 @@ async function main() {
             notice('Нужен VERDICT', '«VERDICT Логи» работает только вместе с основным скриптом VERDICT. Установи или включи его в Tampermonkey и обнови страницу.');
         return;
     }
+    document.dispatchEvent(new CustomEvent('verdict:logs', { detail: JSON.stringify({ v: VERSION }) }));
+    if (!ON_LOGS && !/^\/members\//.test(location.pathname)) return;
     Layer.accent(info);
     if (!info.lid) return ON_LOGS && notice('Нужен VERDICT', 'Обнови VERDICT до последней версии — эта не умеет работать с «VERDICT Логи».');
     const logsNick = ON_LOGS ? ((document.body.textContent.match(/Выйти\s*\[([^\]]{2,40})\]/) || [])[1] || '') : '';
