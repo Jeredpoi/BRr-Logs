@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.6.1
+// @version      0.6.2
 // @description  Аналитика по IP, подсветка повторов и просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.6.1
+// @version      0.6.2
 // @description  Аналитика по IP, подсветка повторов и просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.6.1';
+const VERSION = '0.6.2';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -250,6 +250,12 @@ const Layer = {
         this.el().appendChild(node);
         return node;
     },
+    // ни одного «висящего» затемнения: перед открытием окна убираем прежние
+    closeModals() {
+        this.el().querySelectorAll('.scrim').forEach(x => x.remove());
+        if (typeof Panel !== 'undefined') Panel.scrim = null;
+        if (typeof TradeView !== 'undefined') TradeView.scrim = null;
+    },
     accent(info) {
         const el = this.el();
         el.style.setProperty('--acc', info.accent || '#e5484d');
@@ -456,7 +462,7 @@ const sameNick = (a, b) => String(a || '').toLowerCase() === String(b || '').toL
 
 const Panel = {
     open(mode = 'nick', value = '') {
-        if (this.scrim) this.scrim.remove();
+        Layer.closeModals();
         this.days = this.days || Store.get('days', 30);
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
@@ -709,6 +715,7 @@ function plural(n, one, few, many) {
 
 const Feedback = {
     async open() {
+        Layer.closeModals();
         const scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal sm">
             <div class="m-head"><span class="vic" style="--c:var(--acc);width:34px;height:34px;border-radius:10px">${icon('chat', 16)}</span>
@@ -867,6 +874,7 @@ const LogsPage = {
 
     // окно настроек подсветки
     settings() {
+        Layer.closeModals();
         const c = this.cfg();
         const row = (k, name) =>
             `<div class="vdl-mrow"><input type="checkbox" data-k="${k}" ${c[k].on ? 'checked' : ''} style="width:18px;height:18px">
@@ -1042,7 +1050,7 @@ const LogsPage = {
 
 const TradeView = {
     async open(id) {
-        if (this.scrim) this.scrim.remove();
+        Layer.closeModals();
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal">
             <div class="m-head"><span class="vic" style="--c:var(--acc);width:34px;height:34px;border-radius:10px">${icon('shield', 16)}</span>
@@ -1174,6 +1182,17 @@ async function main() {
         if (ON_LOGS && a.state !== 'error') notice('Доступ закрыт', 'Разработчик закрыл тебе «VERDICT Логи».');
     }, 5 * 60e3 + 5000);
 }
+
+addEventListener(
+    'keydown',
+    e => {
+        if (e.key === 'Escape' && Layer._root) {
+            const sc = Layer._root.querySelector('.scrim');
+            if (sc) Layer.closeModals();
+        }
+    },
+    true
+);
 
 U.ready(() => main().catch(e => console.warn('VERDICT Логи:', e)));
 
