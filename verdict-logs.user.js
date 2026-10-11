@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.7.0
+// @version      0.8.0
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.7.0
+// @version      0.8.0
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -497,7 +497,7 @@ const Panel = {
               <span style="flex:1"></span><button class="btn" data-a="mail" title="Идея, ошибка или вопрос разработчику">${icon('chat', 14)}Разработчику</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
               <div class="vdl-form">
-                <div class="seg" data-g="mode"><button data-v="nick">Игрок</button><button data-v="ip">IP</button><button data-v="dev">Устройство</button></div>
+                <div class="seg" data-g="mode"><button data-v="nick">Игрок</button><button data-v="id">ID</button><button data-v="ip">IP</button><button data-v="dev">Устройство</button></div>
                 <input class="inp" data-a="q" placeholder="">
                 <div class="seg" data-g="days"><button data-v="7">7 дн.</button><button data-v="30">30 дн.</button><button data-v="90">90 дн.</button></div>
                 <button class="btn pri" data-a="go">${icon('search', 14)}Проверить</button>
@@ -516,7 +516,7 @@ const Panel = {
         const setMode = m => {
             this.mode = m;
             scrim.querySelectorAll('[data-g="mode"] button').forEach(b => b.classList.toggle('on', b.dataset.v === m));
-            q.placeholder = { nick: 'Ник: Ivan_Ivanov', ip: 'IP: 95.57.212.23', dev: 'APPMDID устройства' }[m];
+            q.placeholder = { nick: 'Ник: Ivan_Ivanov', id: 'ID игрока: 1016171', ip: 'IP: 95.57.212.23', dev: 'APPMDID устройства' }[m];
         };
         const setDays = d => {
             this.days = d;
@@ -532,6 +532,7 @@ const Panel = {
             const v = q.value.trim();
             if (!v) return q.focus();
             if (this.mode === 'nick') this.byNick(v);
+            else if (this.mode === 'id') this.byId(v);
             else if (this.mode === 'ip') this.byIp(v);
             else this.byDev(v);
         };
@@ -563,8 +564,22 @@ const Panel = {
     },
 
     byNick(nick) {
+        return this.player({ player_name__exact: nick }, nick, null);
+    },
+
+    byId(id) {
+        const v = String(id).trim();
+        if (!/^\d+$/.test(v)) {
+            this.out(`<div class="card" style="padding:14px">${icon('x', 14)} ID — это число, например 1016171</div>`);
+            return;
+        }
+        return this.player({ player_id__exact: v }, null, v);
+    },
+
+    // общее ядро: собирает сводку по игроку, выбранному либо по нику, либо по ID
+    player(sel, nick, id) {
         return this.run(async () => {
-            const base = Object.assign({ player_name__exact: nick }, Api.range(this.days));
+            const base = Object.assign({}, sel, Api.range(this.days));
             this.prog('Читаю подключения игрока…');
             let rows = await Api.all(Object.assign({ category_id__exact: 38 }, base), 10, (p, n) => this.prog(`Подключения: страница ${p}, записей ${n}…`));
             let note = '';
@@ -573,10 +588,16 @@ const Panel = {
                 note = 'Подключений за период нет — IP взяты из остальных записей игрока.';
             }
             this.prog('');
+            // если искали по ID — подставляем ник, который встречается чаще всего
+            if (!nick) {
+                const nk = group(rows, r => r.player_name);
+                nick = (nk[0] && nk[0].k) || '';
+                if (nk.length > 1) note = (note ? note + ' ' : '') + `На этом ID встречались ники: ${nk.slice(0, 6).map(g => g.k).join(', ')}.`;
+            }
             const ips = group(rows, r => r.player_ip),
                 devs = group(rows, devOf);
-            this.report = { kind: 'nick', nick, days: this.days, ips, devs, related: new Map() };
-            const ids = [...new Set(rows.map(r => r.player_id).filter(Boolean))];
+            this.report = { kind: 'nick', nick: nick || ('ID ' + id), id: id || null, days: this.days, ips, devs, related: new Map() };
+            const ids = id ? [id] : [...new Set(rows.map(r => r.player_id).filter(Boolean))];
             const o = this.out(`
               <div class="vdl-sum">
                 <div class="k"><small>Записей</small><b>${rows.length}</b></div>
@@ -611,7 +632,7 @@ const Panel = {
                 e.currentTarget.disabled = true;
                 e.currentTarget.textContent = 'Гружу…';
                 try {
-                    const tr = await Api.all({ player_name__exact: nick, transaction_desc__ilike: '%TradeID%', ...Api.range(this.days) }, 6, (pp, nn) => this.prog(`Трейды: страница ${pp}, записей ${nn}…`));
+                    const tr = await Api.all({ ...sel, transaction_desc__ilike: '%TradeID%', ...Api.range(this.days) }, 6, (pp, nn) => this.prog(`Трейды: страница ${pp}, записей ${nn}…`));
                     this.prog('');
                     const byT = new Map();
                     tr.forEach(r => {
