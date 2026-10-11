@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.9.1
+// @version      0.9.2
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.9.1
+// @version      0.9.2
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.9.1';
+const VERSION = '0.9.2';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -359,6 +359,7 @@ const LOGS_UI_CSS = `
 
 const Api = {
     last: 0,
+    mine: new Set(),
     order: '-time',
     server() {
         const m = location.pathname.match(/\/gslogs\/(\d+)/);
@@ -377,7 +378,9 @@ const Api = {
         q.set('order_by', this.order);
         q.set('offset', String(offset));
         q.set('auto', 'false');
-        const r = await fetch(`/gslogs/${this.server()}/api/list-game-logs/?${q}`, { credentials: 'include' });
+        const url = new URL(`/gslogs/${this.server()}/api/list-game-logs/?${q}`, location.href).href;
+        this.mine.add(url);
+        const r = await fetch(url, { credentials: 'include' });
         if (r.status === 401 || r.status === 403) throw new Error('сайт логов не пускает — войди заново');
         if (!r.ok) {
             // сайт мог не понять сортировку «сначала новые» — пробуем обычную, но остаёмся на ней, только если она сработала
@@ -396,13 +399,32 @@ const Api = {
         if (!Array.isArray(d)) throw new Error('сайт логов ответил не списком');
         return d;
     },
-    async all(params, maxPages, onPage) {
+    // размер страницы сайта узнаём по ходу (страница, за которой есть ещё, — полная) и запоминаем
+    size: 0,
+    pageSize() {
+        if (!this.size) this.size = Store.get('pageSize', 0);
+        return this.size;
+    },
+    // first — уже полученная первая страница (чтобы не качать её второй раз)
+    async all(params, maxPages, onPage, first) {
         const out = [];
+        out.capped = false;
+        let off = 0,
+            prev = 0;
         for (let i = 0; i < maxPages; i++) {
-            const d = await this.page(params, i * API_PAGE);
+            const d = i === 0 && first ? first : await this.page(params, off);
+            if (i > 0 && d.length && prev > this.pageSize()) {
+                this.size = prev;
+                Store.set('pageSize', prev);
+            }
             out.push(...d);
             if (onPage) onPage(i + 1, out.length);
-            if (d.length < API_PAGE) break;
+            if (!d.length) break;
+            off += d.length;
+            prev = d.length;
+            const size = this.pageSize();
+            if (size && d.length < size) break;
+            if (i === maxPages - 1) out.capped = true;
         }
         return out;
     },
@@ -509,9 +531,10 @@ const fmtMoney = n => (n < 0 ? '−' : n > 0 ? '+' : '') + String(Math.abs(Math.
 const fmtNum = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 let CATS = null;
 function catName(r) {
-    // список категорий сайт может подгрузить позже — перечитываем, пока не найдём
-    if (!CATS || Object.keys(CATS).length < 2) {
-        CATS = { 38: 'Подключения / Отключения' };
+    // названия: выученные по таблице сайта + обычный <select>, если он есть
+    if (!CATS || CatLearn.dirty) {
+        CatLearn.dirty = false;
+        CATS = Object.assign({ 38: 'Подключения / Отключения' }, Store.get('cats', {}));
         document.querySelectorAll('select option').forEach(o => {
             if (/^\d+$/.test(o.value) && o.textContent.trim()) CATS[o.value] = o.textContent.trim();
         });
@@ -519,6 +542,70 @@ function catName(r) {
     const c = r.category;
     return r.category_name || (c && typeof c === 'object' && (c.name || c.title)) || (typeof c === 'string' && c) || CATS[r.category_id] || (r.category_id != null ? 'Категория #' + r.category_id : 'Без категории');
 }
+// номер категории → название: повторяем запрос, которым сайт построил свою таблицу,
+// и сопоставляем строки по порядку (с проверкой ника). Выученное хранится
+const CatLearn = {
+    dirty: false,
+    tried: new Set(),
+    async learn() {
+        const tds = [...document.querySelectorAll('td.td-category')];
+        if (!tds.length) return;
+        const map = Store.get('cats', {});
+        const names = new Set(Object.values(map));
+        if (tds.every(td => names.has(LogsPage.rawOf(td)))) return;
+        const url = performance
+            .getEntriesByType('resource')
+            .map(e => e.name)
+            .filter(u => u.includes('/api/list-game-logs/') && !Api.mine.has(u) && !this.tried.has(u))
+            .pop();
+        if (!url) return;
+        this.tried.add(url);
+        const rows = await new Promise((res, rej) => {
+            const p = (Api._q || Promise.resolve()).then(async () => {
+                Api.mine.add(url);
+                const r = await fetch(url, { credentials: 'include' });
+                return r.ok ? r.json() : [];
+            });
+            Api._q = p.catch(() => {});
+            p.then(res, rej);
+        });
+        if (!Array.isArray(rows)) return;
+        const tab = tds.map(td => ({ name: LogsPage.rawOf(td), nick: LogsPage.rawOf(td.closest('tr').querySelector('.td-player-name') || td) }));
+        let n = 0;
+        rows.forEach((r, i) => {
+            const t = tab[i];
+            if (!t || !t.name || r.category_id == null || !sameNick(r.player_name, t.nick)) return;
+            if (map[r.category_id] !== t.name) {
+                map[r.category_id] = t.name;
+                n++;
+            }
+        });
+        if (n) {
+            Store.set('cats', map);
+            this.dirty = true;
+        }
+    }
+};
+
+// платформа входа: из описания подключения («Платформа: …» или Android / iOS / ПК)
+function normPlat(v) {
+    const t = String(v || '').trim();
+    if (/android/i.test(t)) return 'Android';
+    if (/ios|iphone|ipad|apple/i.test(t)) return 'iOS';
+    if (/лаунчер|launcher/i.test(t)) return 'ПК (лаунчер)';
+    if (/windows|\bwin(32|64)?\b|\bpc\b|пк|компьютер/i.test(t)) return 'ПК';
+    if (/mac/i.test(t)) return 'macOS';
+    if (/harmony|huawei/i.test(t)) return 'HarmonyOS';
+    return t.length > 24 ? t.slice(0, 24) + '…' : t;
+}
+function platOf(r) {
+    const d = String(r.transaction_desc || '');
+    const kv = d.match(/(?:платформа|platform|клиент|client|система|\bos\b)\s*[:=]\s*([^,;)\]\n]+)/i);
+    if (kv && kv[1].trim()) return normPlat(kv[1]);
+    const m = d.match(/android|\bios\b|iphone|ipad|windows|\bpc\b|лаунчер|launcher|harmony\s?os|mac\s?os/i);
+    return m ? normPlat(m[0]) : '';
+}
+
 // час по Москве
 const mskHour = t => new Date(t + 3 * 3600e3).getUTCHours();
 function hoursHtml(times) {
@@ -543,21 +630,21 @@ function durHM(ms) {
 // сессии игрока из логов подключений: пары подключился/отключился
 function sessionsOf(rows) {
     const ev = rows
-        .map(r => ({ t: new Date(r.time).getTime(), on: /подключ/i.test(r.transaction_desc), off: /отключ/i.test(r.transaction_desc), ip: r.player_ip }))
+        .map(r => ({ t: new Date(r.time).getTime(), on: /подключ/i.test(r.transaction_desc), off: /отключ/i.test(r.transaction_desc), ip: r.player_ip, plat: platOf(r) }))
         .filter(e => (e.on || e.off) && e.t)
         .sort((a, b) => a.t - b.t);
     const out = [];
     let open = null;
     ev.forEach(e => {
         if (e.on) {
-            if (open) out.push({ start: open.t, end: null, ip: open.ip, lost: true });
+            if (open) out.push({ start: open.t, end: null, ip: open.ip, plat: open.plat, lost: true });
             open = e;
         } else if (e.off && open) {
-            out.push({ start: open.t, end: e.t, ip: open.ip });
+            out.push({ start: open.t, end: e.t, ip: open.ip, plat: open.plat });
             open = null;
         } else if (e.off) out.push({ start: null, end: e.t, ip: e.ip });
     });
-    if (open) out.push({ start: open.t, end: null, ip: open.ip });
+    if (open) out.push({ start: open.t, end: null, ip: open.ip, plat: open.plat });
     return out.reverse();
 }
 
@@ -703,6 +790,7 @@ const Panel = {
               ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}</div>` : ''}
               <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button></div>
               <div data-tab="in">
+                <div class="sec"><h4>С чего заходил (платформа)</h4><div class="card" data-l="plat"></div></div>
                 <div class="sec"><h4>IP-адреса игрока</h4><div class="card" data-l="ips">${ips.length ? '' : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>'}</div></div>
                 <div class="sec"><h4>Устройства (APPMDID)</h4><div class="card" data-l="devs">${devs.length ? '' : '<div class="vdl-row"><div class="main sub">В подключениях нет APPMDID</div></div>'}</div></div>
                 <div class="sec"><h4>Сессии (вход / выход)</h4><div class="card" data-l="ses"></div></div>
@@ -712,9 +800,23 @@ const Panel = {
               <div data-tab="act" hidden><div class="sec"><h4>Чем занимался за ${this.days} дн. (записей по категориям)</h4><div class="card" data-l="cats"></div></div></div>
               <div data-tab="tr" hidden><div class="sec"><h4>Трейды игрока за ${this.days} дн.</h4><div class="card" data-l="tr"></div></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
+            // платформы входа
+            const conRows = rows.filter(r => /подключ/i.test(r.transaction_desc || ''));
+            const plats = group(conRows, platOf);
+            this.report.plats = plats.map(g => `${g.k} — ${g.n}`);
+            const pb = o.querySelector('[data-l="plat"]');
+            if (plats.length) {
+                pb.innerHTML = plats
+                    .map(g => `<div class="vdl-row"><div class="main"><div class="ttl">${U.esc(g.k)}<span class="vdl-tag" style="--c:#2fbf71">${g.n} ${plural(g.n, 'вход', 'входа', 'входов')}</span></div><div class="sub">${fmtDate(g.first)} — ${fmtDate(g.last)}</div></div></div>`)
+                    .join('');
+            } else {
+                const ex = conRows.slice().sort((a, b) => new Date(b.time) - new Date(a.time))[0];
+                pb.innerHTML = `<div class="vdl-row"><div class="main sub">${conRows.length ? 'В записях входа платформа не указана' : 'Входов за период нет'}${ex ? `<br>Пример записи входа: <span class="vdl-mono">${U.esc(String(ex.transaction_desc || '').slice(0, 200))}</span>` : ''}</div></div>`;
+            }
             const li = o.querySelector('[data-l="ips"]');
             ips.slice(0, 30).forEach(g => li.appendChild(this.ipRow(g, nick)));
             const ld = o.querySelector('[data-l="devs"]');
+            devs.forEach(g => (g.plat = [...new Set(rows.filter(r => devOf(r) === g.k).map(platOf).filter(Boolean))].join(', ')));
             devs.slice(0, 15).forEach(g => ld.appendChild(this.devRow(g, nick)));
             // сессии
             const ses = sessionsOf(rows);
@@ -730,7 +832,7 @@ const Panel = {
                       .slice(0, 12)
                       .map(
                           x =>
-                              `<div class="vdl-row"><div class="main"><div class="ttl">${x.start ? fmtDate(x.start) : '?'} — ${x.end ? fmtDate(x.end) : x.lost ? '?' : 'ещё в игре'}</div><div class="sub">${x.start && x.end ? durHM(x.end - x.start) : x.lost ? 'выход не записан' : x.start ? 'выхода пока нет' : 'вход раньше периода'}${x.ip ? ' · ' + U.esc(x.ip) : ''}</div></div></div>`
+                              `<div class="vdl-row"><div class="main"><div class="ttl">${x.start ? fmtDate(x.start) : '?'} — ${x.end ? fmtDate(x.end) : x.lost ? '?' : 'ещё в игре'}</div><div class="sub">${x.start && x.end ? durHM(x.end - x.start) : x.lost ? 'выход не записан' : x.start ? 'выхода пока нет' : 'вход раньше периода'}${x.ip ? ' · ' + U.esc(x.ip) : ''}${x.plat ? ' · ' + U.esc(x.plat) : ''}</div></div></div>`
                       )
                       .join('')
                 : '<div class="vdl-row"><div class="main sub">Нет подключений за период</div></div>';
@@ -779,14 +881,14 @@ const Panel = {
         const LIM = 10;
         const p = Api.all(base, LIM, (pg, n) => gen === this._gen && this.prog(`Все записи игрока: страница ${pg}, записей ${n}…`)).then(rows => {
             if (gen === this._gen) this.prog('');
-            return { rows, capped: rows.length >= LIM * API_PAGE };
+            return { rows, capped: rows.capped };
         });
         this._all = { key, p };
         p.catch(() => this._all && this._all.p === p && (this._all = null));
         return p;
     },
     capNote(d) {
-        return `<div class="sub" style="padding:8px 2px">${d.rows.length} ${plural(d.rows.length, 'запись', 'записи', 'записей')} игрока${d.capped ? ' — посчитаны последние 500, за весь период их больше' : ''}</div>`;
+        return `<div class="sub" style="padding:8px 2px">${d.rows.length} ${plural(d.rows.length, 'запись', 'записи', 'записей')} игрока${d.capped ? ' — посчитаны последние, за весь период их больше (возьми период короче)' : ''}</div>`;
     },
     renderMoney(box, d) {
         if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
@@ -917,9 +1019,8 @@ const Panel = {
             const params = Object.assign({ category_id__exact: 38, [key]: ip }, Api.range(this.days));
             const first = await Api.page(params, 0);
             if (first.length && first.some(r => r.player_ip && r.player_ip !== ip)) continue;
-            if (first.length < API_PAGE) return first;
-            const rest = await Api.all(params, 10, onPage);
-            return rest;
+            if (!first.length || (Api.pageSize() && first.length < Api.pageSize())) return first;
+            return Api.all(params, 10, onPage, first);
         }
         throw new Error('сайт логов не дал искать по IP');
     },
@@ -945,7 +1046,7 @@ const Panel = {
     devRow(g, nick) {
         const r = U.h(`<div><div class="vdl-row">
           <div class="main"><div class="ttl"><span class="vdl-mono">${U.esc(g.k.length > 28 ? g.k.slice(0, 28) + '…' : g.k)}</span><span class="vdl-tag" style="--c:#a970ff">${g.n} ${plural(g.n, 'вход', 'входа', 'входов')}</span></div>
-            <div class="sub">${fmtDate(g.first)} — ${fmtDate(g.last)}</div></div>
+            <div class="sub">${fmtDate(g.first)} — ${fmtDate(g.last)}${g.plat ? ' · ' + U.esc(g.plat) : ''}</div></div>
           <div class="vdl-btns"><button class="btn" data-a="who">${icon('search', 13)}Кто ещё с устройства</button></div>
         </div><div class="vdl-more" hidden></div></div>`);
         r.querySelector('[data-a="who"]').onclick = async e => {
@@ -980,6 +1081,7 @@ const Panel = {
         if (r.kind === 'nick') {
             L.push(`Игрок ${r.nick}${r.id ? ` (ID ${r.id})` : ''} — за ${r.days} дн. (сервер ${Api.server()})`);
             L.push(`IP-адресов: ${r.ips.length}, устройств: ${r.devs.length}`);
+            if (r.plats && r.plats.length) L.push('Платформы: ' + r.plats.join('; '));
             if (r.ses && r.ses.n) L.push(`Сессий: ${r.ses.n}, в игре ${durHM(r.ses.total)}, в среднем ${durHM(r.ses.avg)}${r.peak >= 0 ? `, чаще всего в ${r.peak}:00 МСК` : ''}`);
             if (r.money) L.push(`Деньги: пришло ${fmtMoney(r.money.inc)}, ушло ${fmtMoney(r.money.exp)}${Number.isFinite(r.money.b0) ? `, баланс ${fmtNum(r.money.b0)} → ${fmtNum(r.money.b1)}` : ''}${r.money.capped ? ' (по последним 500 записям)' : ''}`);
             if (r.cats && r.cats.length) L.push('Категории: ' + r.cats.join('; '));
@@ -1145,6 +1247,7 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
             try {
                 this.placeHead();
                 this.decorate();
+                CatLearn.learn().catch(() => {});
             } finally {
                 mo.observe(document.body, { childList: true, subtree: true, characterData: true });
             }
