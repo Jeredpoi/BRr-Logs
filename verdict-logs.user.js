@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.9.0
+// @version      0.9.1
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.9.0
+// @version      0.9.1
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.9.0';
+const VERSION = '0.9.1';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -336,7 +336,7 @@ const LOGS_UI_CSS = `
 .vdl-hours i { display: block; border-radius: 3px 3px 1px 1px; background: color-mix(in srgb, var(--acc) 70%, transparent); min-height: 3px; }
 .vdl-hours i.z { background: rgba(255,255,255,.07); }
 .vdl-hours-l { display: grid; grid-template-columns: repeat(4, 1fr) auto; font-size: 10.5px; color: var(--tx-3); padding: 0 2px 8px; }
-.vdl-bar { display: grid; grid-template-columns: minmax(120px, 220px) 1fr 54px; gap: 10px; align-items: center; padding: 6px 2px; font-size: 12.5px; }
+.vdl-bar { display: grid; grid-template-columns: minmax(120px, 220px) 1fr minmax(54px, auto); gap: 10px; align-items: center; padding: 6px 2px; font-size: 12.5px; }
 .vdl-bar .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx-2); }
 .vdl-bar .tr { height: 8px; border-radius: 99px; background: rgba(255,255,255,.06); overflow: hidden; }
 .vdl-bar .tr b { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--acc), color-mix(in srgb, var(--acc) 50%, var(--acc2))); }
@@ -347,6 +347,11 @@ const LOGS_UI_CSS = `
 .vdl-money .k b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vdl-money .k b + small { margin-top: 2px; }
 .vdl-pos { color: #3ecf8e; } .vdl-neg { color: #ff6b6b; }
+.vdl-tabs { display: flex; width: 100%; margin: 4px 0 2px; }
+.vdl-tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; font-size: 12.5px; }
+.vdl-bar .tr b.vdl-pos { background: linear-gradient(90deg, #2fbf71, #3ecf8e); }
+.vdl-bar .tr b.vdl-neg { background: linear-gradient(90deg, #e5484d, #ff6b6b); }
+.vdl-bar .n.vdl-pos, .vdl-bar .n.vdl-neg { white-space: nowrap; }
 @media (max-width: 700px) { .vdl-sum, .vdl-money { grid-template-columns: repeat(2, 1fr); } .vdl-bar { grid-template-columns: 1fr 1fr 44px; } }
 .vdl-btns .btn { height: 28px; font-size: 12px; padding: 0 10px; }
 @media (max-width: 760px) { .vdl-sum { grid-template-columns: repeat(2, 1fr); } .vdl-row { grid-template-columns: 1fr; } .vdl-btns { justify-content: flex-start; } }
@@ -634,6 +639,8 @@ const Panel = {
         }
         this.busy = true;
         this._runGen = this._gen;
+        // новая проверка — прежний отчёт убираем сразу, чтобы по нему не кликали, пока грузится новый
+        if (!box) this.out('');
         try {
             await fn();
             return true;
@@ -694,12 +701,16 @@ const Panel = {
                 <div class="k"><small>ID игрока</small><b style="font-size:15px">${U.esc(ids.join(', ') || '—')}</b></div>
               </div>
               ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}</div>` : ''}
-              <div class="sec"><h4>IP-адреса игрока</h4><div class="card" data-l="ips">${ips.length ? '' : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>'}</div></div>
-              <div class="sec"><h4>Устройства (APPMDID)</h4><div class="card" data-l="devs">${devs.length ? '' : '<div class="vdl-row"><div class="main sub">В подключениях нет APPMDID</div></div>'}</div></div>
-              <div class="sec"><h4>Сессии (вход / выход)</h4><div class="card" data-l="ses"></div></div>
-              <div class="sec"><h4>Когда играет (по входам, МСК)</h4><div class="card" data-l="hrs"></div></div>
-              <div class="sec"><h4>Деньги и активность за период</h4><div class="card" data-l="act"><div class="vdl-row"><div class="main"><button class="btn" data-a="loadact">${icon('search', 13)}Посчитать деньги и категории</button><div class="sub">Все записи игрока за ${this.days} дн.: приход и расход, баланс, крупные операции, чем занимался</div></div></div></div></div>
-              <div class="sec"><h4>Трейды игрока</h4><div class="card" data-l="tr"><div class="vdl-row"><div class="main"><button class="btn" data-a="loadtr">${icon('search', 13)}Показать трейды игрока</button></div></div></div></div>
+              <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button></div>
+              <div data-tab="in">
+                <div class="sec"><h4>IP-адреса игрока</h4><div class="card" data-l="ips">${ips.length ? '' : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>'}</div></div>
+                <div class="sec"><h4>Устройства (APPMDID)</h4><div class="card" data-l="devs">${devs.length ? '' : '<div class="vdl-row"><div class="main sub">В подключениях нет APPMDID</div></div>'}</div></div>
+                <div class="sec"><h4>Сессии (вход / выход)</h4><div class="card" data-l="ses"></div></div>
+                <div class="sec"><h4>Когда играет (по входам, МСК)</h4><div class="card" data-l="hrs"></div></div>
+              </div>
+              <div data-tab="money" hidden><div class="sec"><h4>Деньги за ${this.days} дн.</h4><div class="card" data-l="money"></div></div></div>
+              <div data-tab="act" hidden><div class="sec"><h4>Чем занимался за ${this.days} дн. (записей по категориям)</h4><div class="card" data-l="cats"></div></div></div>
+              <div data-tab="tr" hidden><div class="sec"><h4>Трейды игрока за ${this.days} дн.</h4><div class="card" data-l="tr"></div></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
             const li = o.querySelector('[data-l="ips"]');
             ips.slice(0, 30).forEach(g => li.appendChild(this.ipRow(g, nick)));
@@ -730,90 +741,124 @@ const Panel = {
             o.querySelector('[data-l="hrs"]').innerHTML = rows.length
                 ? `${H.html}<div class="sub" style="padding:0 2px 8px">${H.peak >= 0 ? `Чаще всего заходит в ${String(H.peak).padStart(2, '0')}:00–${String(H.peak).padStart(2, '0')}:59 МСК` : ''}${starts.length ? '' : ' · по всем записям, входов нет'}</div>`
                 : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>';
-            // деньги и категории — по кнопке (много страниц)
-            o.querySelector('[data-a="loadact"]').onclick = e => this.activity(e.currentTarget, o.querySelector('[data-l="act"]'), base);
-            // трейды игрока — по кнопке
-            o.querySelector('[data-a="loadtr"]').onclick = async e => {
-                const btn = e.currentTarget;
-                btn.disabled = true;
-                btn.textContent = 'Гружу…';
-                try {
-                    const tr = await Api.all({ ...sel, transaction_desc__ilike: '%TradeID%', ...Api.range(this.days) }, 6, (pp, nn) => this.prog(`Трейды: страница ${pp}, записей ${nn}…`));
-                    this.prog('');
-                    const byT = new Map();
-                    tr.forEach(r => {
-                        const m = String(r.transaction_desc || '').match(/TradeID:\s*(\d+)/);
-                        if (!m) return;
-                        const g = byT.get(m[1]) || { id: m[1], n: 0, last: 0 };
-                        g.n++;
-                        g.last = Math.max(g.last, new Date(r.time).getTime() || 0);
-                        byT.set(m[1], g);
-                    });
-                    const list = [...byT.values()].sort((a, b) => b.last - a.last);
-                    const box = o.querySelector('[data-l="tr"]');
-                    box.innerHTML = list.length
-                        ? list
-                              .map(g => `<div class="vdl-row"><div class="main"><div class="ttl">Трейд #${g.id}<span class="vdl-tag">${g.n} зап.</span></div><div class="sub">${fmtDate(g.last)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`)
-                              .join('')
-                        : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>';
-                    box.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
-                    this.report.trades = list.length;
-                } catch (err) {
-                    this.prog('');
-                    toast('Трейды: ' + err.message, 'err');
-                    btn.disabled = false;
-                    btn.innerHTML = `${icon('search', 13)}Показать трейды игрока`;
-                }
+            // вкладки: «Доходы», «Активность» и «Трейды» грузятся при первом открытии
+            const gen = this._gen;
+            const tabs = o.querySelector('[data-g="tab"]');
+            const loaders = {
+                money: box => this.loadAll(base, gen).then(d => gen === this._gen && this.renderMoney(box, d)),
+                act: box => this.loadAll(base, gen).then(d => gen === this._gen && this.renderCats(box, d)),
+                tr: box => this.loadTrades(sel, gen).then(list => gen === this._gen && this.renderTrades(box, list))
             };
+            const started = {};
+            const show = t => {
+                this.tab = t;
+                tabs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === t));
+                o.querySelectorAll('[data-tab]').forEach(x => (x.hidden = x.dataset.tab !== t));
+                if (!loaders[t] || started[t]) return;
+                started[t] = true;
+                const box = o.querySelector(`[data-tab="${t}"] .card`);
+                box.innerHTML = '<div class="vdl-row"><div class="main sub">Загружаю…</div></div>';
+                loaders[t](box).catch(err => {
+                    if (gen !== this._gen) return;
+                    started[t] = false;
+                    this.prog('');
+                    box.innerHTML = `<div class="vdl-row"><div class="main sub">Не загрузилось: ${U.esc(err.message)}</div><div class="vdl-btns"><button class="btn" data-a="retry">Повторить</button></div></div>`;
+                    box.querySelector('[data-a="retry"]').onclick = () => show(t);
+                });
+            };
+            tabs.querySelectorAll('button').forEach(b => (b.onclick = () => show(b.dataset.v)));
+            show(loaders[this.tab] || this.tab === 'in' ? this.tab : 'in');
             o.querySelector('[data-a="copy"]').onclick = () => this.copy();
         });
     },
 
-    // деньги и категории игрока: все его записи за период (до 500)
-    async activity(btn, box, base) {
-        btn.disabled = true;
-        btn.textContent = 'Считаю…';
-        const gen = this._gen;
-        try {
-            const LIM = 10;
-            const rows = await Api.all(base, LIM, (p, n) => gen === this._gen && this.prog(`Все записи игрока: страница ${p}, записей ${n}…`));
-            if (gen !== this._gen) return;
-            this.prog('');
-            if (!rows.length) {
-                box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>';
-                return;
-            }
-            const capped = rows.length >= LIM * API_PAGE;
-            const ops = rows.map(r => ({ r, a: amtOf(r), t: new Date(r.time).getTime() || 0 })).filter(x => Number.isFinite(x.a) && x.a !== 0);
-            const inc = ops.filter(x => x.a > 0).reduce((s, x) => s + x.a, 0);
-            const exp = ops.filter(x => x.a < 0).reduce((s, x) => s + x.a, 0);
-            const bals = rows.map(r => ({ b: balOf(r), t: new Date(r.time).getTime() || 0 })).filter(x => Number.isFinite(x.b)).sort((a, b) => a.t - b.t);
-            const b0 = bals[0], b1 = bals[bals.length - 1];
-            const big = ops.slice().sort((a, b) => Math.abs(b.a) - Math.abs(a.a)).slice(0, 6);
-            const cats = group(rows, catName).slice(0, 8);
-            const cmax = cats.length ? cats[0].n : 1;
-            this.report.money = { inc, exp, b0: b0 && b0.b, b1: b1 && b1.b, n: rows.length, capped };
-            this.report.cats = cats.map(g => `${g.k} — ${g.n}`);
-            const cls = n => (n > 0 ? 'vdl-pos' : n < 0 ? 'vdl-neg' : '');
-            box.innerHTML = `
-              <div class="vdl-money">
-                <div class="k"><small>Пришло</small><b class="vdl-pos">${ops.length ? fmtMoney(inc) : '—'}</b></div>
-                <div class="k"><small>Ушло</small><b class="vdl-neg">${ops.length ? fmtMoney(exp) : '—'}</b></div>
-                <div class="k"><small>Итог по операциям</small><b class="${cls(inc + exp)}">${ops.length ? fmtMoney(inc + exp) : '—'}</b></div>
-                <div class="k"><small>Баланс сейчас</small><b>${b1 ? fmtNum(b1.b) : '—'}</b>${b0 && b0 !== b1 ? `<small>в начале периода ${fmtNum(b0.b)}</small>` : ''}</div>
-              </div>
-              ${ops.length ? '' : '<div class="sub" style="padding:0 2px 8px">Денежных операций за период нет (или сайт не отдаёт сумму)</div>'}
-              ${big.length ? `<div class="sub" style="padding:4px 2px">Крупные операции</div>${big.map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="${cls(x.a)}">${fmtMoney(x.a)}</span><span class="vdl-tag">${U.esc(catName(x.r))}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(String(x.r.transaction_desc || '').slice(0, 140))}</div></div></div>`).join('')}` : ''}
-              <div class="sub" style="padding:10px 2px 4px">Чем занимался (записей по категориям)</div>
-              ${cats.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`).join('')}
-              <div class="sub" style="padding:8px 2px">${rows.length} записей${capped ? ' — показаны последние 500, за весь период их больше' : ''}</div>`;
-        } catch (err) {
-            if (gen !== this._gen) return;
-            this.prog('');
-            toast('Деньги и категории: ' + err.message, 'err');
-            btn.disabled = false;
-            btn.innerHTML = `${icon('search', 13)}Посчитать деньги и категории`;
-        }
+    // все записи игрока за период (до 500) — одни на «Доходы» и «Активность»
+    loadAll(base, gen) {
+        const key = gen + '|' + JSON.stringify(base);
+        if (this._all && this._all.key === key) return this._all.p;
+        const LIM = 10;
+        const p = Api.all(base, LIM, (pg, n) => gen === this._gen && this.prog(`Все записи игрока: страница ${pg}, записей ${n}…`)).then(rows => {
+            if (gen === this._gen) this.prog('');
+            return { rows, capped: rows.length >= LIM * API_PAGE };
+        });
+        this._all = { key, p };
+        p.catch(() => this._all && this._all.p === p && (this._all = null));
+        return p;
+    },
+    capNote(d) {
+        return `<div class="sub" style="padding:8px 2px">${d.rows.length} ${plural(d.rows.length, 'запись', 'записи', 'записей')} игрока${d.capped ? ' — посчитаны последние 500, за весь период их больше' : ''}</div>`;
+    },
+    renderMoney(box, d) {
+        if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
+        const ops = d.rows.map(r => ({ r, a: amtOf(r), t: new Date(r.time).getTime() || 0 })).filter(x => Number.isFinite(x.a) && x.a !== 0);
+        const inc = ops.filter(x => x.a > 0).reduce((s, x) => s + x.a, 0);
+        const exp = ops.filter(x => x.a < 0).reduce((s, x) => s + x.a, 0);
+        const bals = d.rows.map(r => ({ b: balOf(r), t: new Date(r.time).getTime() || 0 })).filter(x => Number.isFinite(x.b)).sort((a, b) => a.t - b.t);
+        const b0 = bals[0], b1 = bals[bals.length - 1];
+        const big = ops.slice().sort((a, b) => Math.abs(b.a) - Math.abs(a.a)).slice(0, 10);
+        // доходы и расходы по категориям
+        const byCat = sign => {
+            const m = new Map();
+            ops.filter(x => Math.sign(x.a) === sign).forEach(x => {
+                const k = catName(x.r);
+                const g = m.get(k) || { k, sum: 0, n: 0 };
+                g.sum += x.a;
+                g.n++;
+                m.set(k, g);
+            });
+            return [...m.values()].sort((a, b) => Math.abs(b.sum) - Math.abs(a.sum)).slice(0, 6);
+        };
+        const bars = (list, cls) => {
+            const max = list.length ? Math.abs(list[0].sum) : 1;
+            return list.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="tr"><b class="${cls}" style="width:${Math.max(3, Math.round((Math.abs(g.sum) / max) * 100))}%"></b></span><span class="n ${cls}">${fmtMoney(g.sum)}</span></div>`).join('');
+        };
+        const cIn = byCat(1), cOut = byCat(-1);
+        this.report.money = { inc, exp, b0: b0 && b0.b, b1: b1 && b1.b, n: d.rows.length, capped: d.capped };
+        const cls = n => (n > 0 ? 'vdl-pos' : n < 0 ? 'vdl-neg' : '');
+        box.innerHTML = `
+          <div class="vdl-money">
+            <div class="k"><small>Пришло</small><b class="vdl-pos">${ops.length ? fmtMoney(inc) : '—'}</b></div>
+            <div class="k"><small>Ушло</small><b class="vdl-neg">${ops.length ? fmtMoney(exp) : '—'}</b></div>
+            <div class="k"><small>Итог по операциям</small><b class="${cls(inc + exp)}">${ops.length ? fmtMoney(inc + exp) : '—'}</b></div>
+            <div class="k"><small>Баланс сейчас</small><b>${b1 ? fmtNum(b1.b) : '—'}</b>${b0 && b0 !== b1 ? `<small>в начале периода ${fmtNum(b0.b)}</small>` : ''}</div>
+          </div>
+          ${ops.length ? '' : '<div class="sub" style="padding:0 2px 8px">Денежных операций за период нет (или сайт не отдаёт сумму)</div>'}
+          ${cIn.length ? `<div class="sub" style="padding:8px 2px 2px">Откуда приходили деньги</div>${bars(cIn, 'vdl-pos')}` : ''}
+          ${cOut.length ? `<div class="sub" style="padding:8px 2px 2px">На что уходили</div>${bars(cOut, 'vdl-neg')}` : ''}
+          ${big.length ? `<div class="sub" style="padding:10px 2px 2px">Крупные операции</div>${big.map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="${cls(x.a)}">${fmtMoney(x.a)}</span><span class="vdl-tag">${U.esc(catName(x.r))}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(String(x.r.transaction_desc || '').slice(0, 140))}</div></div></div>`).join('')}` : ''}
+          ${this.capNote(d)}`;
+    },
+    renderCats(box, d) {
+        if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
+        const cats = group(d.rows, catName).slice(0, 14);
+        const cmax = cats.length ? cats[0].n : 1;
+        this.report.cats = cats.slice(0, 8).map(g => `${g.k} — ${g.n}`);
+        box.innerHTML = cats
+            .map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
+            .join('') + this.capNote(d);
+    },
+    async loadTrades(sel, gen) {
+        const tr = await Api.all({ ...sel, transaction_desc__ilike: '%TradeID%', ...Api.range(this.days) }, 6, (pp, nn) => gen === this._gen && this.prog(`Трейды: страница ${pp}, записей ${nn}…`));
+        if (gen === this._gen) this.prog('');
+        const byT = new Map();
+        tr.forEach(r => {
+            const m = String(r.transaction_desc || '').match(/TradeID:\s*(\d+)/);
+            if (!m) return;
+            const g = byT.get(m[1]) || { id: m[1], n: 0, last: 0 };
+            g.n++;
+            g.last = Math.max(g.last, new Date(r.time).getTime() || 0);
+            byT.set(m[1], g);
+        });
+        return [...byT.values()].sort((a, b) => b.last - a.last);
+    },
+    renderTrades(box, list) {
+        this.report.trades = list.length;
+        box.innerHTML = list.length
+            ? list
+                  .map(g => `<div class="vdl-row"><div class="main"><div class="ttl">Трейд #${g.id}<span class="vdl-tag">${g.n} зап.</span></div><div class="sub">${fmtDate(g.last)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`)
+                  .join('')
+            : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>';
+        box.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
     },
 
     byIp(ip, into, except) {
