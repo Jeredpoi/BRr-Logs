@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.5.0
-// @description  Аналитика по IP, подсветка повторяющихся IP на logs.blackrussia.online. Работает вместе с VERDICT.
+// @version      0.6.0
+// @description  Аналитика по IP, подсветка повторов и просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
 // @match        https://forum.blackrussia.online/*
@@ -23,8 +23,8 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.5.0
-// @description  Аналитика по IP, подсветка повторяющихся IP на logs.blackrussia.online. Работает вместе с VERDICT.
+// @version      0.6.0
+// @description  Аналитика по IP, подсветка повторов и просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
 // @match        https://forum.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -272,6 +272,16 @@ function toast(text, kind = 'ok') {
 }
 
 const LOGS_UI_CSS = `
+.vdl-tv-row { display: grid; grid-template-columns: 160px auto 1fr; gap: 14px; align-items: center; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+.vdl-tv-row:last-child { border-bottom: 0; }
+.vdl-tv-row .who { font-weight: 700; color: color-mix(in srgb, var(--acc) 70%, #fff); overflow: hidden; text-overflow: ellipsis; }
+.vdl-tv-row .tm { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: #ffb454; background: color-mix(in srgb, #ffb454 12%, transparent); border: 1px solid color-mix(in srgb, #ffb454 30%, transparent); border-radius: 6px; padding: 3px 8px; white-space: nowrap; justify-self: start; }
+.vdl-tv-row .ds { font-size: 12.5px; color: var(--tx); }
+.vdl-mrow { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+.vdl-mrow:last-child { border-bottom: 0; }
+.vdl-mrow input[type=color] { width: 34px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: none; cursor: pointer; }
+.vdl-mrow .nm { flex: 1; font-weight: 650; }
+@media (max-width: 700px) { .vdl-tv-row { grid-template-columns: 1fr; gap: 4px; } }
 .vdl-card { position: fixed; right: 18px; bottom: 18px; z-index: 2147483000; width: 340px; max-width: calc(100vw - 36px); }
 .vdl-card .card { padding: 14px 16px; box-shadow: 0 18px 40px -16px rgba(0,0,0,.8); }
 .vdl-card b { color: var(--tx); }
@@ -786,9 +796,8 @@ const LogsPage = {
 .vdl-dates { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
 .vdl-dates button { height: 28px; padding: 0 11px; border-radius: 8px; font: 650 12px/1 inherit; color: #fff; border: 1px solid color-mix(in srgb, ${acc} 40%, transparent); background: color-mix(in srgb, ${acc} 14%, transparent); cursor: pointer; }
 .vdl-dates button:hover { background: ${acc}; }
-.vdl-mrow { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
-.vdl-mrow input[type=color] { width: 34px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: none; cursor: pointer; }
-.vdl-mrow .nm { flex: 1; font-weight: 650; }`;
+.vdl-trade { display: inline-flex; align-items: center; margin-left: 10px; padding: 2px 10px; vertical-align: middle; border-radius: 7px; font-size: 12px; font-weight: 700; color: #fff; cursor: pointer; background: color-mix(in srgb, ${acc} 80%, #1b6cff); box-shadow: 0 2px 8px -3px ${acc}; }
+.vdl-trade:hover { filter: brightness(1.12); }`;
         document.head.appendChild(st);
         const deco = U.debounce(() => this.decorate(), 200);
         new MutationObserver(deco).observe(document.body, { childList: true, subtree: true });
@@ -906,6 +915,23 @@ const LogsPage = {
                     td.appendChild(b);
                 }
             }
+            // кнопка «Трейд #…» на строках трейдов
+            if (!td.dataset.trade) {
+                const tm = td.textContent.match(/TradeID:\s*(\d+)/);
+                if (tm && !td.querySelector('.vdl-trade')) {
+                    td.dataset.trade = tm[1];
+                    const bt = document.createElement('span');
+                    bt.className = 'vdl-trade';
+                    bt.textContent = 'Трейд #' + tm[1];
+                    bt.title = 'Показать все записи этого трейда';
+                    bt.onclick = e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        TradeView.open(tm[1]);
+                    };
+                    td.appendChild(bt);
+                }
+            }
             // деньги с разделителями
             if (c.money && !td.dataset.money && /(amount|balance)/.test(td.className)) {
                 td.dataset.money = '1';
@@ -996,6 +1022,54 @@ const LogsPage = {
     },
     hot(type, val, on) {
         document.querySelectorAll(`td[data-hk="${type}"][data-hv="${CSS.escape(val)}"] .vdl-hl`).forEach(p => p.classList.toggle('hot', on));
+    }
+};
+
+const TradeView = {
+    async open(id) {
+        if (this.scrim) this.scrim.remove();
+        const scrim = (this.scrim = Layer.add(
+            U.h(`<div class="scrim"><div class="modal">
+            <div class="m-head"><span class="vic" style="--c:var(--acc);width:34px;height:34px;border-radius:10px">${icon('shield', 16)}</span>
+              <div><div class="m-title">Трейд #${U.esc(id)}</div><div class="m-sub">все записи этого трейда</div></div>
+              <span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
+            <div class="pane"><div class="vdl-prog" style="font-size:12px;color:var(--tx-3)">Загружаю…</div><div class="vdl-tv"></div></div></div></div>`)
+        ));
+        const close = () => {
+            scrim.remove();
+            this.scrim = null;
+        };
+        scrim.querySelector('[data-a="x"]').onclick = close;
+        scrim.addEventListener('mousedown', e => e.target === scrim && close());
+        try {
+            // один трейд по его номеру; широкий период, чтобы захватить весь обмен
+            const rows = await Api.all(
+                { transaction_desc__ilike: `%TradeID: ${id}%`, time__gte: new Date(Date.now() - 180 * 864e5).toISOString(), time__lte: new Date().toISOString() },
+                6
+            );
+            rows.sort((a, b) => new Date(a.time) - new Date(b.time));
+            if (!this.scrim) return;
+            scrim.querySelector('.vdl-prog').textContent = rows.length ? `${rows.length} записей · участники: ${[...new Set(rows.map(r => r.player_name).filter(Boolean))].join(', ')}` : '';
+            const box = scrim.querySelector('.vdl-tv');
+            box.innerHTML = rows.length
+                ? rows
+                      .map(
+                          r => `<div class="vdl-tv-row"><span class="who">${U.esc(r.player_name || '—')}</span><span class="tm">${U.esc(fmtDate(r.time))}</span><span class="ds">${U.esc(String(r.transaction_desc || '').replace(/^\[TradeID:\s*\d+\]\s*/, ''))}</span></div>`
+                      )
+                      .join('')
+                : '<div class="vdl-tv-row"><span class="ds">По этому номеру трейда записей не нашлось (мог быть давно).</span></div>';
+            this.rows = rows;
+            this.id = id;
+        } catch (e) {
+            if (this.scrim) scrim.querySelector('.vdl-prog').textContent = 'Не загрузилось: ' + e.message;
+        }
+        scrim.querySelector('[data-a="copy"]').onclick = () => {
+            const L = (this.rows || []).map(r => `${fmtDate(r.time)} · ${r.player_name || '—'} · ${String(r.transaction_desc || '').replace(/^\[TradeID:\s*\d+\]\s*/, '')}`);
+            navigator.clipboard.writeText(`Трейд #${this.id}\n` + L.join('\n')).then(
+                () => toast('Скопировано'),
+                () => toast('Не удалось', 'err')
+            );
+        };
     }
 };
 
