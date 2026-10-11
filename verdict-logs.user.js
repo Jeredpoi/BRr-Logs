@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.0
+// @version      0.8.1
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.0
+// @version      0.8.1
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -910,7 +910,11 @@ const LogsPage = {
 .vdl-dates button { height: 28px; padding: 0 11px; border-radius: 8px; font: 650 12px/1 inherit; color: #fff; border: 1px solid color-mix(in srgb, ${acc} 40%, transparent); background: color-mix(in srgb, ${acc} 14%, transparent); cursor: pointer; }
 .vdl-dates button:hover { background: ${acc}; }
 .vdl-trade { display: inline-flex; align-items: center; margin-left: 10px; padding: 2px 10px; vertical-align: middle; border-radius: 7px; font-size: 12px; font-weight: 700; color: #fff; cursor: pointer; background: color-mix(in srgb, ${acc} 80%, #1b6cff); box-shadow: 0 2px 8px -3px ${acc}; }
-.vdl-trade:hover { filter: brightness(1.12); }`;
+.vdl-trade:hover { filter: brightness(1.12); }
+/* Bootstrap 5.3 красит ячейки светлой заливкой через inset box-shadow поверх любого фона — убираем, ячейки тёмные */
+html body table td, html body table th { box-shadow: none !important; --bs-table-bg-type: transparent; --bs-table-bg-state: transparent; --bs-table-accent-bg: transparent; --bs-table-striped-bg: transparent; --bs-table-hover-bg: transparent; }
+html body :is(#log-table, table) tbody :is(.first-row, tr) td { background: rgba(10,11,16,.55) !important; color: #e4e6eb; }
+html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background: color-mix(in srgb, ${acc} 14%, rgba(10,11,16,.6)) !important; }`;
         document.head.appendChild(st);
         const deco = U.debounce(() => this.decorate(), 200);
         new MutationObserver(deco).observe(document.body, { childList: true, subtree: true });
