@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.4
+// @version      0.8.5
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.8.4
+// @version      0.8.5
 // @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.8.4';
+const VERSION = '0.8.5';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -899,7 +899,7 @@ const LogsPage = {
         head.lastElementChild.onclick = () => this.settings();
         this.placeHead();
         const st = document.createElement('style');
-        st.textContent = `.vdl-head { display: inline-flex; align-items: center; gap: 6px; margin: 0 12px; vertical-align: middle; }
+        st.textContent = `.vdl-head { display: inline-flex; flex: none; align-items: center; gap: 6px; margin: 0 auto 0 12px; vertical-align: middle; }
 .vdl-head.float { position: fixed; left: 18px; bottom: 18px; z-index: 2147483000; margin: 0; }
 .vdl-hbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 999px; border: 0; font: 700 12.5px/1 Inter, "Segoe UI", system-ui, sans-serif; color: #fff; cursor: pointer; white-space: nowrap;
   background: linear-gradient(135deg, ${acc}, color-mix(in srgb, ${acc} 55%, #3aa0ff)); box-shadow: 0 6px 16px -8px ${acc}; }
@@ -913,7 +913,7 @@ const LogsPage = {
 .vdl-cnt { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 18px; margin-left: 6px; padding: 0 5px; vertical-align: middle; border-radius: 999px; font-size: 11px; font-weight: 800; color: #fff; cursor: pointer; }
 .vdl-done { text-decoration: line-through; opacity: .45; }
 .vdl-dates { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
-.vdl-dates button { height: 28px; padding: 0 11px; border-radius: 8px; font: 650 12px/1 inherit; color: #fff; border: 1px solid color-mix(in srgb, ${acc} 40%, transparent); background: color-mix(in srgb, ${acc} 14%, transparent); cursor: pointer; }
+.vdl-dates button { height: 28px; padding: 0 11px; border-radius: 8px; font-weight: 650; font-size: 12px; line-height: 1; font-family: inherit; color: #fff; border: 1px solid color-mix(in srgb, ${acc} 40%, transparent); background: color-mix(in srgb, ${acc} 14%, transparent); cursor: pointer; }
 .vdl-dates button:hover { background: ${acc}; }
 .vdl-trade { display: inline-flex; align-items: center; margin-left: 10px; padding: 2px 10px; vertical-align: middle; border-radius: 7px; font-size: 12px; font-weight: 700; color: #fff; cursor: pointer; background: color-mix(in srgb, ${acc} 80%, #1b6cff); box-shadow: 0 2px 8px -3px ${acc}; }
 .vdl-trade:hover { filter: brightness(1.12); }
