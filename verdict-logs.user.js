@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.3.1
+// @version      0.3.2
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.3.1
+// @version      0.3.2
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.3.1';
+const VERSION = '0.3.2';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -162,30 +162,54 @@ function findVerdict(wait = 5000) {
     });
 }
 
-function mailCall(body) {
-    return new Promise((res, rej) => {
-        if (!BRAND.dev.mail || typeof GM_xmlhttpRequest !== 'function') return rej(new Error('нет связи с разработчиком'));
-        GM_xmlhttpRequest({
-            method: 'POST',
-            url: BRAND.dev.mail,
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            data: JSON.stringify(body),
-            timeout: 30000,
-            onload: r => {
-                let j = null;
-                try {
-                    j = JSON.parse(r.responseText);
-                } catch {
-                    /* не JSON */
-                }
-                if (!j) return rej(new Error('сервер не ответил'));
-                if (j.error) return rej(new Error(j.error));
-                res(j);
-            },
-            onerror: () => rej(new Error('нет связи')),
-            ontimeout: () => rej(new Error('сервер долго не отвечает'))
-        });
+function gmReq(o) {
+    return new Promise(res =>
+        GM_xmlhttpRequest(
+            Object.assign({ anonymous: true, timeout: 30000 }, o, {
+                onload: r => res({ ok: true, r }),
+                onerror: e => res({ ok: false, why: (e && e.error) || 'нет связи' }),
+                ontimeout: () => res({ ok: false, why: 'сервер долго не отвечает' })
+            })
+        )
+    );
+}
+
+const asJson = t => {
+    try {
+        return JSON.parse(t);
+    } catch {
+        return null;
+    }
+};
+
+async function mailCall(body) {
+    if (!BRAND.dev.mail || typeof GM_xmlhttpRequest !== 'function') throw new Error('нет связи с разработчиком');
+    const a = await gmReq({
+        method: 'POST',
+        url: BRAND.dev.mail,
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        data: JSON.stringify(body)
     });
+    if (!a.ok) throw new Error(a.why);
+    let j = asJson(a.r.responseText);
+    if (!j) {
+        const t = String(a.r.responseText || '');
+        const hop = (t.match(/https:\/\/script\.googleusercontent\.com\/[^"'\s<>]+/) || [])[0];
+        if (hop) {
+            const b = await gmReq({ method: 'GET', url: hop.replace(/&amp;/g, '&') });
+            if (b.ok) j = asJson(b.r.responseText);
+        }
+        if (!j) {
+            const what = /accounts\.google\.com|ServiceLogin/i.test(t + a.r.finalUrl)
+                ? 'Google просит войти'
+                : /<html|<!doctype/i.test(t)
+                  ? 'пришла страница вместо ответа'
+                  : 'пустой ответ';
+            throw new Error(`сервер не ответил (${a.r.status}, ${what})`);
+        }
+    }
+    if (j.error) throw new Error(j.error);
+    return j;
 }
 
 const Access = {
