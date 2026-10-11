@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.3.2
+// @version      0.3.3
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.3.2
+// @version      0.3.3
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.3.2';
+const VERSION = '0.3.3';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -182,11 +182,12 @@ const asJson = t => {
     }
 };
 
-async function mailCall(body) {
+async function mailCall(body, withCookies) {
     if (!BRAND.dev.mail || typeof GM_xmlhttpRequest !== 'function') throw new Error('нет связи с разработчиком');
     const a = await gmReq({
         method: 'POST',
         url: BRAND.dev.mail,
+        anonymous: !withCookies,
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         data: JSON.stringify(body)
     });
@@ -196,16 +197,19 @@ async function mailCall(body) {
         const t = String(a.r.responseText || '');
         const hop = (t.match(/https:\/\/script\.googleusercontent\.com\/[^"'\s<>]+/) || [])[0];
         if (hop) {
-            const b = await gmReq({ method: 'GET', url: hop.replace(/&amp;/g, '&') });
+            const b = await gmReq({ method: 'GET', url: hop.replace(/&amp;/g, '&'), anonymous: !withCookies });
             if (b.ok) j = asJson(b.r.responseText);
         }
+        // доступ к почте может быть «все с аккаунтом Google» — тогда без cookies не пустит
+        if (!j && !withCookies) return mailCall(body, true);
         if (!j) {
             const what = /accounts\.google\.com|ServiceLogin/i.test(t + a.r.finalUrl)
                 ? 'Google просит войти'
                 : /<html|<!doctype/i.test(t)
                   ? 'пришла страница вместо ответа'
                   : 'пустой ответ';
-            throw new Error(`сервер не ответил (${a.r.status}, ${what})`);
+            const id = (BRAND.dev.mail.match(/\/s\/(.{6})/) || [])[1] || '?';
+            throw new Error(`сервер не ответил (${a.r.status}, ${what}; v${VERSION}, адрес ${id}…)`);
         }
     }
     if (j.error) throw new Error(j.error);
