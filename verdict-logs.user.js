@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.3.3
+// @version      0.3.4
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.3.3
+// @version      0.3.4
 // @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.3.3';
+const VERSION = '0.3.4';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -859,6 +859,7 @@ async function main() {
     Layer.accent(info);
     if (!info.lid) return ON_LOGS && notice('Нужен VERDICT', 'Обнови VERDICT до последней версии — эта не умеет работать с «VERDICT Логи».');
     const logsNick = ON_LOGS ? ((document.body.textContent.match(/Выйти\s*\[([^\]]{2,40})\]/) || [])[1] || '') : '';
+    if (ON_LOGS && !logsNick) return;
     CTX.info = info;
     CTX.logsNick = logsNick;
     const acc = await Access.check(info, logsNick, true);
