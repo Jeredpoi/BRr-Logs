@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.3.4
-// @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
+// @version      0.4.0
+// @description  Аналитика по IP, подсветка повторяющихся IP на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
 // @match        https://forum.blackrussia.online/*
@@ -23,8 +23,8 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.3.4
-// @description  Аналитика по IP и устройствам на logs.blackrussia.online. Работает вместе с VERDICT.
+// @version      0.4.0
+// @description  Аналитика по IP, подсветка повторяющихся IP на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
 // @match        https://forum.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.3.4';
+const VERSION = '0.4.0';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -760,7 +760,11 @@ const LogsPage = {
         fab.onclick = () => Panel.open();
         const st = document.createElement('style');
         st.textContent = `.vdl-mini { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 6px; vertical-align: middle; border-radius: 6px; border: 1px solid color-mix(in srgb, ${info.accent || '#e5484d'} 45%, transparent); background: color-mix(in srgb, ${info.accent || '#e5484d'} 16%, transparent); color: #fff; font-size: 11px; cursor: pointer; opacity: .75; }
-.vdl-mini:hover { opacity: 1; background: ${info.accent || '#e5484d'}; }`;
+.vdl-mini:hover { opacity: 1; background: ${info.accent || '#e5484d'}; }
+.vdl-ip { border-radius: 6px; padding: 1px 6px; transition: box-shadow .12s, filter .12s; }
+.vdl-ip.hot { filter: brightness(1.25); box-shadow: 0 0 0 2px #fff6; }
+.vdl-cnt { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 18px; margin-left: 6px; padding: 0 5px; vertical-align: middle; border-radius: 999px; font-size: 11px; font-weight: 800; color: #fff; cursor: pointer; }
+.vdl-done { text-decoration: line-through; opacity: .45; }`;
         document.head.appendChild(st);
         const deco = U.debounce(() => this.decorate(), 200);
         new MutationObserver(deco).observe(document.body, { childList: true, subtree: true });
@@ -785,6 +789,7 @@ const LogsPage = {
             else if (td.classList.contains('td-player-name') && /^[A-Za-z0-9]+_[A-Za-z0-9]+$/.test(t)) mode = 'nick';
             if (!mode) return;
             td.dataset.vdl = '1';
+            if (mode === 'ip') td.dataset.ip = t;
             const b = document.createElement('span');
             b.className = 'vdl-mini';
             b.title = mode === 'ip' ? 'Кто ещё заходил с этого IP' : 'IP и устройства игрока';
@@ -796,6 +801,72 @@ const LogsPage = {
             };
             td.appendChild(b);
         });
+        this.recolor();
+    },
+
+    // одинаковые IP среди уже прогруженных строк — одним цветом, со счётчиком; ничего не листаем и не копим
+    HUES: [205, 25, 275, 140, 340, 50, 180, 300, 95, 15, 240, 160],
+    recolor() {
+        const cells = [...document.querySelectorAll('td[data-ip]')];
+        const by = new Map();
+        cells.forEach(td => {
+            const ip = td.dataset.ip;
+            (by.get(ip) || by.set(ip, []).get(ip)).push(td);
+        });
+        const done = Store.get('ipDone', {});
+        // стабильный цвет по порядку появления повторов
+        let hi = 0;
+        const dup = [...by.keys()].filter(ip => by.get(ip).length > 1);
+        const color = new Map();
+        dup.forEach(ip => color.set(ip, this.HUES[hi++ % this.HUES.length]));
+        by.forEach((tds, ip) => {
+            const n = tds.length;
+            const h = color.get(ip);
+            const isDone = !!done[ip];
+            tds.forEach(td => {
+                const txt = td.firstChild;
+                let pill = td.querySelector('.vdl-ip');
+                if (n > 1 && !pill && txt && txt.nodeType === 3) {
+                    pill = document.createElement('span');
+                    pill.className = 'vdl-ip';
+                    pill.textContent = txt.textContent.trim();
+                    td.insertBefore(pill, txt);
+                    txt.textContent = ' ';
+                    pill.onmouseenter = () => this.hot(ip, true);
+                    pill.onmouseleave = () => this.hot(ip, false);
+                }
+                if (pill) {
+                    pill.style.background = h != null ? `hsla(${h},75%,55%,.28)` : '';
+                    pill.style.boxShadow = h != null ? `inset 0 0 0 1px hsla(${h},80%,65%,.6)` : '';
+                }
+                let cnt = td.querySelector('.vdl-cnt');
+                if (n > 1 && !cnt) {
+                    cnt = document.createElement('span');
+                    cnt.className = 'vdl-cnt';
+                    cnt.title = 'Сколько раз этот IP среди загруженных строк. Клик — отметить «разобрано»';
+                    cnt.onclick = e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const d = Store.get('ipDone', {});
+                        if (d[ip]) delete d[ip];
+                        else d[ip] = Date.now();
+                        Store.set('ipDone', d);
+                        this.recolor();
+                    };
+                    td.appendChild(cnt);
+                }
+                if (cnt) {
+                    cnt.textContent = '×' + n;
+                    cnt.style.background = h != null ? `hsl(${h},70%,45%)` : '#667';
+                }
+                td.classList.toggle('vdl-done', isDone);
+                const tr = td.closest('tr');
+                if (tr) tr.classList.toggle('vdl-done', isDone);
+            });
+        });
+    },
+    hot(ip, on) {
+        document.querySelectorAll(`td[data-ip="${CSS.escape(ip)}"] .vdl-ip`).forEach(p => p.classList.toggle('hot', on));
     }
 };
 
