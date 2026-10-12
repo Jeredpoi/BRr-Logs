@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.7
+// @version      1.1.8
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.7
+// @version      1.1.8
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.7';
+const VERSION = '1.1.8';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2051,9 +2051,23 @@ function botNorm(s, keepLatin) {
     return out;
 }
 const Bots = {
-    DEF: { phrases: BOT_PHRASES.join('\n'), level: 2, minAcc: 3, fuzzy: false, levels: true, marks: true },
+    DEF: { phrases: BOT_PHRASES.join('\n'), level: 2, minAcc: 3, fuzzy: false, levels: true, marks: true, chats: null },
     cfg() {
         return Object.assign({}, this.DEF, Store.get('botCfg', {}));
+    },
+    // все известные категории чатов
+    allChats() {
+        return AdminView.known().filter(x => /чат|chat/i.test(x.name));
+    },
+    // по умолчанию боты пишут в игровые чаты: RP и NonRP
+    isGameChat(name) {
+        return /(^|[^a-zа-яё])(non\s*-?\s*)?(rp|рп)(?![a-zа-яё])|nonrp|нонрп/i.test(name);
+    },
+    // где искать: выбранные вручную или игровые чаты; пусто — категории ещё неизвестны, ищем везде
+    chats(c = this.cfg()) {
+        const all = this.allChats();
+        if (Array.isArray(c.chats)) return all.filter(x => c.chats.includes(String(x.id)));
+        return all.filter(x => this.isGameChat(x.name));
     },
     phrases(c = this.cfg()) {
         return String(c.phrases || '')
@@ -2160,8 +2174,13 @@ const BotView = {
             const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
             const seen = new Set(),
                 rows = [];
+            const chats = Bots.chats(c);
+            const chatIds = new Set(chats.map(x => String(x.id)));
+            if (!chats.length && Array.isArray(c.chats) && Bots.allChats().length) throw new Error('не выбран ни один чат — отметь их в «Что ловить»');
+            if (!chats.length) toast('Категории чатов ещё не известны — ищу во всех записях', 'info');
             const take = arr =>
                 arr.forEach(x => {
+                    if (chatIds.size && !chatIds.has(String(x.category_id))) return;
                     const k = `${x.time}|${x.player_name}|${x.transaction_desc}`;
                     if (seen.has(k)) return;
                     seen.add(k);
@@ -2177,9 +2196,6 @@ const BotView = {
             }
             // 2) похожие написания — читаем чаты целиком
             if (c.fuzzy) {
-                // «Админ общий чат» — это общий (глобальный) чат игроков, его тоже читаем
-                const chats = AdminView.known().filter(x => /чат/i.test(x.name) && (!/админ/i.test(x.name) || GLOBAL_CHAT.test(x.name)));
-                if (!chats.length) toast('Категории чатов ещё не известны — ищу только точные фразы', 'info');
                 for (const ch of chats) {
                     const r = await Api.all({ category_id__exact: ch.id, ...range }, 10, (pg, n) => this.prog(`${ch.name}: страница ${pg}, записей ${n}…`, gen), null, alive);
                     if (!alive()) return;
@@ -2336,6 +2352,13 @@ const BotView = {
                 <div class="vdl-mrow"><input type="checkbox" data-k="fuzzy" ${c.fuzzy ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Похожие написания <span class="muted">(тeлеграм латиницей, т е л е г р а м — дольше)</span></span></div>
                 <div class="vdl-mrow"><input type="checkbox" data-k="marks" ${c.marks ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Пометки в таблице логов</span></div>
               </div></div>
+              <div class="sec"><h4>Где искать</h4><div class="card">${
+                  Bots.allChats().length
+                      ? Bots.allChats()
+                            .map(x => `<div class="vdl-mrow"><input type="checkbox" data-chat="${U.esc(x.id)}" ${Bots.chats(c).some(y => y.id === x.id) ? 'checked' : ''}><span class="nm">${U.esc(x.name)}</span><span class="muted">#${U.esc(x.id)}</span></div>`)
+                            .join('')
+                      : '<div class="vdl-mrow"><span class="nm muted">Категории чатов появятся, когда откроешь их в логах</span></div>'
+              }</div></div>
               <div class="btns" style="margin-top:10px"><button class="btn" data-a="def">Сбросить фразы</button><span style="flex:1"></span><button class="btn pri" data-a="save">Сохранить</button></div>
             </div></div></div>`)
         ));
@@ -2354,7 +2377,8 @@ const BotView = {
                 minAcc: Math.max(2, parseInt(v('minAcc').value, 10) || 3),
                 levels: v('levels').checked,
                 fuzzy: v('fuzzy').checked,
-                marks: v('marks').checked
+                marks: v('marks').checked,
+                chats: Bots.allChats().length ? [...scrim.querySelectorAll('[data-chat]')].filter(x => x.checked).map(x => x.dataset.chat) : c.chats
             });
             Bots.reset();
             toast('Сохранено');
@@ -2724,9 +2748,17 @@ html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__open-
     botMarks() {
         const c = Bots.cfg();
         if (!c.marks) return;
+        const names = new Set(Bots.chats(c).map(x => x.name));
         document.querySelectorAll('td').forEach(td => {
             if (td.dataset.bot || (td.colSpan < 2 && !(td.closest('tr') && td.closest('tr').classList.contains('second-row')))) return;
             td.dataset.bot = '1';
+            // категория записи — в строке над описанием
+            if (names.size) {
+                const tr = td.closest('tr');
+                const prev = tr && tr.classList.contains('second-row') ? tr.previousElementSibling : tr;
+                const cat = prev && prev.querySelector('td.td-category');
+                if (cat && !names.has(this.rawOf(cat))) return;
+            }
             const hit = Bots.match(this.rawOf(td));
             if (!hit.length) return;
             const b = document.createElement('span');
