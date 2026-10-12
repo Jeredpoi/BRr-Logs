@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.1
+// @version      1.2.2
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.1
+// @version      1.2.2
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.1';
+const VERSION = '1.2.2';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -555,8 +555,10 @@ const Api = {
         this._q = p.catch(() => {});
         return p;
     },
-    async _page(params, offset, retried) {
-        const wait = 1100 - (Date.now() - this.last);
+    // пауза между запросами: сайт отвечает 429 («слишком часто») — увеличиваем её
+    gap: 1100,
+    async _page(params, offset, retried, tries = 0) {
+        const wait = this.gap - (Date.now() - this.last);
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
         this.last = Date.now();
         const q = new URLSearchParams(params);
@@ -578,13 +580,20 @@ const Api = {
         if (!r.ok) clearTimeout(timer);
         if (r.status === 401 || r.status === 403) throw new Error('сайт логов не пускает — войди заново');
         if (!r.ok) {
+            // «слишком часто» — ждём дольше и повторяем, дальше запрашиваем реже
+            if (r.status === 429 && tries < 5) {
+                this.gap = Math.min(5000, Math.round(this.gap * 1.6));
+                const ra = parseInt(r.headers.get('Retry-After') || '', 10);
+                await new Promise(res => setTimeout(res, Number.isFinite(ra) && ra > 0 ? Math.min(ra, 30) * 1000 : 2500 * (tries + 1)));
+                return this._page(params, offset, retried, tries + 1);
+            }
             // сбой сайта — одна повторная попытка с той же сортировкой
-            if ((r.status >= 500 || r.status === 429) && !retried) {
+            if (r.status >= 500 && !retried) {
                 await new Promise(res => setTimeout(res, 1500));
-                return this._page(params, offset, true);
+                return this._page(params, offset, true, tries);
             }
             // сайт не понял сортировку «сначала новые» — меняем только на первой странице, чтобы не смешать порядок посреди листания
-            if (r.status >= 400 && r.status < 500 && this.order === '-time' && !offset) {
+            if (r.status === 400 && this.order === '-time' && !offset) {
                 this.order = 'time';
                 try {
                     return await this._page(params, offset, true);
@@ -593,7 +602,7 @@ const Api = {
                     throw e;
                 }
             }
-            throw new Error('сайт логов ответил ' + r.status);
+            throw new Error(r.status === 429 ? 'сайт логов просит запрашивать реже — подожди минуту и повтори' : 'сайт логов ответил ' + r.status);
         }
         let d;
         try {
@@ -606,6 +615,7 @@ const Api = {
             clearTimeout(timer);
         }
         if (!Array.isArray(d)) throw new Error('сайт логов ответил не списком');
+        if (this.gap > 1100) this.gap = Math.max(1100, this.gap - 100);
         return d;
     },
     // размер страницы сайта узнаём по ходу (страница, за которой есть ещё, — полная) и запоминаем
@@ -868,8 +878,9 @@ const CatLearn = {
             .map(e => e.name)
             .filter(u => u.includes('/api/list-game-logs/') && !Api.mine.has(u))
             .pop();
-        if (last) {
-            const cid = [...new URL(last).searchParams].find(([k, v]) => /categor/i.test(k) && /^\d{1,4}$/.test(v));
+        const ci = new URLSearchParams(location.search).get('ci');
+        if (last || /^\d{1,4}$/.test(ci || '')) {
+            const cid = (/^\d{1,4}$/.test(ci || '') && ['ci', ci]) || [...new URL(last).searchParams].find(([k, v]) => /categor/i.test(k) && /^\d{1,4}$/.test(v));
             const txt = new Set(tds.map(td => LogsPage.rawOf(td)).filter(Boolean));
             if (cid && txt.size === 1) {
                 const nm = [...txt][0];
@@ -893,7 +904,7 @@ const CatLearn = {
         const rows = await new Promise((res, rej) => {
             const p = (Api._q || Promise.resolve()).then(async () => {
                 Api.mine.add(url);
-                const wait = 1100 - (Date.now() - Api.last);
+                const wait = Api.gap - (Date.now() - Api.last);
                 if (wait > 0) await new Promise(res2 => setTimeout(res2, wait));
                 Api.last = Date.now();
                 const ctl = typeof AbortController === 'function' ? new AbortController() : null;
