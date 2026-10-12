@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.9.2
-// @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
+// @version      1.0.0
+// @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
 // @match        https://forum.blackrussia.online/*
@@ -23,8 +23,8 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      0.9.2
-// @description  Аналитика по игроку (IP, устройства, сессии, трейды), подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
+// @version      1.0.0
+// @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
 // @match        https://forum.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '0.9.2';
+const VERSION = '1.0.0';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -255,6 +255,7 @@ const Layer = {
         this.el().querySelectorAll('.scrim').forEach(x => x.remove());
         if (typeof Panel !== 'undefined') Panel.scrim = null;
         if (typeof TradeView !== 'undefined') TradeView.scrim = null;
+        if (typeof AdminView !== 'undefined') AdminView.scrim = AdminView.cfgScrim = null;
     },
     accent(info) {
         const el = this.el();
@@ -348,6 +349,16 @@ const LOGS_UI_CSS = `
 .vdl-money .k b + small { margin-top: 2px; }
 .vdl-pos { color: #3ecf8e; } .vdl-neg { color: #ff6b6b; }
 .vdl-tabs { display: flex; width: 100%; margin: 4px 0 2px; }
+.vdl-catex { display: flex; align-items: center; gap: 8px; margin: -2px 2px 8px; padding-left: 2px; font-size: 11.5px; color: var(--tx-3); }
+.vdl-catex .ex { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vdl-catex .btn { height: 26px; padding: 0 9px; font-size: 11.5px; }
+.vdl-date { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-3); }
+.vdl-date .inp { flex: none; width: 150px; color-scheme: dark; }
+.vdl-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -4px 0 6px; }
+.vdl-presets .btn { height: 28px; padding: 0 10px; font-size: 12px; }
+.vdl-chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-2); cursor: pointer; }
+.vdl-chk input { width: 15px; height: 15px; }
+.vdl-presets .vdl-chk { margin-left: auto; }
 .vdl-tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; font-size: 12.5px; }
 .vdl-bar .tr b.vdl-pos { background: linear-gradient(90deg, #2fbf71, #3ecf8e); }
 .vdl-bar .tr b.vdl-neg { background: linear-gradient(90deg, #e5484d, #ff6b6b); }
@@ -546,7 +557,68 @@ function catName(r) {
 // и сопоставляем строки по порядку (с проверкой ника). Выученное хранится
 const CatLearn = {
     dirty: false,
+    // подпись номера категории вручную (название с сайта потом её заменит, если найдётся)
+    name(id, v) {
+        const map = Store.get('cats', {});
+        map[String(id)] = v;
+        Store.set('cats', map);
+        this.dirty = true;
+    },
     tried: new Set(),
+    // номера → названия со страницы: список «Категория» в фильтрах, данные в скриптах, ответы API про категории
+    async discover() {
+        if (this._disc) return this._disc;
+        this._disc = (async () => {
+            const map = Store.get('cats', {});
+            let n = 0;
+            const add = (id, name) => {
+                id = String(id);
+                name = String(name || '').replace(/\s+/g, ' ').trim();
+                if (!/^\d{1,4}$/.test(id) || !name || name.length > 60 || /^[–—-]*\s*любая/i.test(name)) return;
+                if (map[id] !== name) {
+                    map[id] = name;
+                    n++;
+                }
+            };
+            // 1) элементы списка категорий (у кастомных списков — data-value / value)
+            const label = [...document.querySelectorAll('label, .form-label, h5, h6')].find(l => /^категори/i.test(l.textContent.trim()));
+            const box = label && (label.closest('.mb-3, .form-group, .col, div') || label.parentElement);
+            if (box) box.querySelectorAll('[data-value], [value], option').forEach(el => add(el.dataset.value ?? el.getAttribute('value'), el.textContent));
+            // 2) данные в скриптах страницы рядом со словом «categor»
+            const pick = arr => Array.isArray(arr) && arr.forEach(o => o && typeof o === 'object' && add(o.id ?? o.pk ?? o.value ?? o.category_id, o.name ?? o.title ?? o.label ?? o.text ?? o.category_name));
+            document.querySelectorAll('script:not([src])').forEach(sc => {
+                const t = sc.textContent || '';
+                if (t.length > 3e6) return;
+                for (const m of t.matchAll(/categor[a-z_]*["']?\s*[:=]\s*(\[[\s\S]*?\])\s*[,;}\n]/gi)) {
+                    try {
+                        pick(JSON.parse(m[1]));
+                    } catch {
+                        /* не JSON */
+                    }
+                }
+            });
+            // 3) ответы сайта, в адресе которых есть «categor»
+            const urls = performance
+                .getEntriesByType('resource')
+                .map(e => e.name)
+                .filter(u => u.startsWith(location.origin) && /categor/i.test(u) && !Api.mine.has(u));
+            for (const u of [...new Set(urls)].slice(0, 3)) {
+                try {
+                    const r = await fetch(u, { credentials: 'include' });
+                    const j = await r.json();
+                    pick(Array.isArray(j) ? j : j && (j.results || j.categories || j.items || j.data));
+                } catch {
+                    /* не JSON */
+                }
+            }
+            if (n) {
+                Store.set('cats', map);
+                this.dirty = true;
+            }
+            return n;
+        })();
+        return this._disc;
+    },
     async learn() {
         const tds = [...document.querySelectorAll('td.td-category')];
         if (!tds.length) return;
@@ -932,12 +1004,44 @@ const Panel = {
     },
     renderCats(box, d) {
         if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
-        const cats = group(d.rows, catName).slice(0, 14);
+        const cats = group(d.rows, r => String(r.category_id ?? '')).slice(0, 14);
         const cmax = cats.length ? cats[0].n : 1;
-        this.report.cats = cats.slice(0, 8).map(g => `${g.k} — ${g.n}`);
-        box.innerHTML = cats
-            .map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
-            .join('') + this.capNote(d);
+        const nm = id => (id === '' ? 'Без категории' : catName({ category_id: id }));
+        this.report.cats = cats.slice(0, 8).map(g => `${nm(g.k)} — ${g.n}`);
+        const unknown = cats.filter(g => g.k !== '' && /^Категория #/.test(nm(g.k)));
+        box.innerHTML =
+            cats
+                .map(g => {
+                    const name = nm(g.k);
+                    const unk = unknown.includes(g);
+                    const ex = unk ? d.rows.find(r => String(r.category_id) === g.k) : null;
+                    return `<div class="vdl-bar"><span class="nm" title="${U.esc(name)}">${U.esc(name)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>${
+                        unk
+                            ? `<div class="vdl-catex" data-id="${U.esc(g.k)}"><span class="ex">пример: ${U.esc(String((ex && ex.transaction_desc) || '—').slice(0, 120))}</span><button class="btn" data-a="name">✎ подписать</button></div>`
+                            : ''
+                    }`;
+                })
+                .join('') +
+            (unknown.length ? '<div class="sub" style="padding:8px 2px 0">Сайт отдаёт только номер категории. Названия появятся сами, когда такие записи попадутся в таблице логов, — или подпиши номер сам, он запомнится.</div>' : '') +
+            this.capNote(d);
+        box.querySelectorAll('.vdl-catex [data-a="name"]').forEach(
+            bt =>
+                (bt.onclick = () => {
+                    const row = bt.closest('.vdl-catex');
+                    const id = row.dataset.id;
+                    row.innerHTML = `<input class="inp" placeholder="Название для категории #${U.esc(id)}" maxlength="40" style="flex:1;height:30px"><button class="btn" data-a="ok">Сохранить</button>`;
+                    const inp = row.querySelector('input');
+                    const ok = () => {
+                        const v = inp.value.trim();
+                        if (!v) return inp.focus();
+                        CatLearn.name(id, v);
+                        this.renderCats(box, d);
+                    };
+                    row.querySelector('[data-a="ok"]').onclick = ok;
+                    inp.addEventListener('keydown', e => e.key === 'Enter' && ok());
+                    inp.focus();
+                })
+        );
     },
     async loadTrades(sel, gen) {
         const tr = await Api.all({ ...sel, transaction_desc__ilike: '%TradeID%', ...Api.range(this.days) }, 6, (pp, nn) => gen === this._gen && this.prog(`Трейды: страница ${pp}, записей ${nn}…`));
@@ -1182,6 +1286,356 @@ const Feedback = {
     }
 };
 
+// ---------- Админ-действия: подсчёт для куратора по нику администратора и периоду ----------
+const AdminView = {
+    DEF: { kw: 'админ, наказан', on: {}, extra: [], mention: false },
+    cfg() {
+        const c = Object.assign({}, this.DEF, Store.get('adminCfg', {}));
+        c.on = Object.assign({}, c.on);
+        c.extra = (c.extra || []).map(String);
+        return c;
+    },
+    save(c) {
+        Store.set('adminCfg', c);
+    },
+    kws(c) {
+        return String(c.kw || '')
+            .split(/[,;\n]/)
+            .map(x => x.trim().toLowerCase())
+            .filter(Boolean);
+    },
+    // категория считается админской: ручная галочка важнее ключевых слов
+    isAdmin(id, c) {
+        id = String(id);
+        if (c.on[id] != null) return !!c.on[id];
+        if (c.extra.includes(id)) return true;
+        const name = catName({ category_id: id });
+        if (/^Категория #/.test(name)) return false;
+        const n = name.toLowerCase();
+        return this.kws(c).some(k => n.includes(k));
+    },
+    known() {
+        catName({ category_id: 0 });
+        return Object.keys(CATS)
+            .filter(k => /^\d+$/.test(k))
+            .map(id => ({ id, name: CATS[id] }));
+    },
+    selected(c) {
+        const ids = new Set(this.known().filter(x => this.isAdmin(x.id, c)).map(x => x.id));
+        c.extra.forEach(id => c.on[id] !== false && ids.add(id));
+        Object.keys(c.on).forEach(id => c.on[id] && ids.add(id));
+        return [...ids];
+    },
+
+    // даты в календаре — московские сутки
+    mskDay(t) {
+        return new Date(t + 3 * 3600e3).toISOString().slice(0, 10);
+    },
+    dayStart(s) {
+        const [y, m, d] = s.split('-').map(Number);
+        return Date.UTC(y, m - 1, d) - 3 * 3600e3;
+    },
+    presets() {
+        const today = this.mskDay(Date.now());
+        const [y, m] = today.split('-').map(Number);
+        const iso = (yy, mm, dd) => new Date(Date.UTC(yy, mm - 1, dd)).toISOString().slice(0, 10);
+        const ago = n => this.mskDay(Date.now() - n * 864e5);
+        return [
+            ['Сегодня', today, today],
+            ['Вчера', ago(1), ago(1)],
+            ['7 дней', ago(6), today],
+            ['30 дней', ago(29), today],
+            ['Этот месяц', iso(y, m, 1), today],
+            ['Прошлый месяц', iso(y, m - 1, 1), iso(y, m, 0)]
+        ];
+    },
+
+    open(nick = '') {
+        Layer.closeModals();
+        this._gen = (this._gen || 0) + 1;
+        const last = Store.get('adminLast', {});
+        const P = this.presets();
+        const scrim = (this.scrim = Layer.add(
+            U.h(`<div class="scrim"><div class="modal vdl">
+            <div class="m-head"><span class="vic" style="--c:var(--acc);width:34px;height:34px;border-radius:10px">${icon('lock', 16)}</span>
+              <div><div class="m-title">Админ-действия</div><div class="m-sub">Подсчёт по нику администратора за период · сервер ${U.esc(Api.server() || '?')}</div></div>
+              <span style="flex:1"></span><button class="btn" data-a="cfg" title="Какие категории считать админ-действиями">${icon('spark', 14)}Что считать</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
+            <div class="pane">
+              <div class="vdl-form">
+                <input class="inp" data-a="q" placeholder="Ник администратора: Ivan_Ivanov" value="${U.esc(nick || last.nick || '')}">
+                <label class="vdl-date">с <input class="inp" type="date" data-a="from"></label>
+                <label class="vdl-date">по <input class="inp" type="date" data-a="to"></label>
+                <button class="btn pri" data-a="go">${icon('search', 14)}Посчитать</button>
+              </div>
+              <div class="vdl-presets">${P.map((x, i) => `<button class="btn" data-p="${i}">${x[0]}</button>`).join('')}
+                <label class="vdl-chk"><input type="checkbox" data-a="mention"> и упоминания ника в описании</label></div>
+              <div class="vdl-prog"></div>
+              <div class="vdl-out"></div>
+            </div></div></div>`)
+        ));
+        const $ = s => scrim.querySelector(s);
+        const close = () => {
+            scrim.remove();
+            if (this.scrim === scrim) this.scrim = null;
+        };
+        $('[data-a="x"]').onclick = close;
+        scrim.addEventListener('mousedown', e => e.target === scrim && close());
+        $('[data-a="cfg"]').onclick = () => this.settings();
+        const from = $('[data-a="from"]'),
+            to = $('[data-a="to"]'),
+            q = $('[data-a="q"]');
+        from.value = last.from || P[4][1];
+        to.value = last.to || P[4][2];
+        from.max = to.max = P[0][1];
+        $('[data-a="mention"]').checked = !!this.cfg().mention;
+        $('[data-a="mention"]').onchange = e => {
+            const c = this.cfg();
+            c.mention = e.target.checked;
+            this.save(c);
+        };
+        scrim.querySelectorAll('[data-p]').forEach(b => {
+            b.onclick = () => {
+                const p = P[+b.dataset.p];
+                from.value = p[1];
+                to.value = p[2];
+                if (q.value.trim()) go();
+            };
+        });
+        const go = () => {
+            const nk = q.value.trim();
+            if (!/^[A-Za-z0-9]+_[A-Za-z0-9]+$/.test(nk)) return this.msg('Впиши ник администратора в формате Имя_Фамилия');
+            if (!from.value || !to.value) return this.msg('Выбери даты «с» и «по»');
+            let a = from.value,
+                b = to.value;
+            if (a > b) [a, b] = [b, a];
+            if ((this.dayStart(b) - this.dayStart(a)) / 864e5 > 92) return this.msg('Период не больше 3 месяцев — выбери короче');
+            Store.set('adminLast', { nick: nk, from: a, to: b });
+            this.count(nk, a, b);
+        };
+        $('[data-a="go"]').onclick = go;
+        q.addEventListener('keydown', e => e.key === 'Enter' && go());
+        CatLearn.discover().catch(() => {});
+        if (nick) go();
+        else setTimeout(() => q.focus(), 50);
+    },
+    msg(t) {
+        const o = this.scrim && this.scrim.querySelector('.vdl-out');
+        if (o) o.innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} ${U.esc(t)}</div>`;
+    },
+    prog(t, gen) {
+        if (this.scrim && gen === this._gen) this.scrim.querySelector('.vdl-prog').textContent = t;
+    },
+
+    async count(nick, a, b) {
+        if (this.busy) return toast('Подожди, подсчёт ещё идёт', 'info');
+        this.busy = true;
+        const gen = this._gen;
+        const out = this.scrim.querySelector('.vdl-out');
+        out.innerHTML = '';
+        try {
+            const c = this.cfg();
+            const t0 = this.dayStart(a),
+                t1 = this.dayStart(b) + 864e5 - 1;
+            const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
+            // 1) все записи ника за период: из них видно, какие категории у него есть
+            const all = await Api.all({ player_name__exact: nick, ...range }, 25, (p, n) => this.prog(`Записи ${nick}: страница ${p}, записей ${n}…`, gen));
+            if (gen !== this._gen) return;
+            const ids = this.selected(c);
+            let own;
+            if (all.capped && ids.length) {
+                // записей слишком много — админские категории считаем отдельными запросами, точно
+                own = [];
+                for (const id of ids) {
+                    const r = await Api.all({ player_name__exact: nick, category_id__exact: id, ...range }, 25, (p, n) => this.prog(`${catName({ category_id: id })}: страница ${p}, записей ${n}…`, gen));
+                    if (gen !== this._gen) return;
+                    own.push(...r);
+                }
+            } else own = all.filter(r => ids.includes(String(r.category_id)));
+            // 2) упоминания: ник в описании чужих записей админских категорий
+            let ment = [];
+            if (c.mention && ids.length) {
+                for (const id of ids) {
+                    const r = await Api.all({ transaction_desc__ilike: `%${nick}%`, category_id__exact: id, ...range }, 10, (p, n) => this.prog(`Упоминания в «${catName({ category_id: id })}»: страница ${p}, записей ${n}…`, gen));
+                    if (gen !== this._gen) return;
+                    ment.push(...r.filter(x => !sameNick(x.player_name, nick)));
+                }
+            }
+            this.prog('', gen);
+            this.render(out, { nick, a, b, t0, t1, all, own, ment, ids, c });
+        } catch (e) {
+            if (gen !== this._gen) return;
+            this.prog('', gen);
+            this.msg('Не получилось: ' + e.message);
+        } finally {
+            this.busy = false;
+        }
+    },
+
+    render(out, d) {
+        const { nick, a, b, all, own, ment, ids } = d;
+        const days = [];
+        for (let t = this.dayStart(a); t <= this.dayStart(b); t += 864e5) days.push(this.mskDay(t + 3600e3));
+        const perDay = new Map(days.map(x => [x, 0]));
+        own.forEach(r => {
+            const k = this.mskDay(new Date(r.time).getTime());
+            if (perDay.has(k)) perDay.set(k, perDay.get(k) + 1);
+        });
+        const active = [...perDay.values()].filter(Boolean).length;
+        const cats = group(own, r => String(r.category_id ?? ''));
+        const mcats = group(ment, r => String(r.category_id ?? ''));
+        const dmax = Math.max(1, ...perDay.values());
+        const cmax = Math.max(1, ...cats.map(g => g.n));
+        const other = group(
+            all.filter(r => !ids.includes(String(r.category_id))),
+            r => String(r.category_id ?? '')
+        );
+        const sample = id => {
+            const r = all.find(x => String(x.category_id) === id);
+            return r ? String(r.transaction_desc || '').slice(0, 110) : '';
+        };
+        const fmtDay = s => s.split('-').reverse().slice(0, 2).join('.');
+        const ru = s => s.split('-').reverse().join('.');
+        this.last = d;
+        out.innerHTML = `
+          <div class="vdl-sum">
+            <div class="k"><small>Админ-действий</small><b>${own.length}</b></div>
+            <div class="k"><small>Дней с действиями</small><b>${active} / ${days.length}</b></div>
+            <div class="k"><small>В среднем в день</small><b>${days.length ? (own.length / days.length).toFixed(1).replace('.0', '') : 0}</b></div>
+            <div class="k"><small>${d.c.mention ? 'Упоминаний' : 'Категорий'}</small><b>${d.c.mention ? ment.length : cats.length}</b></div>
+          </div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${ru(a)} — ${ru(b)} (МСК)${all.capped ? ' · у ника очень много записей — админские посчитаны отдельно' : ''}</div>
+          ${ids.length ? '' : `<div class="card" style="padding:12px 14px;margin-bottom:10px">Не выбрано ни одной категории админ-действий. Отметь их ниже в «Остальные категории этого ника» или в «Что считать».</div>`}
+          <div class="seg vdl-tabs" data-g="atab"><button data-v="cat" class="on">${icon('spark', 13)}По категориям</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="list">${icon('eye', 13)}Список действий</button></div>
+          <div data-at="cat">
+            <div class="sec"><h4>Админ-действия по категориям</h4><div class="card">${
+                cats.length
+                    ? cats
+                          .map(g => {
+                              const m = mcats.find(x => x.k === g.k);
+                              return `<div class="vdl-bar"><span class="nm" title="${U.esc(catName({ category_id: g.k }))}">${U.esc(catName({ category_id: g.k }))}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}${m ? ` <span class="muted">+${m.n}</span>` : ''}</span></div>`;
+                          })
+                          .join('')
+                    : '<div class="vdl-row"><div class="main sub">За период админ-действий не найдено</div></div>'
+            }${mcats.filter(x => !cats.find(g => g.k === x.k)).map(m => `<div class="vdl-bar"><span class="nm">${U.esc(catName({ category_id: m.k }))}</span><span class="tr"></span><span class="n muted">+${m.n}</span></div>`).join('')}
+            ${d.c.mention ? '<div class="sub" style="padding:6px 2px">«+N» — записи, где ник упомянут в описании (действия над игроками)</div>' : ''}</div></div>
+            <div class="sec"><h4>Остальные категории этого ника — отметь, если это тоже админ-действия</h4><div class="card" data-l="other">${
+                other.length
+                    ? other
+                          .map(
+                              g => `<div class="vdl-row"><div class="main"><div class="ttl"><label class="vdl-chk"><input type="checkbox" data-cat="${U.esc(g.k)}"> ${U.esc(catName({ category_id: g.k }))}</label><span class="vdl-tag">${g.n} ${plural(g.n, 'запись', 'записи', 'записей')}</span></div><div class="sub">пример: ${U.esc(sample(g.k)) || '—'}</div></div></div>`
+                          )
+                          .join('')
+                    : '<div class="vdl-row"><div class="main sub">Других категорий у ника за период нет</div></div>'
+            }</div></div>
+          </div>
+          <div data-at="day" hidden><div class="sec"><h4>Админ-действия по дням (МСК)</h4><div class="card">${days
+              .slice()
+              .reverse()
+              .map(k => `<div class="vdl-bar"><span class="nm">${fmtDay(k)} ${['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(k + 'T12:00:00Z').getUTCDay()]}</span><span class="tr"><b style="width:${perDay.get(k) ? Math.max(3, Math.round((perDay.get(k) / dmax) * 100)) : 0}%"></b></span><span class="n${perDay.get(k) ? '' : ' muted'}">${perDay.get(k)}</span></div>`)
+              .join('')}</div></div></div>
+          <div data-at="list" hidden><div class="sec"><h4>Действия (последние 300)</h4><div class="card" data-l="list">${
+              own.length
+                  ? own
+                        .slice()
+                        .sort((x, y) => new Date(y.time) - new Date(x.time))
+                        .slice(0, 300)
+                        .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub">${U.esc(String(r.transaction_desc || '').slice(0, 220))}</div></div></div>`)
+                        .join('')
+                  : '<div class="vdl-row"><div class="main sub">Пусто</div></div>'
+          }</div></div></div>
+          <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
+        const tabs = out.querySelector('[data-g="atab"]');
+        tabs.querySelectorAll('button').forEach(
+            bt =>
+                (bt.onclick = () => {
+                    tabs.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === bt));
+                    out.querySelectorAll('[data-at]').forEach(x => (x.hidden = x.dataset.at !== bt.dataset.v));
+                })
+        );
+        // отметил категорию — запомнили и пересчитали (без новых запросов, если записей немного)
+        out.querySelectorAll('[data-cat]').forEach(
+            ch =>
+                (ch.onchange = () => {
+                    const c = this.cfg();
+                    c.on[ch.dataset.cat] = ch.checked;
+                    this.save(c);
+                    if (!all.capped) {
+                        const ids2 = this.selected(c);
+                        this.render(out, Object.assign({}, d, { c, ids: ids2, own: all.filter(r => ids2.includes(String(r.category_id))), ment: d.ment.filter(r => ids2.includes(String(r.category_id))) }));
+                    } else toast('Отмечено — нажми «Посчитать» ещё раз', 'info');
+                })
+        );
+        out.querySelector('[data-a="copy"]').onclick = () => {
+            const L = [`Админ-действия ${nick} · ${ru(a)} — ${ru(b)} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
+            cats.forEach(g => {
+                const m = mcats.find(x => x.k === g.k);
+                L.push(`• ${catName({ category_id: g.k })}: ${g.n}${m ? ` (+${m.n} упоминаний)` : ''}`);
+            });
+            L.push('По дням:');
+            days.forEach(k => perDay.get(k) && L.push(`  ${fmtDay(k)} — ${perDay.get(k)}`));
+            navigator.clipboard.writeText(L.join('\n')).then(
+                () => toast('Отчёт скопирован'),
+                () => toast('Не удалось скопировать', 'err')
+            );
+        };
+    },
+
+    // что считать админ-действиями
+    settings() {
+        const c = this.cfg();
+        if (this.cfgScrim) this.cfgScrim.remove();
+        const list = this.known().sort((x, y) => x.name.localeCompare(y.name, 'ru'));
+        const scrim = (this.cfgScrim = Layer.add(
+            U.h(`<div class="scrim"><div class="modal sm">
+            <div class="m-head"><span class="vic" style="--c:var(--acc);width:34px;height:34px;border-radius:10px">${icon('spark', 16)}</span>
+              <div><div class="m-title">Что считать админ-действиями</div><div class="m-sub">Категории логов, которые идут в подсчёт</div></div>
+              <span style="flex:1"></span><button class="icon-btn" data-a="x">${icon('x')}</button></div>
+            <div class="pane">
+              <div class="sub" style="margin-bottom:6px">Считать категории, в названии которых есть (через запятую):</div>
+              <input class="inp" data-a="kw" style="width:100%" value="${U.esc(c.kw)}">
+              <div class="sec"><h4>Известные категории (${list.length})</h4><div class="card" data-l="cats">${
+                  list.length
+                      ? list.map(x => `<div class="vdl-mrow"><input type="checkbox" data-cat="${x.id}" ${this.isAdmin(x.id, c) ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">${U.esc(x.name)}</span><span class="muted">#${x.id}</span></div>`).join('')
+                      : '<div class="vdl-row"><div class="main sub">Названия категорий ещё не известны</div></div>'
+              }</div></div>
+              <div class="sub" style="margin:8px 0 6px">Добавить категорию по номеру (если название не известно):</div>
+              <div class="btns"><input class="inp" data-a="id" placeholder="например 41" style="flex:1"><button class="btn" data-a="add">Добавить</button></div>
+              <div class="muted" style="font-size:12px;margin-top:10px">Названия скрипт узнаёт со страницы логов: если какой-то категории нет в списке — открой в логах записи этой категории, она появится. Ещё проще — посчитай админа и отметь категории в блоке «Остальные категории этого ника».</div>
+            </div></div></div>`)
+        ));
+        const close = () => {
+            scrim.remove();
+            this.cfgScrim = null;
+        };
+        scrim.querySelector('[data-a="x"]').onclick = close;
+        scrim.addEventListener('mousedown', e => e.target === scrim && close());
+        scrim.querySelector('[data-a="kw"]').onchange = e => {
+            const n = this.cfg();
+            n.kw = e.target.value;
+            this.save(n);
+            scrim.querySelectorAll('[data-cat]').forEach(ch => (ch.checked = this.isAdmin(ch.dataset.cat, n)));
+        };
+        scrim.querySelectorAll('[data-cat]').forEach(
+            ch =>
+                (ch.onchange = () => {
+                    const n = this.cfg();
+                    n.on[ch.dataset.cat] = ch.checked;
+                    this.save(n);
+                })
+        );
+        scrim.querySelector('[data-a="add"]').onclick = () => {
+            const v = scrim.querySelector('[data-a="id"]').value.trim();
+            if (!/^\d{1,4}$/.test(v)) return toast('Номер категории — число', 'err');
+            const n = this.cfg();
+            if (!n.extra.includes(v)) n.extra.push(v);
+            n.on[v] = true;
+            this.save(n);
+            toast(`Категория #${v} добавлена`);
+            this.settings();
+        };
+    }
+};
+
 const LogsPage = {
     // настройки подсветки: тип → вкл и базовый цвет. По умолчанию только IP
     DEF: { ip: { on: true, col: '#3aa0ff' }, nick: { on: false, col: '#2fbf71' }, dev: { on: false, col: '#a970ff' }, money: true },
@@ -1202,9 +1656,10 @@ const LogsPage = {
         // кнопки — в шапке сайта рядом с «Black Log · сервер»; без шапки — внизу слева
         const head = (this.head = document.createElement('span'));
         head.className = 'vdl-head';
-        head.innerHTML = `<button type="button" class="vdl-hbtn" title="Аналитика по игроку, ID, IP и устройству">${icon('shield', 14)}Аналитика</button><button type="button" class="vdl-hbtn vdl-hcog" title="Подсветка и оформление">${icon('spark', 14)}</button>`;
-        head.firstElementChild.onclick = () => Panel.open();
-        head.lastElementChild.onclick = () => this.settings();
+        head.innerHTML = `<button type="button" class="vdl-hbtn" data-a="an" title="Аналитика по игроку, ID, IP и устройству">${icon('shield', 14)}Аналитика</button><button type="button" class="vdl-hbtn vdl-hadm" data-a="adm" title="Подсчёт админ-действий по нику администратора за период">${icon('lock', 14)}Админ-действия</button><button type="button" class="vdl-hbtn vdl-hcog" data-a="cog" title="Подсветка и оформление">${icon('spark', 14)}</button>`;
+        head.querySelector('[data-a="an"]').onclick = () => Panel.open();
+        head.querySelector('[data-a="adm"]').onclick = () => AdminView.open();
+        head.querySelector('[data-a="cog"]').onclick = () => this.settings();
         this.placeHead();
         const st = document.createElement('style');
         st.textContent = `.vdl-head { display: inline-flex; flex: none; align-items: center; gap: 6px; margin: 0 auto 0 12px; vertical-align: middle; }
@@ -1212,6 +1667,7 @@ const LogsPage = {
 .vdl-hbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 999px; border: 0; font: 700 12.5px/1 Inter, "Segoe UI", system-ui, sans-serif; color: #fff; cursor: pointer; white-space: nowrap;
   background: linear-gradient(135deg, ${acc}, color-mix(in srgb, ${acc} 55%, #3aa0ff)); box-shadow: 0 6px 16px -8px ${acc}; }
 .vdl-hbtn:hover { filter: brightness(1.1); }
+.vdl-hadm { background: linear-gradient(135deg, color-mix(in srgb, ${acc} 55%, #7a5cff), #7a5cff); box-shadow: 0 6px 16px -8px #7a5cff; }
 .vdl-hcog { padding: 0 8px; background: rgba(255,255,255,.08); border: 1px solid color-mix(in srgb, ${acc} 40%, transparent); box-shadow: none; }
 .vdl-hcog:hover { background: ${acc}; }
 .vdl-mini { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 6px; vertical-align: middle; border-radius: 6px; border: 1px solid color-mix(in srgb, ${acc} 45%, transparent); background: color-mix(in srgb, ${acc} 16%, transparent); color: #fff; font-size: 11px; cursor: pointer; opacity: .75; }
@@ -1259,6 +1715,7 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
         });
         run();
         this.quickDates();
+        CatLearn.discover().catch(() => {});
         this.fromHash();
         addEventListener('hashchange', () => this.fromHash());
     },
@@ -1667,6 +2124,8 @@ addEventListener(
             top.remove();
             if (Panel.scrim === top) Panel.scrim = null;
             if (TradeView.scrim === top) TradeView.scrim = null;
+            if (AdminView.scrim === top) AdminView.scrim = null;
+            if (AdminView.cfgScrim === top) AdminView.cfgScrim = null;
         }
     },
     true
