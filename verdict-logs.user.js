@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.4
+// @version      1.1.5
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.4
+// @version      1.1.5
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.4';
+const VERSION = '1.1.5';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -501,6 +501,13 @@ const LOGS_UI_CSS = `
 .vdl-presets .btn { height: 28px; padding: 0 10px; font-size: 12px; }
 .vdl-chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-2); cursor: pointer; }
 .vdl-chk input { width: 15px; height: 15px; }
+/* галочки — в цвет темы, а не белые квадраты браузера */
+input[type="checkbox"] { appearance: none; -webkit-appearance: none; flex: none; margin: 0; width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid rgba(255,255,255,.22); background: rgba(0,0,0,.28); display: inline-grid; place-content: center; cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s; }
+input[type="checkbox"]:hover { border-color: color-mix(in srgb, var(--acc) 70%, transparent); }
+input[type="checkbox"]:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 30%, transparent); }
+input[type="checkbox"]:checked { background: var(--acc); border-color: var(--acc); }
+input[type="checkbox"]::after { content: ""; width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg) scale(0); margin-top: -2px; transition: transform .12s; }
+input[type="checkbox"]:checked::after { transform: rotate(45deg) scale(1); }
 .vdl-presets .vdl-chk { margin-left: auto; }
 .vdl-tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; font-size: 12.5px; }
 .vdl-bar .tr b.vdl-pos { background: linear-gradient(90deg, #2fbf71, #3ecf8e); }
@@ -1621,7 +1628,7 @@ const AdminView = {
         catName({ category_id: 0 });
         const c = this.cfg();
         const ids = new Set(Object.keys(CATS).concat(c.extra, Object.keys(c.on)).filter(k => /^\d+$/.test(k)));
-        return [...ids].map(id => ({ id, name: CATS[id] || catTitle(id, this._rows) }));
+        return [...ids].map(id => ({ id, name: CATS[id] || catTitle(id, this._rows).replace(/ · #\d+$/, '') }));
     },
     selected(c) {
         const ids = new Set(this.known().filter(x => this.isAdmin(x.id, c)).map(x => x.id));
@@ -1845,7 +1852,7 @@ const AdminView = {
                 other.length
                     ? `<div class="sec"><h4>Другие категории ника</h4><div class="card" data-l="other">${other
                           .map(
-                              g => `<div class="vdl-row"><div class="main"><div class="ttl"><label class="vdl-chk"><input type="checkbox" data-cat="${U.esc(g.k)}"> ${U.esc(nm(g.k))}</label><span class="vdl-tag">${g.n}</span></div><div class="sub">${U.esc(sample(g.k)) || '—'}</div></div></div>`
+                              g => `<div class="vdl-row"><div class="main"><div class="ttl"><b>${U.esc(nm(g.k))}</b><span class="vdl-tag">${g.n}</span></div><div class="sub">${U.esc(sample(g.k)) || '—'}</div></div><div class="vdl-btns"><button class="btn" data-cat="${U.esc(g.k)}" title="Считать эту категорию админ-действиями">${icon('check', 13)}Считать</button></div></div>`
                           )
                           .join('')}</div></div>`
                     : ''
@@ -1911,9 +1918,9 @@ const AdminView = {
         // отметил категорию — запомнили и пересчитали (без новых запросов, если записей немного)
         out.querySelectorAll('[data-cat]').forEach(
             ch =>
-                (ch.onchange = () => {
+                (ch.onclick = () => {
                     const c = this.cfg();
-                    c.on[ch.dataset.cat] = ch.checked;
+                    c.on[ch.dataset.cat] = true;
                     this.save(c);
                     if (!all.capped) {
                         const ids2 = this.selected(c);
