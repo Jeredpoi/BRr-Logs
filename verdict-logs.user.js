@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.7
+// @version      1.2.8
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.7
+// @version      1.2.8
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.7';
+const VERSION = '1.2.8';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2692,6 +2692,22 @@ html body :is(#log-table, table:has(tr.first-row)) > tbody > tr.first-row:hover 
 /* выпадающие списки сайта (обычный select, vue-select, multiselect, choices, tom-select, listbox, автодополнение): тёмные вместо белых.
    Классы у этих компонентов свои — красим их везде, где бы фильтр ни стоял */
 html body select { color-scheme: dark; }
+/* свой тёмный список вместо системного (Edge рисует системный белым) */
+.vdl-sel { position: relative; display: block; width: 100%; }
+.vdl-sel-btn { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 38px; padding: 6px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.14); background: rgba(0,0,0,.35); color: #e8eaee; font: inherit; text-align: left; cursor: pointer; }
+.vdl-sel-btn:hover, .vdl-sel.open .vdl-sel-btn { border-color: ${acc}; }
+.vdl-sel-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vdl-sel-btn svg { flex: none; width: 14px; height: 14px; opacity: .7; }
+.vdl-sel-pop { position: absolute; z-index: 2147483000; top: calc(100% + 6px); left: 0; min-width: 100%; width: max-content; max-width: min(460px, 92vw); display: none; flex-direction: column; background: #14161c; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; box-shadow: 0 20px 44px -14px rgba(0,0,0,.8); padding: 8px; }
+.vdl-sel.open .vdl-sel-pop { display: flex; }
+.vdl-sel-pop input { height: 32px; margin-bottom: 6px; padding: 0 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.14); background: rgba(0,0,0,.35); color: #e8eaee; font: inherit; outline: none; }
+.vdl-sel-pop input:focus { border-color: ${acc}; }
+.vdl-sel-list { max-height: 320px; overflow: auto; }
+.vdl-sel-it { padding: 7px 10px; border-radius: 8px; color: #e8eaee; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.vdl-sel-it:hover, .vdl-sel-it.hl { background: rgba(255,255,255,.07); }
+.vdl-sel-it.on { background: ${acc}; color: #fff; }
+.vdl-sel-it[hidden] { display: none; }
+select.vdl-sel-native { display: none !important; }
 html body select, html body select option, html body select optgroup { background-color: #14161c !important; color: #e8eaee !important; }
 html body select option:checked { background: ${acc} !important; color: #fff !important; }
 html body :is(.vs__dropdown-toggle, .vs__dropdown-menu, .multiselect__tags, .multiselect__content-wrapper, .multiselect__input, .multiselect__single, .choices__inner, .choices__list--dropdown, .choices__list[aria-expanded], .ts-control, .ts-dropdown, .select2-selection, .select2-dropdown, .autoComplete_wrapper > ul, .dropdown-menu, [role="listbox"]):not(#vdl-layer *) { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; }
@@ -2717,6 +2733,7 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
             try {
                 this.placeHead();
                 this.decorate();
+                this.selects();
                 CatLearn.learn().catch(() => {});
             } finally {
                 if (!this.off) mo.observe(document.body, { childList: true, subtree: true, characterData: true });
@@ -2735,6 +2752,87 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
         addEventListener('hashchange', this._onHash);
     },
     // доступ закрыли — убираем всё своё со страницы и больше ничего не размечаем
+    // системные списки сайта (категория и т. п.) — свой тёмный список с поиском; выбор уходит в настоящий <select>
+    selects() {
+        document.querySelectorAll('select:not([multiple])').forEach(sel => {
+            if (sel.dataset.vdlSel || sel.options.length < 6 || sel.closest('.vdl-sel')) return;
+            sel.dataset.vdlSel = '1';
+            const box = document.createElement('div');
+            box.className = 'vdl-sel';
+            box.innerHTML = `<button type="button" class="vdl-sel-btn"><span></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button><div class="vdl-sel-pop"><input placeholder="Найти…"><div class="vdl-sel-list"></div></div>`;
+            sel.after(box);
+            sel.classList.add('vdl-sel-native');
+            const btn = box.querySelector('.vdl-sel-btn'),
+                lbl = btn.querySelector('span'),
+                q = box.querySelector('input'),
+                list = box.querySelector('.vdl-sel-list');
+            const sync = () => (lbl.textContent = (sel.selectedOptions[0] || sel.options[0] || {}).textContent || '');
+            const fill = () => {
+                list.innerHTML = '';
+                [...sel.options].forEach((o, i) => {
+                    const it = document.createElement('div');
+                    it.className = 'vdl-sel-it' + (o.selected ? ' on' : '');
+                    it.textContent = o.textContent;
+                    it.dataset.i = i;
+                    if (o.disabled) it.style.opacity = '.4';
+                    list.appendChild(it);
+                });
+            };
+            const close = () => box.classList.remove('open');
+            const pick = i => {
+                const o = sel.options[i];
+                if (!o || o.disabled) return;
+                sel.selectedIndex = i;
+                // сайт (Vue) слушает обычные события списка
+                sel.dispatchEvent(new Event('input', { bubbles: true }));
+                sel.dispatchEvent(new Event('change', { bubbles: true }));
+                sync();
+                close();
+            };
+            btn.onclick = () => {
+                if (box.classList.contains('open')) return close();
+                fill();
+                q.value = '';
+                box.classList.add('open');
+                const on = list.querySelector('.on');
+                if (on) on.scrollIntoView({ block: 'nearest' });
+                setTimeout(() => q.focus(), 0);
+            };
+            list.onclick = e => {
+                const it = e.target.closest('.vdl-sel-it');
+                if (it) pick(+it.dataset.i);
+            };
+            q.oninput = () => {
+                const t = q.value.trim().toLowerCase();
+                list.querySelectorAll('.vdl-sel-it').forEach(it => (it.hidden = t && !it.textContent.toLowerCase().includes(t)));
+            };
+            q.onkeydown = e => {
+                if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    close();
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const it = list.querySelector('.vdl-sel-it:not([hidden])');
+                    if (it) pick(+it.dataset.i);
+                }
+            };
+            document.addEventListener('mousedown', e => !box.contains(e.target) && close(), true);
+            sel.addEventListener('change', sync);
+            sync();
+        });
+        // сайт перерисовал список — наш от старого убираем
+        document.querySelectorAll('.vdl-sel').forEach(b => {
+            const p = b.previousElementSibling;
+            if (!p || p.tagName !== 'SELECT' || !p.dataset.vdlSel) b.remove();
+        });
+        // сайт мог сменить значение сам (сброс фильтров) — подпись берём заново
+        document.querySelectorAll('select[data-vdl-sel]').forEach(sel => {
+            const b = sel.nextElementSibling;
+            const lbl = b && b.classList.contains('vdl-sel') && b.querySelector('.vdl-sel-btn span');
+            const t = (sel.selectedOptions[0] || sel.options[0] || {}).textContent || '';
+            if (lbl && lbl.textContent !== t) lbl.textContent = t;
+        });
+    },
     teardown() {
         this.off = true;
         if (this.mo) this.mo.disconnect();
@@ -2744,6 +2842,11 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
         Layer.closeModals(true);
         if (this.head) this.head.remove();
         if (this.st) this.st.remove();
+        document.querySelectorAll('.vdl-sel').forEach(x => x.remove());
+        document.querySelectorAll('select[data-vdl-sel]').forEach(x => {
+            x.classList.remove('vdl-sel-native');
+            delete x.dataset.vdlSel;
+        });
         document.querySelectorAll('.vdl-dates, .vdl-mini, .vdl-trade, .vdl-cnt, .vdl-bot, .vdl-multi').forEach(x => x.remove());
         document.querySelectorAll('td').forEach(td => td.dataset.vdl !== undefined && this.reset(td));
     },
