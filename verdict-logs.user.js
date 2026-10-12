@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.9
+// @version      1.2.10
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.9
+// @version      1.2.10
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.9';
+const VERSION = '1.2.10';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -1882,11 +1882,12 @@ const NICK_RE = /\b[A-Z][A-Za-z0-9]{1,20}_[A-Z][A-Za-z0-9]{1,20}\b/g;
 // что считается админ-действиями: ровно эти категории сайта
 // desc — в описании таких записей админ может стоять не в поле «игрок», ищем его и по тексту
 const ADMIN_CATS = [
-    { k: 'act', name: 'Админ действия', re: /^админ\S*\s*действ/i, desc: true },
-    { k: 'gchat', name: 'Админ общий чат', re: /^админ\S*\s*общ\S*\s*чат/i },
-    { k: 'chat', name: 'Админ чат', re: /^админ\S*\s*чат/i },
-    { k: 'block', name: 'Админ блокировки', re: /^админ\S*\s*блок/i, desc: true },
-    { k: 'super', name: 'Супер наказания', re: /супер\s*-?\s*наказ/i, desc: true },
+    // на сайте: «Админ-действия», «Админ-общий-чат», «Админ-чат», «Админ-блокировки», «Админ-супердействия»
+    { k: 'act', name: 'Админ действия', re: /^админ[\s-]*действ/i, desc: true },
+    { k: 'gchat', name: 'Админ общий чат', re: /^админ[\s-]*общ\S*[\s-]*чат/i },
+    { k: 'chat', name: 'Админ чат', re: /^админ[\s-]*чат/i },
+    { k: 'block', name: 'Админ блокировки', re: /^админ[\s-]*блок/i, desc: true },
+    { k: 'super', name: 'Супер наказания', re: /супер[\s-]*(наказ|действ)/i, desc: true },
     { k: 'report', name: 'Жалобы / обращения', re: /жалоб|обращен|репорт|report/i }
 ];
 const AdminView = {
@@ -2692,6 +2693,17 @@ html body :is(#log-table, table:has(tr.first-row)) > tbody > tr.first-row:hover 
 /* выпадающие списки сайта (обычный select, vue-select, multiselect, choices, tom-select, listbox, автодополнение): тёмные вместо белых.
    Классы у этих компонентов свои — красим их везде, где бы фильтр ни стоял */
 html body select { color-scheme: dark; }
+/* «Категория» на сайте — vueform/multiselect: тёмный вместо белого */
+html body .multiselect { --ms-bg: rgba(0,0,0,.35); --ms-border-color: rgba(255,255,255,.14); --ms-border-color-active: ${acc}; --ms-ring-color: color-mix(in srgb, ${acc} 30%, transparent); --ms-placeholder-color: rgba(232,234,238,.55); --ms-caret-color: #e8eaee; --ms-clear-color: #e8eaee; --ms-clear-color-hover: #fff; --ms-dropdown-bg: #14161c; --ms-dropdown-border-color: rgba(255,255,255,.12); --ms-option-color: #e8eaee; --ms-option-bg-pointed: rgba(255,255,255,.08); --ms-option-color-pointed: #fff; --ms-option-bg-selected: ${acc}; --ms-option-color-selected: #fff; --ms-option-bg-selected-pointed: ${acc}; --ms-option-color-selected-pointed: #fff; --ms-option-bg-disabled: transparent; --ms-option-color-disabled: rgba(232,234,238,.35); --ms-empty-color: rgba(232,234,238,.6); --ms-group-label-bg: #1c1f27; --ms-group-label-color: #e8eaee; --ms-tag-bg: ${acc}; --ms-tag-color: #fff; background-color: rgba(0,0,0,.35) !important; color: #e8eaee !important; border-color: rgba(255,255,255,.14) !important; }
+html body .multiselect.is-active { border-color: ${acc} !important; box-shadow: 0 0 0 3px color-mix(in srgb, ${acc} 25%, transparent) !important; }
+html body :is(.multiselect-search, .multiselect-tags-search) { background: transparent !important; color: #e8eaee !important; }
+html body :is(.multiselect-single-label, .multiselect-single-label-text) { color: #e8eaee !important; }
+html body .multiselect-placeholder { color: rgba(232,234,238,.55) !important; }
+html body .multiselect-dropdown { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; box-shadow: 0 20px 44px -14px rgba(0,0,0,.8) !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; opacity: 1 !important; }
+html body :is(.multiselect-options, .multiselect-option) { background: transparent !important; color: #e8eaee !important; }
+html body .multiselect-option.is-pointed { background: rgba(255,255,255,.08) !important; color: #fff !important; }
+html body .multiselect-option.is-selected, html body .multiselect-option.is-selected.is-pointed { background: ${acc} !important; color: #fff !important; }
+html body :is(.multiselect-caret, .multiselect-clear-icon) { background-color: #e8eaee !important; }
 /* свой тёмный список подсказок вместо системного (Edge рисует его белой пеленой) */
 .vdl-dl { position: fixed; z-index: 2147483000; max-width: min(460px, 92vw); max-height: 320px; overflow: auto; background: #14161c; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; box-shadow: 0 20px 44px -14px rgba(0,0,0,.8); padding: 6px; font: 14px/1.3 system-ui, sans-serif; }
 .vdl-dl[hidden] { display: none; }
