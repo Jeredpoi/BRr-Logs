@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.2
+// @version      1.2.3
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.2
+// @version      1.2.3
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.2';
+const VERSION = '1.2.3';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -395,6 +395,8 @@ function catLabel(id, rows) {
     return { name: g ? `≈ ${g} (#${id})` : n, known: false };
 }
 
+// категория античита на сайте логов
+const AC_RE = /анти\s*-?\s*чит|anti\s*-?\s*cheat/i;
 // безымянная категория админ-действий: по тому, что в ней делают («Бан, мут · #36»), иначе по частым словам
 function catTitle(id, rows) {
     const n = catName({ category_id: id });
@@ -556,7 +558,8 @@ const Api = {
         return p;
     },
     // пауза между запросами: сайт отвечает 429 («слишком часто») — увеличиваем её
-    gap: 1100,
+    BASE_GAP: 1800,
+    gap: 1800,
     async _page(params, offset, retried, tries = 0) {
         const wait = this.gap - (Date.now() - this.last);
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
@@ -582,7 +585,7 @@ const Api = {
         if (!r.ok) {
             // «слишком часто» — ждём дольше и повторяем, дальше запрашиваем реже
             if (r.status === 429 && tries < 5) {
-                this.gap = Math.min(5000, Math.round(this.gap * 1.6));
+                this.gap = Math.min(6000, Math.round(this.gap * 1.6));
                 const ra = parseInt(r.headers.get('Retry-After') || '', 10);
                 await new Promise(res => setTimeout(res, Number.isFinite(ra) && ra > 0 ? Math.min(ra, 30) * 1000 : 2500 * (tries + 1)));
                 return this._page(params, offset, retried, tries + 1);
@@ -615,7 +618,7 @@ const Api = {
             clearTimeout(timer);
         }
         if (!Array.isArray(d)) throw new Error('сайт логов ответил не списком');
-        if (this.gap > 1100) this.gap = Math.max(1100, this.gap - 100);
+        if (this.gap > this.BASE_GAP) this.gap = Math.max(this.BASE_GAP, this.gap - 100);
         return d;
     },
     // размер страницы сайта узнаём по ходу (страница, за которой есть ещё, — полная) и запоминаем
@@ -1207,7 +1210,7 @@ const Panel = {
                 <div class="k"><small>ID игрока</small><b style="font-size:15px" class="vdl-copyid" data-v="${U.esc(ids.join(', '))}">${U.esc(ids.join(', ') || '—')}</b></div>
               </div>
               ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}</div>` : ''}
-              <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button></div>
+              <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button><button data-v="ac">${icon('shield', 13)}Античит</button></div>
               <div data-tab="in">
                 <div class="sec"><h4>С чего заходил (платформа)</h4><div class="card" data-l="plat"></div></div>
                 <div class="sec"><h4>IP-адреса игрока</h4><div class="card" data-l="ips">${ips.length ? '' : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>'}</div></div>
@@ -1218,6 +1221,7 @@ const Panel = {
               <div data-tab="money" hidden><div class="sec"><h4>Деньги за ${days} дн.</h4><div class="card" data-l="money"></div></div></div>
               <div data-tab="act" hidden><div class="sec"><h4>Чем занимался за ${days} дн. (записей по категориям)</h4><div class="card" data-l="cats"></div></div></div>
               <div data-tab="tr" hidden><div class="sec"><h4>Трейды игрока за ${days} дн.</h4><div class="card" data-l="tr"></div></div></div>
+              <div data-tab="ac" hidden><div class="sec"><h4>Античит за ${days} дн.</h4><div class="card" data-l="ac"></div></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
             // платформы входа
             const conRows = rows.filter(r => /подключ/i.test(r.transaction_desc || ''));
@@ -1269,7 +1273,8 @@ const Panel = {
             const loaders = {
                 money: box => this.loadAll(base, gen).then(d => gen === this._gen && this.renderMoney(box, d)),
                 act: box => this.loadAll(base, gen).then(d => gen === this._gen && this.renderCats(box, d)),
-                tr: box => this.loadTrades(sel, gen, base).then(list => gen === this._gen && this.renderTrades(box, list))
+                tr: box => this.loadTrades(sel, gen, base).then(list => gen === this._gen && this.renderTrades(box, list)),
+                ac: box => this.loadAc(sel, gen, base).then(d => gen === this._gen && this.renderAc(box, d))
             };
             const started = {};
             const show = t => {
@@ -1441,6 +1446,60 @@ const Panel = {
         });
         return [...byT.values()].sort((a, b) => b.last - a.last);
     },
+    // античит: категория с «античит» в названии, иначе — записи со словом «античит» / anticheat
+    async loadAc(sel, gen, base) {
+        const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Api.range(this.days);
+        catName({ category_id: 0 });
+        const ids = Object.keys(CATS).filter(k => /^\d+$/.test(k) && AC_RE.test(CATS[k]));
+        const qs = ids.length ? ids.map(id => ({ category_id__exact: id })) : [{ transaction_desc__ilike: '%античит%' }, { transaction_desc__ilike: '%anticheat%' }, { transaction_desc__ilike: '%anti-cheat%' }];
+        const seen = new Set(),
+            rows = [];
+        let capped = false;
+        for (const q of qs) {
+            const r = await Api.all({ ...sel, ...q, ...range }, 10, (pp, nn) => gen === this._gen && this.prog(`Античит: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen);
+            if (gen !== this._gen) return null;
+            capped = capped || r.capped;
+            r.forEach(x => {
+                const k = `${x.time}|${x.category_id}|${x.transaction_desc}`;
+                if (!seen.has(k)) seen.add(k) && rows.push(x);
+            });
+        }
+        if (gen === this._gen) this.prog('');
+        rows.sort((a, b) => new Date(b.time) - new Date(a.time));
+        return { rows, capped };
+    },
+    renderAc(box, d) {
+        if (!d) return;
+        const { rows } = d;
+        this.report.ac = rows.length;
+        if (!rows.length) {
+            box.innerHTML = '<div class="vdl-row"><div class="main sub">Античит на игрока не срабатывал</div></div>';
+            return;
+        }
+        // за что срабатывал: текст без чисел, ников и координат
+        const kindOf = r =>
+            String(r.transaction_desc || '')
+                .replace(NICK_RE, '')
+                .replace(/\[[^\]]*\]/g, ' ')
+                .replace(/[-+]?\d+([.,]\d+)?/g, '')
+                .replace(/[()":;,.]+/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .replace(/^(анти\s*-?\s*чит|anti\s*-?\s*cheat)\s*/i, '')
+                .slice(0, 70) || 'без описания';
+        const kinds = group(rows, kindOf).slice(0, 8);
+        const kmax = Math.max(1, ...kinds.map(g => g.n));
+        const days = new Set(rows.map(r => AdminView.mskDay(new Date(r.time).getTime()))).size;
+        box.innerHTML = `
+          <div class="vdl-row"><div class="main"><div class="ttl">${rows.length} ${plural(rows.length, 'срабатывание', 'срабатывания', 'срабатываний')}<span class="vdl-tag" style="--c:#e5484d">${days} ${plural(days, 'день', 'дня', 'дней')}</span></div><div class="sub">последнее — ${fmtDate(rows[0].time)}${d.capped ? ' · показаны последние' : ''}</div></div></div>
+          <div class="sub" style="padding:10px 2px 4px">За что</div>
+          ${kinds.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`).join('')}
+          <div class="sub" style="padding:10px 2px 4px">Записи</div>
+          ${rows
+              .slice(0, 100)
+              .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${r.player_ip ? `<span class="vdl-tag">${U.esc(r.player_ip)}</span>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
+              .join('')}${rows.length > 100 ? `<div class="sub" style="padding:8px 2px">Показаны 100 из ${rows.length}</div>` : ''}`;
+    },
     renderTrades(box, list) {
         this.report.trades = list.length;
         box.innerHTML = list.length
@@ -1581,6 +1640,7 @@ const Panel = {
             if (r.money) L.push(`Деньги: пришло ${fmtMoney(r.money.inc)}, ушло ${fmtMoney(r.money.exp)}${Number.isFinite(r.money.b0) ? `, баланс ${fmtNum(r.money.b0)} → ${fmtNum(r.money.b1)}` : ''}${r.money.capped ? ' (по последним 500 записям)' : ''}`);
             if (r.cats && r.cats.length) L.push('Категории: ' + r.cats.join('; '));
             if (r.trades != null) L.push(`Трейдов: ${r.trades}`);
+            if (r.ac != null) L.push(`Античит: ${r.ac ? r.ac + ' срабатываний' : 'не срабатывал'}`);
             r.ips.slice(0, 15).forEach(g =>
                 L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}${g.geo ? ` · ${[g.geo.country, g.geo.city, g.geo.isp].filter(Boolean).join(', ')}${g.geo.host ? ' (хостинг/VPN?)' : ''}` : ''}`)
             );
