@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.3
+// @version      1.2.5
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.3
+// @version      1.2.5
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.3';
+const VERSION = '1.2.5';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -637,7 +637,8 @@ const Api = {
         for (let i = 0; i < maxPages; i++) {
             if (alive && !alive()) break;
             const d = i === 0 && first ? first : await this.page(params, off);
-            if (i > 0 && d.length && prev > this.pageSize()) {
+            // за неполной (по запомненному размеру) страницей нашлось ещё — значит, страницы у сайта такого размера
+            if (i > 0 && d.length && prev !== this.pageSize()) {
                 this.size = prev;
                 Store.set('pageSize', prev);
             }
@@ -647,7 +648,9 @@ const Api = {
             off += d.length;
             prev = d.length;
             const size = this.pageSize();
-            if (size && d.length < size) break;
+            if (size && d.length === size) this._sizeOk = true;
+            // страница меньше запомненной: конец списка — или сайт уменьшил страницы (пока полной не видели, проверяем следующую)
+            if (size && d.length < size && (this._sizeOk || d.length < 20)) break;
             if (i === maxPages - 1) out.capped = true;
         }
         return out;
@@ -761,17 +764,29 @@ const balOf = r => numOf(r.balance_after ?? r.player_balance_after);
 const fmtMoney = n => (n < 0 ? '−' : n > 0 ? '+' : '') + String(Math.abs(Math.round(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 const fmtNum = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 let CATS = null;
+// номера, название которых точно с сайта (таблица, фильтр), а не догадка из кода страницы
+let CATS_SURE = new Set();
+const catSure = id => {
+    catName({ category_id: 0 });
+    return CATS_SURE.has(String(id));
+};
 function catName(r) {
     // названия: выученные по таблице сайта + обычный <select>, если он есть
     if (!CATS || CatLearn.dirty) {
         CatLearn.dirty = false;
-        CATS = Object.assign({ 38: 'Подключения / Отключения' }, Store.get('cats', {}));
+        // догадки из кода сайта — только подписи; номера для подсчёта берутся из проверенных источников
+        const sure = Store.get('cats', {});
+        CATS = Object.assign({}, Store.get('catsSoft', {}), { 38: 'Подключения / Отключения' }, sure);
+        CATS_SURE = new Set(['38', ...Object.keys(sure)]);
         document.querySelectorAll('select').forEach(sel => {
             const box = sel.closest('.mb-3, .form-group, .col, div');
             const isCat = /categ/i.test(`${sel.name} ${sel.id} ${sel.className}`) || (box && /категори/i.test((box.querySelector('label, .form-label') || {}).textContent || ''));
             if (!isCat) return;
             sel.querySelectorAll('option').forEach(o => {
-                if (/^\d+$/.test(o.value) && o.textContent.trim()) CATS[o.value] = o.textContent.trim();
+                if (/^\d+$/.test(o.value) && o.textContent.trim()) {
+                    CATS[o.value] = o.textContent.trim();
+                    CATS_SURE.add(o.value);
+                }
             });
         });
     }
@@ -790,11 +805,19 @@ const CatLearn = {
         this.dirty = true;
     },
     tried: new Set(),
+    // дописываем только изменённое: поиск по странице и обучение по таблице идут одновременно и не затирают друг друга
+    save(map, orig) {
+        const cur = Store.get('cats', {});
+        Object.keys(map).forEach(k => map[k] !== orig[k] && (cur[k] = map[k]));
+        Object.keys(orig).forEach(k => !(k in map) && delete cur[k]);
+        Store.set('cats', cur);
+    },
     // номера → названия со страницы: список «Категория» в фильтрах, данные в скриптах, ответы API про категории
     async discover() {
         if (this._disc) return this._disc;
         this._disc = (async () => {
             const map = Store.get('cats', {});
+            const orig = Object.assign({}, map);
             let n = 0;
             const add = (id, name) => {
                 id = String(id);
@@ -815,18 +838,26 @@ const CatLearn = {
                 if (m) add(m[1], a.textContent);
             });
             // 1в) список категорий в коде сайта (подключённые скрипты): {id:70,name:"Админ действия"} или 70:"Админ действия"
-            const soft = (id, name) => map[String(id)] || add(id, name);
+            const softMap = Store.get('catsSoft', {});
+            let ns = 0;
+            const soft = (id, name) => {
+                id = String(id);
+                name = String(name || '').replace(/\s+/g, ' ').trim();
+                if (!/^\d{1,4}$/.test(id) || !name || name.length > 60 || map[id] || softMap[id] === name) return;
+                softMap[id] = name;
+                ns++;
+            };
             const scripts = [...document.querySelectorAll('script[src]')].map(x => x.src).filter(u => u.startsWith(location.origin)).slice(0, 8);
             for (const u of scripts) {
                 if (this._seen && this._seen.has(u)) continue;
-                (this._seen = this._seen || new Set()).add(u);
                 try {
                     let t = await (await fetch(u, { credentials: 'include' })).text();
+                    (this._seen = this._seen || new Set()).add(u);
                     if (t.length > 8e6 || !/категори|админ|\\u04/i.test(t)) continue;
                     t = t.replace(/\\u([0-9a-f]{4})/gi, (m, h) => String.fromCharCode(parseInt(h, 16)));
                     const Q = `["'\`]`;
-                    for (const m of t.matchAll(new RegExp(`(?:id|value|pk|category_id)${Q}?\\s*:\\s*(\\d{1,4})\\s*,\\s*${Q}?(?:name|title|label|text)${Q}?\\s*:\\s*${Q}([^"'\`]{2,60})${Q}`, 'g'))) soft(m[1], m[2]);
-                    for (const m of t.matchAll(new RegExp(`(?:name|title|label|text)${Q}?\\s*:\\s*${Q}([^"'\`]{2,60})${Q}\\s*,\\s*${Q}?(?:id|value|pk|category_id)${Q}?\\s*:\\s*(\\d{1,4})`, 'g'))) soft(m[2], m[1]);
+                    for (const m of t.matchAll(new RegExp(`(?<![\\w$])(?:id|value|pk|category_id)${Q}?\\s*:\\s*(\\d{1,4})\\s*,\\s*${Q}?(?:name|title|label|text)${Q}?\\s*:\\s*${Q}([^"'\`]{2,60})${Q}`, 'g'))) soft(m[1], m[2]);
+                    for (const m of t.matchAll(new RegExp(`(?:name|title|label|text)${Q}?\\s*:\\s*${Q}([^"'\`]{2,60})${Q}\\s*,\\s*${Q}?(?<![\\w$])(?:id|value|pk|category_id)${Q}?\\s*:\\s*(\\d{1,4})`, 'g'))) soft(m[2], m[1]);
                     // словарь «номер: название» — только если таких пар много (иначе это не список категорий)
                     const pairs = [...t.matchAll(new RegExp(`[{,]\\s*${Q}?(\\d{1,4})${Q}?\\s*:\\s*${Q}([А-ЯЁ][^"'\`]{1,59})${Q}`, 'g'))];
                     if (pairs.length >= 8) pairs.forEach(m => soft(m[1], m[2]));
@@ -861,8 +892,12 @@ const CatLearn = {
                     /* не JSON */
                 }
             }
+            if (ns) {
+                Store.set('catsSoft', softMap);
+                this.dirty = true;
+            }
             if (n) {
-                Store.set('cats', map);
+                CatLearn.save(map, orig);
                 this.dirty = true;
             }
             // ничего не нашли (страница ещё не дорисовалась) — следующий вызов поищет снова
@@ -875,34 +910,17 @@ const CatLearn = {
         const tds = [...document.querySelectorAll('td.td-category')];
         if (!tds.length) return;
         const map = Store.get('cats', {});
-        // сайт отфильтровал по одной категории — её номер в адресе запроса, название — в каждой строке таблицы
-        const last = performance
-            .getEntriesByType('resource')
-            .map(e => e.name)
-            .filter(u => u.includes('/api/list-game-logs/') && !Api.mine.has(u))
-            .pop();
-        const ci = new URLSearchParams(location.search).get('ci');
-        if (last || /^\d{1,4}$/.test(ci || '')) {
-            const cid = (/^\d{1,4}$/.test(ci || '') && ['ci', ci]) || [...new URL(last).searchParams].find(([k, v]) => /categor/i.test(k) && /^\d{1,4}$/.test(v));
-            const txt = new Set(tds.map(td => LogsPage.rawOf(td)).filter(Boolean));
-            if (cid && txt.size === 1) {
-                const nm = [...txt][0];
-                if (map[cid[1]] !== nm) {
-                    map[cid[1]] = nm;
-                    Store.set('cats', map);
-                    this.dirty = true;
-                }
-                return;
-            }
-        }
-        const names = new Set(Object.values(map));
-        if (tds.every(td => names.has(LogsPage.rawOf(td)))) return;
+        const orig = Object.assign({}, map);
         const url = performance
             .getEntriesByType('resource')
             .map(e => e.name)
             .filter(u => u.includes('/api/list-game-logs/') && !Api.mine.has(u) && !this.tried.has(u))
             .pop();
         if (!url) return;
+        // все названия уже известны и сайт не фильтровал по неизвестной категории — учить нечего
+        const names = new Set(Object.values(map));
+        const urlCat = ([...new URL(url).searchParams].find(([k, v]) => /categor/i.test(k) && /^\d{1,4}$/.test(v)) || [])[1];
+        if (tds.every(td => names.has(LogsPage.rawOf(td))) && !(urlCat && !map[urlCat])) return;
         this.tried.add(url);
         const rows = await new Promise((res, rej) => {
             const p = (Api._q || Promise.resolve()).then(async () => {
@@ -936,6 +954,20 @@ const CatLearn = {
             tab.set(k, tab.has(k) && tab.get(k) !== LogsPage.rawOf(td) ? null : LogsPage.rawOf(td));
         });
         let n = 0;
+        // сайт фильтровал по одной категории, а в ответе номера нет — берём его из адреса запроса,
+        // если строки ответа — это та же таблица и в ней одна категория
+        const cid = ([...new URL(url).searchParams].find(([k, v]) => /categor/i.test(k) && /^\d{1,4}$/.test(v)) || [])[1];
+        const hits = rows.map(r => tab.get(key(r.player_name, moneyText(r.transaction_desc)))).filter(Boolean);
+        const one = new Set(hits);
+        if (cid && rows.length && rows.every(r => r.category_id == null || String(r.category_id) === cid) && one.size === 1 && hits.length >= Math.min(rows.length, tds.length) * 0.6) {
+            const nm = [...one][0];
+            if (map[cid] !== nm) {
+                map[cid] = nm;
+                n++;
+            }
+            // номер подтверждён ответом сайта — то же название под другим номером было ошибкой
+            Object.keys(map).forEach(k => k !== cid && map[k] === nm && (delete map[k], n++));
+        }
         rows.forEach(r => {
             const name = tab.get(key(r.player_name, moneyText(r.transaction_desc)));
             if (!name || r.category_id == null) return;
@@ -945,7 +977,7 @@ const CatLearn = {
             }
         });
         if (n) {
-            Store.set('cats', map);
+            CatLearn.save(map, orig);
             this.dirty = true;
         }
     }
@@ -1037,15 +1069,19 @@ const Panel = {
     open(mode = 'nick', value = '', opts = {}) {
         // без новой проверки — возвращаем прежнее окно с отчётом
         if (!value && this.scrim) {
+            if (mode && this._setMode && mode !== this.mode) this._setMode(mode);
             if (opts.stack) {
                 this.scrim.hidden = false;
                 Layer.el().appendChild(this.scrim);
             } else Layer.show(this.scrim);
             return;
         }
-        if (opts.stack) {
-            if (this.scrim) this.scrim.remove();
-        } else Layer.closeModals();
+        // новая проверка из окна, открытого поверх Ботов / Админ-действий, — тоже поверх них
+        if (value && this.scrim && !this.scrim.hidden && this._stack) opts = Object.assign({}, opts, { stack: true });
+        this._stack = !!opts.stack;
+        if (this.scrim) this.scrim.remove();
+        this.scrim = null;
+        if (!opts.stack) Layer.closeModals();
         // поколение окна: результаты проверки из закрытого окна в новое не попадают
         this._gen = (this._gen || 0) + 1;
         this.days = this.days || Store.get('days', 30);
@@ -1090,6 +1126,7 @@ const Panel = {
                     if (was !== this.days && q.value.trim() && scrim.querySelector('.vdl-out').children.length) go();
                 })
         );
+        this._setMode = setMode;
         setMode(mode);
         setDays(this.days);
         q.value = value;
@@ -1450,8 +1487,10 @@ const Panel = {
     async loadAc(sel, gen, base) {
         const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Api.range(this.days);
         catName({ category_id: 0 });
-        const ids = Object.keys(CATS).filter(k => /^\d+$/.test(k) && AC_RE.test(CATS[k]));
-        const qs = ids.length ? ids.map(id => ({ category_id__exact: id })) : [{ transaction_desc__ilike: '%античит%' }, { transaction_desc__ilike: '%anticheat%' }, { transaction_desc__ilike: '%anti-cheat%' }];
+        const ids = Object.keys(CATS).filter(k => /^\d+$/.test(k) && CATS_SURE.has(k) && AC_RE.test(CATS[k]));
+        // без категории — по тексту («античит», «анти-чит», «Anti Cheat»), но не сообщения игрока в чатах
+        const qs = ids.length ? ids.map(id => ({ category_id__exact: id })) : [{ transaction_desc__ilike: '%анти%чит%' }, { transaction_desc__ilike: '%anti%cheat%' }];
+        const keep = x => ids.length || (AC_RE.test(String(x.transaction_desc || '')) && !/чат|chat/i.test(catName(x)));
         const seen = new Set(),
             rows = [];
         let capped = false;
@@ -1460,6 +1499,7 @@ const Panel = {
             if (gen !== this._gen) return null;
             capped = capped || r.capped;
             r.forEach(x => {
+                if (!keep(x)) return;
                 const k = `${x.time}|${x.category_id}|${x.transaction_desc}`;
                 if (!seen.has(k)) seen.add(k) && rows.push(x);
             });
@@ -1491,7 +1531,7 @@ const Panel = {
         const kmax = Math.max(1, ...kinds.map(g => g.n));
         const days = new Set(rows.map(r => AdminView.mskDay(new Date(r.time).getTime()))).size;
         box.innerHTML = `
-          <div class="vdl-row"><div class="main"><div class="ttl">${rows.length} ${plural(rows.length, 'срабатывание', 'срабатывания', 'срабатываний')}<span class="vdl-tag" style="--c:#e5484d">${days} ${plural(days, 'день', 'дня', 'дней')}</span></div><div class="sub">последнее — ${fmtDate(rows[0].time)}${d.capped ? ' · показаны последние' : ''}</div></div></div>
+          <div class="vdl-row"><div class="main"><div class="ttl">${rows.length} ${plural(rows.length, 'срабатывание', 'срабатывания', 'срабатываний')}<span class="vdl-tag" style="--c:#e5484d">${days} ${plural(days, 'день', 'дня', 'дней')}</span></div><div class="sub">последнее — ${fmtDate(rows[0].time)}${d.capped ? (Api.order === 'time' ? ' · показаны первые за период' : ' · показаны последние') : ''}</div></div></div>
           <div class="sub" style="padding:10px 2px 4px">За что</div>
           ${kinds.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`).join('')}
           <div class="sub" style="padding:10px 2px 4px">Записи</div>
@@ -1640,7 +1680,7 @@ const Panel = {
             if (r.money) L.push(`Деньги: пришло ${fmtMoney(r.money.inc)}, ушло ${fmtMoney(r.money.exp)}${Number.isFinite(r.money.b0) ? `, баланс ${fmtNum(r.money.b0)} → ${fmtNum(r.money.b1)}` : ''}${r.money.capped ? ' (по последним 500 записям)' : ''}`);
             if (r.cats && r.cats.length) L.push('Категории: ' + r.cats.join('; '));
             if (r.trades != null) L.push(`Трейдов: ${r.trades}`);
-            if (r.ac != null) L.push(`Античит: ${r.ac ? r.ac + ' срабатываний' : 'не срабатывал'}`);
+            if (r.ac != null) L.push(`Античит: ${r.ac ? `${r.ac} ${plural(r.ac, 'срабатывание', 'срабатывания', 'срабатываний')}` : 'не срабатывал'}`);
             r.ips.slice(0, 15).forEach(g =>
                 L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}${g.geo ? ` · ${[g.geo.country, g.geo.city, g.geo.isp].filter(Boolean).join(', ')}${g.geo.host ? ' (хостинг/VPN?)' : ''}` : ''}`)
             );
@@ -1759,12 +1799,14 @@ const AdminView = {
     resolve() {
         catName({ category_id: 0 });
         const man = this.ids();
-        const taken = new Set();
+        // вписанные вручную номера заняты заранее — автоматом их не возьмёт другая категория
+        const taken = new Set(Object.values(man).filter(v => /^\d+$/.test(String(v))).map(String));
         return ADMIN_CATS.map(c => {
-            let id = man[c.k] ? String(man[c.k]) : '';
+            // «-» — номер стёрли вручную: эту категорию не ищем и не считаем
+            let id = man[c.k] && man[c.k] !== '-' ? String(man[c.k]) : '';
             let auto = false;
-            if (!id) {
-                const hit = Object.keys(CATS).find(k => /^\d+$/.test(k) && !taken.has(k) && c.re.test(String(CATS[k]).trim()));
+            if (!id && man[c.k] !== '-') {
+                const hit = Object.keys(CATS).find(k => /^\d+$/.test(k) && CATS_SURE.has(k) && !taken.has(k) && c.re.test(String(CATS[k]).trim()));
                 if (hit) (id = hit), (auto = true);
             }
             if (id) taken.add(id);
@@ -1888,7 +1930,10 @@ const AdminView = {
         out.innerHTML = '';
         try {
             // номера категорий ещё не известны — сначала ищем их на сайте
-            if (this.resolve().some(c => !c.id)) await CatLearn.discover().catch(() => {});
+            if (this.resolve().some(c => !c.id && this.ids()[c.k] !== '-')) {
+                CatLearn._disc = null;
+                await CatLearn.discover().catch(() => {});
+            }
             if (!alive()) return;
             const cats = this.resolve();
             const ready = cats.filter(c => c.id);
@@ -1897,41 +1942,23 @@ const AdminView = {
             const t0 = this.dayStart(a),
                 t1 = Math.min(this.dayStart(b) + 864e5 - 1, Date.now());
             const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
-            const own = [],
-                seen = new Set();
+            const own = [];
             let capped = false;
-            const key = r => `${r.time}|${r.category_id}|${r.player_id}|${r.transaction_desc}`;
+            // каждая запись сайта — одно действие, одинаковые не склеиваем (сайт показывает их все)
             const addRows = (rows, cat) =>
                 rows.forEach(r => {
                     // только запрошенная категория, даже если сайт вернул лишнее
                     if (r.category_id != null && String(r.category_id) !== String(cat.id)) return;
-                    const k = key(r);
-                    if (seen.has(k)) return;
-                    seen.add(k);
                     // запись сайта могла прийти без номера категории — проставляем тот, по которому искали
                     own.push(r.category_id == null ? Object.assign({}, r, { category_id: cat.id }) : r);
                 });
             for (const [i, cat] of ready.entries()) {
                 const step = `${cat.name} (${i + 1}/${ready.length})`;
-                // 1) записи, где админ — сам «игрок» записи
+                // как считает куратор: фильтр сайта «ник + категория» за период — число записей
                 const r = await Api.all({ player_name__exact: nick, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}: страница ${p}, записей ${n}…`, gen), null, alive);
                 if (!alive()) return;
                 capped = capped || r.capped;
                 addRows(r, cat);
-                // 2) наказания, где игрок записи — нарушитель, а админ назван в тексте первым
-                if (cat.desc) {
-                    const r2 = await Api.all({ transaction_desc__ilike: `%${nick}%`, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}, по тексту: страница ${p}, записей ${n}…`, gen), null, alive);
-                    if (!alive()) return;
-                    capped = capped || r2.capped;
-                    addRows(
-                        r2.filter(x => {
-                            if (sameNick(x.player_name, nick)) return true;
-                            const first = (String(x.transaction_desc || '').match(NICK_RE) || []).find(n => !sameNick(n, x.player_name)) || '';
-                            return sameNick(first, nick);
-                        }),
-                        cat
-                    );
-                }
             }
             this.prog('', gen);
             this.render(out, { nick, a, b, all: own, own, cats, capped, tab: 'cat' });
@@ -1997,7 +2024,7 @@ const AdminView = {
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ' · записей очень много — посчитаны не все, возьми период короче' : ''}</div>
-          ${missing.length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
+ ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
             <div class="sec"><h4>По категориям</h4><div class="card">${
@@ -2120,13 +2147,16 @@ const AdminView = {
         };
         scrim.querySelector('[data-a="save"]').onclick = () => {
             const man = {};
+            const old = this.ids();
             const auto = new Map(cats.filter(c => c.auto).map(c => [c.k, c.id]));
             let bad = false;
             scrim.querySelectorAll('[data-k]').forEach(inp => {
                 const v = inp.value.trim();
                 if (v && !/^\d{1,4}$/.test(v)) bad = true;
-                // найденный сам — не закрепляем, чтобы сайт мог его уточнить
+                // найденный сам — не закрепляем, чтобы сайт мог его уточнить; стёртый — больше не подставляем
                 else if (v && auto.get(inp.dataset.k) !== v) man[inp.dataset.k] = v;
+                else if (!v && auto.has(inp.dataset.k)) man[inp.dataset.k] = '-';
+                else if (!v && old[inp.dataset.k] === '-') man[inp.dataset.k] = '-';
             });
             if (bad) return toast('Номер категории — число, например 70', 'err');
             Store.set('adminIds', man);
@@ -2156,7 +2186,7 @@ const Bots = {
     },
     // все известные категории чатов
     allChats() {
-        return AdminView.known().filter(x => /чат|chat/i.test(x.name) && !/админ|admin/i.test(x.name));
+        return AdminView.known().filter(x => catSure(x.id) && /чат|chat/i.test(x.name) && !/админ|admin/i.test(x.name));
     },
     // по умолчанию боты пишут в игровые чаты: RP и NonRP
     isGameChat(name) {
@@ -2166,7 +2196,8 @@ const Bots = {
     chats(c = this.cfg()) {
         const all = this.allChats();
         if (Array.isArray(c.chats)) return all.filter(x => c.chats.includes(String(x.id)));
-        return all.filter(x => this.isGameChat(x.name));
+        const game = all.filter(x => this.isGameChat(x.name));
+        return game.length ? game : all;
     },
     phrases(c = this.cfg()) {
         return String(c.phrases || '')
@@ -2274,9 +2305,10 @@ const BotView = {
             const chatIds = new Set(chats.map(x => String(x.id)));
             if (!chats.length && Array.isArray(c.chats) && Bots.allChats().length) throw new Error('не выбран ни один чат — отметь их в «Что ловить»');
             if (!chats.length) toast('Категории чатов ещё не известны — ищу во всех записях', 'info');
-            const take = arr =>
+            const take = (arr, cat) =>
                 arr.forEach(x => {
-                    if (chatIds.size && !chatIds.has(String(x.category_id))) return;
+                    if (x.category_id == null && cat) x = Object.assign({}, x, { category_id: cat });
+                    if (chatIds.size && x.category_id != null && !chatIds.has(String(x.category_id))) return;
                     const k = `${x.time}|${x.player_name}|${x.transaction_desc}`;
                     if (seen.has(k)) return;
                     seen.add(k);
@@ -2296,18 +2328,19 @@ const BotView = {
                     const r = await Api.all({ category_id__exact: ch.id, ...range }, 10, (pg, n) => this.prog(`${ch.name}: страница ${pg}, записей ${n}…`, gen), null, alive);
                     if (!alive()) return;
                     capped = capped || r.capped;
-                    take(r);
+                    take(r, ch.id);
                 }
             }
             // подозреваемые: по нику
             const sus = new Map();
-            const nickKey = new Map();
+            const idByNick = new Map();
+            const hasId = x => x.player_id != null && x.player_id !== '';
+            rows.forEach(x => hasId(x) && x.player_name && idByNick.set(String(x.player_name).trim().toLowerCase(), x.player_id));
             rows.forEach(x => {
                 const n = String(x.player_name || '').trim();
                 if (!n) return;
                 const low = n.toLowerCase();
-                const k = (x.player_id != null && x.player_id !== '' && 'id' + x.player_id) || nickKey.get(low) || 'n' + low;
-                nickKey.set(low, k);
+                const k = hasId(x) ? 'id' + x.player_id : idByNick.has(low) ? 'id' + idByNick.get(low) : 'n' + low;
                 const g = sus.get(k) || { nick: n, id: x.player_id, n: 0, hits: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
                 g.n++;
                 x._hit.forEach(h => g.hits.add(h));
@@ -2322,7 +2355,8 @@ const BotView = {
             });
             // сколько подозреваемых на каждом IP
             const byIp = new Map();
-            sus.forEach(g => g.ips.forEach(ip => byIp.set(ip, (byIp.get(ip) || new Set()).add(g.nick))));
+            sus.forEach((g, k) => g.ips.forEach(ip => byIp.set(ip, (byIp.get(ip) || new Set()).add(k))));
+            const nickOf = new Map([...sus].map(([k, g]) => [k, g.nick]));
             sus.forEach(g => (g.acc = Math.max(1, ...[...g.ips].map(ip => byIp.get(ip).size))));
             const arr = [...sus.values()].sort((x, y) => y.acc - x.acc || y.n - x.n);
             // уровни: последний вход/выход с «Уровень: N»
@@ -2354,7 +2388,7 @@ const BotView = {
                 g.bot = g.why.some(w => /уровень|акк/.test(w));
             });
             arr.sort((x, y) => y.bot - x.bot || y.why.length - x.why.length || y.n - x.n);
-            this.render(out, { label, arr, rows, c, ips: byIp, capped });
+            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, capped });
         } catch (e) {
             if (gen !== this._gen) return;
             this.prog('', gen);
@@ -2379,7 +2413,8 @@ const BotView = {
                 const fresh = [...set].filter(n => !shown.has(n));
                 if (fresh.length < 2) return;
                 fresh.forEach(n => shown.add(n));
-                topIps.push([ip, new Set(fresh)]);
+                // число и цвет — по всем аккаунтам IP, ники — только ещё не показанные выше
+                topIps.push([ip, set, fresh.map(k => (d.nickOf && d.nickOf.get(k)) || k)]);
             });
         const hl = (text, hits) => {
             const raw = String(text).slice(0, 180);
@@ -2395,10 +2430,10 @@ const BotView = {
               topIps.length
                   ? `<div class="sec" style="margin:0 0 14px"><h4>Самые частые IP</h4><div class="card">${topIps
                         .map(
-                            ([ip, set]) => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:${set.size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}</span><b>${set.size} акк.</b><span class="sub" style="margin:0">${msgs.get(ip) || 0} сообщ.</span></div><div class="sub">${[...set]
+                            ([ip, set, list]) => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:${set.size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}</span><b>${set.size} акк.</b><span class="sub" style="margin:0">${msgs.get(ip) || 0} сообщ.</span></div><div class="sub">${list
                                 .slice(0, 8)
                                 .map(n => `<span class="vdl-nick" data-nick="${U.esc(n)}">${U.esc(n)}</span>`)
-                                .join(', ')}${set.size > 8 ? ` и ещё ${set.size - 8}` : ''}</div></div><div class="vdl-btns"><button class="btn" data-ip="${U.esc(ip)}">IP</button></div></div>`
+                                .join(', ')}${list.length > 8 ? ` и ещё ${list.length - 8}` : ''}</div></div><div class="vdl-btns"><button class="btn" data-ip="${U.esc(ip)}">IP</button></div></div>`
                         )
                         .join('')}</div></div>`
                   : ''
@@ -2555,17 +2590,19 @@ html body :is(#log-table, table:has(tr.first-row)) { backdrop-filter: blur(10px)
 html body :is(#log-table, table:has(tr.first-row)) > tbody > tr > td { background: var(--vd-glass, rgba(18,20,27,.42)) !important; color: #e4e6eb; }
 html body :is(#log-table, table:has(tr.first-row)) > tbody > tr > td[colspan] { background: linear-gradient(rgba(0,0,0,.2), rgba(0,0,0,.2)), var(--vd-glass, rgba(18,20,27,.42)) !important; color: #cfd2d8; }
 html body :is(#log-table, table:has(tr.first-row)) > tbody > tr.first-row:hover > td { background: linear-gradient(color-mix(in srgb, ${acc} 16%, transparent), color-mix(in srgb, ${acc} 16%, transparent)), var(--vd-glass, rgba(18,20,27,.42)) !important; }
-/* выпадающие списки в фильтрах (vue-select и listbox): тёмные вместо белых */
-html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__dropdown-toggle, .vs__dropdown-menu, [role="listbox"], .multiselect__content-wrapper, .multiselect__tags) { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; }
-html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__dropdown-option, [role="listbox"] [role="option"], .multiselect__option) { background: transparent !important; color: #e8eaee !important; }
-html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__dropdown-option--highlight, .vs__dropdown-option--selected, [role="option"][aria-selected="true"], .multiselect__option--highlight) { background: ${acc} !important; color: #fff !important; }
-html body :is(#log-filter-form, #log-filter, #log-filter-section) .vs__search { color: #e8eaee !important; background: transparent !important; border: 0 !important; }
-html body :is(#log-filter-form, #log-filter, #log-filter-section) .vs__selected { color: #e8eaee !important; }
-html body > .vs__dropdown-menu { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; }
-html body > .vs__dropdown-menu .vs__dropdown-option { color: #e8eaee !important; }
-html body > .vs__dropdown-menu .vs__dropdown-option--highlight { background: ${acc} !important; color: #fff !important; }
-html body :is(#log-filter-form, #log-filter, #log-filter-section) .vs__search::placeholder { color: rgba(232,234,238,.5) !important; }
-html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }`;
+/* выпадающие списки сайта (обычный select, vue-select, multiselect, choices, tom-select, listbox, автодополнение): тёмные вместо белых.
+   Классы у этих компонентов свои — красим их везде, где бы фильтр ни стоял */
+html body select { color-scheme: dark; }
+html body select, html body select option, html body select optgroup { background-color: #14161c !important; color: #e8eaee !important; }
+html body select option:checked { background: ${acc} !important; color: #fff !important; }
+html body :is(.vs__dropdown-toggle, .vs__dropdown-menu, .multiselect__tags, .multiselect__content-wrapper, .multiselect__input, .multiselect__single, .choices__inner, .choices__list--dropdown, .choices__list[aria-expanded], .ts-control, .ts-dropdown, .select2-selection, .select2-dropdown, .autoComplete_wrapper > ul, .dropdown-menu, [role="listbox"]):not(#vdl-layer *) { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; }
+html body :is(.vs__dropdown-option, .multiselect__option, .choices__item--choice, .ts-dropdown .option, .select2-results__option, .autoComplete_wrapper > ul > li, .dropdown-item, [role="listbox"] [role="option"]) { background: transparent !important; color: #e8eaee !important; }
+html body :is(.vs__dropdown-option--highlight, .vs__dropdown-option--selected, .multiselect__option--highlight, .multiselect__option--selected.multiselect__option--highlight, .choices__item--choice.is-highlighted, .ts-dropdown .active, .select2-results__option--highlighted, .autoComplete_wrapper > ul > li:hover, .autoComplete_wrapper > ul > li[aria-selected="true"], .dropdown-item:hover, .dropdown-item.active, [role="option"][aria-selected="true"], [role="option"]:hover) { background: ${acc} !important; color: #fff !important; }
+html body :is(.vs__search, .multiselect__input, .choices__input, .ts-control input) { color: #e8eaee !important; background: transparent !important; }
+html body :is(.vs__selected, .multiselect__single, .choices__item--selectable) { color: #e8eaee !important; }
+html body :is(.vs__search, .multiselect__input, .choices__input, .ts-control input)::placeholder { color: rgba(232,234,238,.5) !important; }
+html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
+`;
         document.head.appendChild(st);
         this.st = st;
         try {
@@ -2856,6 +2893,7 @@ html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__open-
         const c = Bots.cfg();
         if (!c.marks) return;
         const names = new Set(Bots.chats(c).map(x => x.name));
+        if (Array.isArray(c.chats) && Bots.allChats().length && !names.size) return;
         document.querySelectorAll('td').forEach(td => {
             if (td.dataset.bot || (td.colSpan < 2 && !(td.closest('tr') && td.closest('tr').classList.contains('second-row')))) return;
             td.dataset.bot = '1';
