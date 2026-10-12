@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.9
+// @version      1.1.10
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.9
+// @version      1.1.10
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.9';
+const VERSION = '1.1.10';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -396,8 +396,6 @@ function catLabel(id, rows) {
 }
 
 // безымянная категория админ-действий: по тому, что в ней делают («Бан, мут · #36»), иначе по частым словам
-// «Админ общий чат» на сайте — глобальный чат игроков
-const GLOBAL_CHAT = /общ\S*\s+чат|глобальн/i;
 function catTitle(id, rows) {
     const n = catName({ category_id: id });
     if (!/^Категория #/.test(n)) return n;
@@ -1651,8 +1649,6 @@ const AdminView = {
         if (c.extra.includes(id)) return true;
         const name = catName({ category_id: id });
         if (/^Категория #/.test(name)) return false;
-        // общий чат с «админ» в названии — не админ-действие, если не отметили вручную
-        if (GLOBAL_CHAT.test(name)) return false;
         const n = name.toLowerCase();
         return this.kws(c).some(k => n.includes(k));
     },
