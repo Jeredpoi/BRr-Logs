@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.6
+// @version      1.2.7
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.6
+// @version      1.2.7
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.6';
+const VERSION = '1.2.7';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -91,6 +91,7 @@ const ICONS = {
     eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
     lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    down: '<path d="M6 9l6 6 6-6"/>',
     pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     bot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/><circle cx="12" cy="3.5" r="1"/>',
     spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>'
@@ -519,6 +520,21 @@ const LOGS_UI_CSS = `
 .vdl-ftools select.inp { flex: none; min-width: 0; width: auto; color: #e8eaee; color-scheme: dark; padding: 0 10px; cursor: pointer; }
 .vdl-ftools select.inp option { background: #14161c; color: #e8eaee; }
 .vdl-bar.pick { cursor: pointer; }
+/* выпадающий список с галочками */
+.vdl-dd { position: relative; }
+.vdl-dd > .btn { height: 32px; max-width: 280px; justify-content: space-between; gap: 8px; }
+.vdl-dd > .btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vdl-dd-pop { position: absolute; z-index: 5; top: calc(100% + 6px); left: 0; width: min(420px, 86vw); max-height: 340px; display: flex; flex-direction: column; background: #16181f; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; box-shadow: 0 18px 40px -12px rgba(0,0,0,.7); padding: 8px; }
+.vdl-dd-pop[hidden] { display: none; }
+.vdl-dd-pop .inp { flex: none; height: 32px; margin-bottom: 6px; }
+.vdl-dd-it[hidden] { display: none; }
+.vdl-dd-list { overflow: auto; }
+.vdl-dd-it { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 8px; cursor: pointer; font-size: 12.5px; }
+.vdl-dd-it:hover { background: rgba(255,255,255,.06); }
+.vdl-dd-it span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vdl-dd-it b { font-size: 11px; opacity: .65; }
+.vdl-dd-foot { display: flex; justify-content: space-between; gap: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.08); margin-top: 6px; }
+.vdl-dd-foot .btn { height: 26px; font-size: 12px; }
 .vdl-bar.pick.on .nm { color: var(--acc); font-weight: 700; }
 .vdl-desc { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
 .vdl-desc mark { background: color-mix(in srgb, #f5a524 40%, transparent); color: #fff; border-radius: 3px; padding: 0 2px; }
@@ -1544,12 +1560,10 @@ const Panel = {
         rows.forEach(r => (r._kind = r._kind || kindOf(r)));
         const kinds = group(rows, r => r._kind);
         const kmax = Math.max(1, ...kinds.map(g => g.n));
-        const ips = group(rows.filter(r => r.player_ip), r => r.player_ip);
         const dayOf = r => AdminView.mskDay(new Date(r.time).getTime());
         const days = new Set(rows.map(dayOf)).size;
         // фильтр: выбранные типы (пусто — все), IP, период, текст, порядок
-        const F = (this._acF = this._acF && this._acF.of === rows ? this._acF : { of: rows, kinds: new Set(), ip: '', per: 'all', q: '', sort: 'new' });
-        const PER = [['all', 'Весь период'], ['1', 'Сутки'], ['3', '3 дня'], ['7', '7 дней']];
+        const F = (this._acF = this._acF && this._acF.of === rows ? this._acF : { of: rows, kinds: new Set(), q: '', sort: 'new' });
         box.innerHTML = `
           <div class="vdl-row"><div class="main"><div class="ttl">${rows.length} ${plural(rows.length, 'срабатывание', 'срабатывания', 'срабатываний')}<span class="vdl-tag" style="--c:#e5484d">${days} ${plural(days, 'день', 'дня', 'дней')}</span></div><div class="sub">последнее — ${fmtDate(rows[0].time)}${d.capped ? (Api.order === 'time' ? ' · показаны первые за период' : ' · показаны последние') : ''}</div></div></div>
           <div class="sub" style="padding:10px 2px 4px">За что</div>
@@ -1557,23 +1571,25 @@ const Panel = {
               .slice(0, 8)
               .map(g => `<div class="vdl-bar pick" data-k="${U.esc(g.k)}" title="Показать только это"><span class="nm">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
               .join('')}</div>
-          <div class="sub" style="padding:12px 2px 6px">Фильтр</div>
-          <div class="vdl-fbar" data-l="kinds"><span class="lbl">Тип</span>${kinds.map(g => `<button class="vdl-fchip" data-k="${U.esc(g.k)}" title="${U.esc(g.k)}"><span>${U.esc(g.k)}</span><b>${g.n}</b></button>`).join('')}</div>
-          ${ips.length > 1 ? `<div class="vdl-fbar" data-l="ips"><span class="lbl">IP</span><button class="vdl-fchip" data-ip="">Все</button>${ips.slice(0, 12).map(g => `<button class="vdl-fchip" data-ip="${U.esc(g.k)}"><span>${U.esc(g.k)}</span><b>${g.n}</b></button>`).join('')}</div>` : ''}
-          <div class="vdl-fbar" data-l="per"><span class="lbl">Когда</span>${PER.map(([v, t]) => `<button class="vdl-fchip" data-per="${v}">${t}</button>`).join('')}</div>
-          <div class="vdl-ftools"><input class="inp" data-a="q" placeholder="Найти в тексте…"><select class="inp" data-a="sort"><option value="new">Сначала новые</option><option value="old">Сначала старые</option></select><button class="btn" data-a="reset">Сбросить</button></div>
+          <div class="vdl-ftools" style="margin-top:12px">
+            <div class="vdl-dd" data-dd="kind"><button class="btn" data-a="dd"><span data-l="kl">Все причины</span>${icon('down', 13)}</button>
+              <div class="vdl-dd-pop" hidden><input class="inp" data-a="kq" placeholder="Найти причину…"><div class="vdl-dd-list">${kinds
+                  .map(g => `<label class="vdl-dd-it" data-k="${U.esc(g.k)}" title="${U.esc(g.k)}"><input type="checkbox"><span>${U.esc(g.k)}</span><b>${g.n}</b></label>`)
+                  .join('')}</div><div class="vdl-dd-foot"><button class="btn" data-a="kall">Все</button><button class="btn" data-a="kclose">Готово</button></div></div></div>
+            <input class="inp" data-a="q" placeholder="Найти в тексте…">
+            <select class="inp" data-a="sort"><option value="new">Сначала новые</option><option value="old">Сначала старые</option></select>
+            <button class="btn" data-a="reset">Сбросить</button></div>
           <div class="sub" data-l="cnt" style="padding:2px 2px 6px"></div>
           <div data-l="list"></div>`;
         const $ = q => box.querySelector(q);
         const draw = () => {
             const q = F.q.trim().toLowerCase();
-            const from = F.per === 'all' ? 0 : new Date(rows[0].time).getTime() - +F.per * 864e5;
-            let list = rows.filter(r => (!F.kinds.size || F.kinds.has(r._kind)) && (!F.ip || r.player_ip === F.ip) && (!from || new Date(r.time).getTime() >= from) && (!q || String(r.transaction_desc || '').toLowerCase().includes(q)));
+            let list = rows.filter(r => (!F.kinds.size || F.kinds.has(r._kind)) && (!q || String(r.transaction_desc || '').toLowerCase().includes(q)));
             if (F.sort === 'old') list = list.slice().reverse();
-            box.querySelectorAll('[data-l="kinds"] [data-k], [data-l="bars"] [data-k]').forEach(b => b.classList.toggle('on', F.kinds.has(b.dataset.k)));
-            box.querySelectorAll('[data-ip]').forEach(b => b.classList.toggle('on', b.dataset.ip === F.ip));
-            box.querySelectorAll('[data-per]').forEach(b => b.classList.toggle('on', b.dataset.per === F.per));
-            const any = F.kinds.size || F.ip || F.per !== 'all' || q;
+            box.querySelectorAll('[data-l="bars"] [data-k]').forEach(b => b.classList.toggle('on', F.kinds.has(b.dataset.k)));
+            box.querySelectorAll('.vdl-dd-it').forEach(it => (it.querySelector('input').checked = F.kinds.has(it.dataset.k)));
+            $('[data-l="kl"]').textContent = !F.kinds.size ? 'Все причины' : F.kinds.size === 1 ? [...F.kinds][0] : `Причин: ${F.kinds.size}`;
+            const any = F.kinds.size || q;
             $('[data-a="reset"]').hidden = !any;
             $('[data-l="cnt"]').textContent = any ? `Показано ${list.length} из ${rows.length}` : '';
             $('[data-l="list"]').innerHTML = list.length
@@ -1587,9 +1603,28 @@ const Panel = {
             F.kinds.has(k) ? F.kinds.delete(k) : F.kinds.add(k);
             draw();
         };
-        box.querySelectorAll('[data-l="kinds"] [data-k], [data-l="bars"] [data-k]').forEach(b => (b.onclick = () => toggle(b.dataset.k)));
-        box.querySelectorAll('[data-ip]').forEach(b => (b.onclick = () => ((F.ip = b.dataset.ip), draw())));
-        box.querySelectorAll('[data-per]').forEach(b => (b.onclick = () => ((F.per = b.dataset.per), draw())));
+        box.querySelectorAll('[data-l="bars"] [data-k]').forEach(b => (b.onclick = () => toggle(b.dataset.k)));
+        // выпадающий список причин: галочки, поиск по причинам, «Все», закрытие кликом мимо
+        const dd = $('[data-dd="kind"]'),
+            pop = dd.querySelector('.vdl-dd-pop'),
+            kq = dd.querySelector('[data-a="kq"]');
+        const shut = () => (pop.hidden = true);
+        dd.querySelector('[data-a="dd"]').onclick = () => {
+            pop.hidden = !pop.hidden;
+            if (!pop.hidden) setTimeout(() => kq.focus(), 0);
+        };
+        dd.querySelectorAll('.vdl-dd-it input').forEach(ch => (ch.onchange = () => toggle(ch.closest('.vdl-dd-it').dataset.k)));
+        kq.oninput = () => {
+            const t = kq.value.trim().toLowerCase();
+            dd.querySelectorAll('.vdl-dd-it').forEach(it => (it.hidden = t && !it.dataset.k.toLowerCase().includes(t)));
+        };
+        dd.querySelector('[data-a="kall"]').onclick = () => {
+            F.kinds.clear();
+            draw();
+        };
+        dd.querySelector('[data-a="kclose"]').onclick = shut;
+        box.addEventListener('mousedown', e => !dd.contains(e.target) && shut());
+
         const qi = $('[data-a="q"]');
         qi.value = F.q;
         qi.oninput = U.debounce(() => ((F.q = qi.value), draw()), 150);
@@ -1597,7 +1632,7 @@ const Panel = {
         so.value = F.sort;
         so.onchange = () => ((F.sort = so.value), draw());
         $('[data-a="reset"]').onclick = () => {
-            Object.assign(F, { kinds: new Set(), ip: '', per: 'all', q: '', sort: 'new' });
+            Object.assign(F, { kinds: new Set(), q: '', sort: 'new' });
             qi.value = '';
             so.value = 'new';
             draw();
