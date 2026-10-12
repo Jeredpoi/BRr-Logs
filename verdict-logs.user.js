@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.3
+// @version      1.1.4
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.3
+// @version      1.1.4
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.3';
+const VERSION = '1.1.4';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -370,6 +370,29 @@ function catLabel(id, rows) {
     if (!/^Категория #/.test(n)) return { name: n, known: true };
     const g = guessCat(id, rows);
     return { name: g ? `≈ ${g} (#${id})` : n, known: false };
+}
+
+// безымянная категория админ-действий: по тому, что в ней делают («Бан, мут · #36»), иначе по частым словам
+function catTitle(id, rows) {
+    const n = catName({ category_id: id });
+    if (!/^Категория #/.test(n)) return n;
+    const own = (rows || []).filter(r => String(r.category_id) === String(id));
+    const kinds = new Map();
+    own.forEach(r => {
+        const h = ACTIONS.find(([re]) => re.test(String(r.transaction_desc || '')));
+        if (h) kinds.set(h[1], (kinds.get(h[1]) || 0) + 1);
+    });
+    const top = [...kinds]
+        .sort((x, y) => y[1] - x[1])
+        .filter(([, c]) => c >= own.length * 0.2)
+        .slice(0, 2)
+        .map(([k]) => k);
+    if (top.length) {
+        const t = top.join(', ');
+        return `${t[0].toUpperCase()}${t.slice(1)} · #${id}`;
+    }
+    const g = guessCat(id, own);
+    return g ? `${g} · #${id}` : n;
 }
 
 function copyNick(el, nick) {
@@ -1598,7 +1621,7 @@ const AdminView = {
         catName({ category_id: 0 });
         const c = this.cfg();
         const ids = new Set(Object.keys(CATS).concat(c.extra, Object.keys(c.on)).filter(k => /^\d+$/.test(k)));
-        return [...ids].map(id => ({ id, name: CATS[id] || 'Категория #' + id }));
+        return [...ids].map(id => ({ id, name: CATS[id] || catTitle(id, this._rows) }));
     },
     selected(c) {
         const ids = new Set(this.known().filter(x => this.isAdmin(x.id, c)).map(x => x.id));
@@ -1799,8 +1822,9 @@ const AdminView = {
         const fmtDay = s => s.split('-').reverse().slice(0, 2).join('.');
         const ru = s => s.split('-').reverse().join('.');
         const wd = k => ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(k + 'T12:00:00Z').getUTCDay()];
-        const nm = id => catName({ category_id: id });
+        const nm = id => catTitle(id, all);
         this.last = d;
+        this._rows = all;
         out.innerHTML = `
           <div class="vdl-sum">
             <div class="k"><small>Админ-действий</small><b>${own.length}</b></div>
@@ -1857,11 +1881,11 @@ const AdminView = {
         const listBox = out.querySelector('[data-l="list"]');
         const drawList = () => {
             const f = out.querySelector('[data-a="flt"]').value.trim().toLowerCase();
-            const rows = f ? sorted.filter(r => `${r.transaction_desc || ''} ${catName(r)}`.toLowerCase().includes(f)) : sorted;
+            const rows = f ? sorted.filter(r => `${r.transaction_desc || ''} ${nm(r.category_id)}`.toLowerCase().includes(f)) : sorted;
             listBox.innerHTML = rows.length
                 ? rows
                       .slice(0, 300)
-                      .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
+                      .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(nm(r.category_id))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
                       .join('') + (rows.length > 300 ? `<div class="sub" style="padding:8px 2px">Показаны 300 из ${rows.length}</div>` : '')
                 : '<div class="vdl-row"><div class="main sub">Ничего не нашлось</div></div>';
         };
@@ -2215,6 +2239,13 @@ const BotView = {
         const { arr, rows, c, ips } = d;
         const bots = arr.filter(g => g.bot);
         const groups = [...ips.values()].filter(s => s.size >= c.minAcc).length;
+        // IP, с которых писало больше всего подозреваемых аккаунтов
+        const msgs = new Map();
+        rows.forEach(x => x.player_ip && msgs.set(x.player_ip, (msgs.get(x.player_ip) || 0) + 1));
+        const topIps = [...ips]
+            .filter(([, set]) => set.size > 1)
+            .sort((x, y) => y[1].size - x[1].size || (msgs.get(y[0]) || 0) - (msgs.get(x[0]) || 0))
+            .slice(0, 5);
         const hl = (text, hits) => {
             const raw = String(text).slice(0, 180);
             const pats = hits.filter(h => raw.toLowerCase().includes(h.toLowerCase())).map(h => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
@@ -2232,6 +2263,18 @@ const BotView = {
             <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}${d.capped ? ' · сообщений очень много — проверены не все, возьми период короче' : ''}</div>
+          ${
+              topIps.length
+                  ? `<div class="sec"><h4>Самые частые IP</h4><div class="card">${topIps
+                        .map(
+                            ([ip, set]) => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:${set.size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}</span><b>${set.size} акк.</b><span class="sub" style="margin:0">${msgs.get(ip) || 0} сообщ.</span></div><div class="sub">${[...set]
+                                .slice(0, 8)
+                                .map(n => `<span class="vdl-nick" data-nick="${U.esc(n)}">${U.esc(n)}</span>`)
+                                .join(', ')}${set.size > 8 ? ` и ещё ${set.size - 8}` : ''}</div></div><div class="vdl-btns"><button class="btn" data-ip="${U.esc(ip)}">IP</button></div></div>`
+                        )
+                        .join('')}</div></div>`
+                  : ''
+          }
           <div class="card" data-l="list">${
               arr.length
                   ? arr
