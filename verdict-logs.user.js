@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.0
+// @version      1.2.1
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.0
+// @version      1.2.1
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -862,6 +862,25 @@ const CatLearn = {
         const tds = [...document.querySelectorAll('td.td-category')];
         if (!tds.length) return;
         const map = Store.get('cats', {});
+        // сайт отфильтровал по одной категории — её номер в адресе запроса, название — в каждой строке таблицы
+        const last = performance
+            .getEntriesByType('resource')
+            .map(e => e.name)
+            .filter(u => u.includes('/api/list-game-logs/') && !Api.mine.has(u))
+            .pop();
+        if (last) {
+            const cid = [...new URL(last).searchParams].find(([k, v]) => /categor/i.test(k) && /^\d{1,4}$/.test(v));
+            const txt = new Set(tds.map(td => LogsPage.rawOf(td)).filter(Boolean));
+            if (cid && txt.size === 1) {
+                const nm = [...txt][0];
+                if (map[cid[1]] !== nm) {
+                    map[cid[1]] = nm;
+                    Store.set('cats', map);
+                    this.dirty = true;
+                }
+                return;
+            }
+        }
         const names = new Set(Object.values(map));
         if (tds.every(td => names.has(LogsPage.rawOf(td)))) return;
         const url = performance
@@ -1657,7 +1676,8 @@ const ADMIN_CATS = [
     { k: 'gchat', name: 'Админ общий чат', re: /^админ\S*\s*общ\S*\s*чат/i },
     { k: 'chat', name: 'Админ чат', re: /^админ\S*\s*чат/i },
     { k: 'block', name: 'Админ блокировки', re: /^админ\S*\s*блок/i, desc: true },
-    { k: 'super', name: 'Супер наказания', re: /супер\s*-?\s*наказ/i, desc: true }
+    { k: 'super', name: 'Супер наказания', re: /супер\s*-?\s*наказ/i, desc: true },
+    { k: 'report', name: 'Жалобы / обращения', re: /жалоб|обращен|репорт|report/i }
 ];
 const AdminView = {
     // номера категорий, вписанные вручную: { act: '70', … }
