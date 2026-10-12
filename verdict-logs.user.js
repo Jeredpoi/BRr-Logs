@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.6
+// @version      1.1.7
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.6
+// @version      1.1.7
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.6';
+const VERSION = '1.1.7';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -373,6 +373,8 @@ function catLabel(id, rows) {
 }
 
 // безымянная категория админ-действий: по тому, что в ней делают («Бан, мут · #36»), иначе по частым словам
+// «Админ общий чат» на сайте — глобальный чат игроков
+const GLOBAL_CHAT = /общ\S*\s+чат|глобальн/i;
 function catTitle(id, rows) {
     const n = catName({ category_id: id });
     if (!/^Категория #/.test(n)) return n;
@@ -1621,6 +1623,8 @@ const AdminView = {
         if (c.extra.includes(id)) return true;
         const name = catName({ category_id: id });
         if (/^Категория #/.test(name)) return false;
+        // общий чат с «админ» в названии — не админ-действие, если не отметили вручную
+        if (GLOBAL_CHAT.test(name)) return false;
         const n = name.toLowerCase();
         return this.kws(c).some(k => n.includes(k));
     },
@@ -2173,7 +2177,8 @@ const BotView = {
             }
             // 2) похожие написания — читаем чаты целиком
             if (c.fuzzy) {
-                const chats = AdminView.known().filter(x => /чат/i.test(x.name) && !/админ/i.test(x.name));
+                // «Админ общий чат» — это общий (глобальный) чат игроков, его тоже читаем
+                const chats = AdminView.known().filter(x => /чат/i.test(x.name) && (!/админ/i.test(x.name) || GLOBAL_CHAT.test(x.name)));
                 if (!chats.length) toast('Категории чатов ещё не известны — ищу только точные фразы', 'info');
                 for (const ch of chats) {
                     const r = await Api.all({ category_id__exact: ch.id, ...range }, 10, (pg, n) => this.prog(`${ch.name}: страница ${pg}, записей ${n}…`, gen), null, alive);
