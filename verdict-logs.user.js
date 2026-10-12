@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.0
+// @version      1.1.1
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.0
+// @version      1.1.1
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -270,6 +270,95 @@ const Layer = {
 };
 
 // клик по нику копирует его
+// клик по элементу копирует текст (берётся свежий на момент клика — сайт переиспользует ячейки)
+function copyText(el, get, what) {
+    el.style.cursor = 'copy';
+    el.title = `Нажми — скопировать ${what}`;
+    el._vdlGet = get;
+    if (el._vdlCopyT) return;
+    el._vdlCopyT = true;
+    el.addEventListener('click', e => {
+        const v = String(el._vdlGet() || '').trim();
+        if (!v || v === '–' || v === '-') return;
+        e.preventDefault();
+        e.stopPropagation();
+        navigator.clipboard.writeText(v).then(
+            () => toast(`Скопировано: ${v}`),
+            () => toast('Не удалось скопировать', 'err')
+        );
+    });
+}
+// суммы в тексте записи: «добавил 110000 рублей» → «110 000 рублей» (номера трейдов, ID и прочее не трогаем)
+function moneyText(s) {
+    const sp = n => n.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return String(s ?? '')
+        .replace(/(^|[^\d.:#№\w])(-?\d{4,})(?=\s*(?:руб|р\.|\$|долл|вирт))/gi, (m, a, n) => a + sp(n))
+        .replace(/(\$\s?)(\d{4,})(?!\d)/g, (m, a, n) => a + sp(n));
+}
+// что админ сделал игроку: вид наказания, срок и причина — из текста записи
+// \b в JS не видит русские буквы — границы слова для кириллицы задаём сами
+const RW = w => new RegExp(`(^|[^а-яёa-z0-9])(${w})($|[^а-яёa-z0-9])`, 'i');
+const ACTIONS = [
+    [/снял (наказание|бан|мут|деморган|варн)|снятие наказ/i, 'снятие наказания'],
+    [/разбан|\bunban/i, 'разбан'],
+    [/размут|\bunmute/i, 'размут'],
+    [/unjail|выпустил|освободил/i, 'выпуск из деморгана'],
+    [/разблокир|\bunblock/i, 'разблокировка'],
+    [/заблокир|блокировк/i, 'блокировка'],
+    [/\bs?ban\b|забан|banned/i, 'бан'],
+    [RW('бан|бана|баном'), 'бан'],
+    [/\bmute\b|замут|заглуш/i, 'мут'],
+    [RW('мут|мута|мутом'), 'мут'],
+    [/jail|деморган|тюрьм/i, 'деморган'],
+    [RW('кпз'), 'деморган'],
+    [/\bwarn\b|варн|предупрежд/i, 'предупреждение'],
+    [/\bkick\b|кикнул/i, 'кик'],
+    [RW('кик'), 'кик'],
+    [/freeze|заморозил/i, 'заморозка'],
+    [/телепорт|\/tp\b|\bgoto\b|gethere/i, 'телепорт'],
+    [/\bspec\b|слежк|наблюд/i, 'слежка'],
+    [/\bslap\b/i, 'slap'],
+    [/выдал|\/give\b|\/set(hp|arm)/i, 'выдача']
+];
+function actionOf(desc, admin) {
+    const t = String(desc || '');
+    const hit = ACTIONS.find(([re]) => re.test(t));
+    const dur = t.match(/(\d+)\s*(мин(?:ут)?\.?|min|час(?:ов|а)?|ч\.?|дн(?:я|ей)?\.?|д\.|day|days|сут(?:ок|ки)?)/i);
+    const why = t.match(/(?:причин[аы]?|reason)\s*[:-]?\s*([^,.;)\]]{2,40})|\s[—–-]\s*([^,.;)\]]{2,40})\s*$/i);
+    if (!hit) return moneyText(t.replace(new RegExp(String(admin || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '').replace(/\s+/g, ' ').trim()).slice(0, 90);
+    // причина без повтора вида наказания и срока
+    let reason = why ? (why[1] || why[2]).trim() : '';
+    if (reason && (/\d/.test(reason) || hit[0].test(reason))) reason = '';
+    return [hit[1], dur ? `${dur[1]} ${dur[2].replace(/\.$/, '')}` : '', reason].filter(Boolean).join(' · ');
+}
+// название категории, которой нет в списке: по самым частым словам её записей («Продал машину»)
+function guessCat(id, rows) {
+    const cnt = new Map();
+    rows.forEach(r => {
+        if (String(r.category_id) !== String(id)) return;
+        const w = String(r.transaction_desc || '')
+            .replace(/\[[^\]]*\]/g, ' ')
+            .replace(NICK_RE, ' ')
+            .replace(/[\d.,:;()"«»#№+$%/\\-]+/g, ' ')
+            .split(/\s+/)
+            .filter(x => x.length > 2 && !/^(рубл|руб|долл|вирт|игрок|для|при|без)/i.test(x))
+            .slice(0, 3)
+            .join(' ');
+        if (w) cnt.set(w, (cnt.get(w) || 0) + 1);
+    });
+    let best = '',
+        n = 0;
+    cnt.forEach((v, k) => v > n && ((n = v), (best = k)));
+    return best ? best[0].toUpperCase() + best.slice(1) : '';
+}
+// подпись категории в списках: название или «≈ угаданное (#id)»
+function catLabel(id, rows) {
+    const n = catName({ category_id: id });
+    if (!/^Категория #/.test(n)) return { name: n, known: true };
+    const g = guessCat(id, rows);
+    return { name: g ? `≈ ${g} (#${id})` : n, known: false };
+}
+
 function copyNick(el, nick) {
     el.style.cursor = 'copy';
     el.title = 'Нажми — скопировать ник';
@@ -358,6 +447,13 @@ const LOGS_UI_CSS = `
 .vdl-desc mark { background: color-mix(in srgb, #f5a524 40%, transparent); color: #fff; border-radius: 3px; padding: 0 2px; }
 .vdl-nick { cursor: copy; }
 .vdl-botrow.is-bot { box-shadow: inset 3px 0 0 #e5484d; padding-left: 10px; }
+.vdl-more-btn { margin-top: 3px; padding: 0; font-size: 11.5px; color: var(--acc2); background: none; cursor: pointer; }
+.vdl-more-btn:hover { text-decoration: underline; }
+.vdl-bar .nm.guess { display: flex; align-items: center; gap: 4px; font-style: italic; color: var(--tx-3); }
+.vdl-bar .nm .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vdl-ren { flex: none; }
+.vdl-ren { margin-left: 4px; padding: 0 5px; border-radius: 6px; font-size: 11px; color: var(--tx-2); background: rgba(255,255,255,.07); cursor: pointer; }
+.vdl-ren:hover { background: var(--acc); color: #fff; }
 .vdl-catex { display: flex; align-items: center; gap: 8px; margin: -2px 2px 8px; padding-left: 2px; font-size: 11.5px; color: var(--tx-3); }
 .vdl-catex .ex { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vdl-catex .btn { height: 26px; padding: 0 9px; font-size: 11.5px; }
@@ -869,7 +965,7 @@ const Panel = {
                 <div class="k"><small>Записей</small><b>${rows.length}</b></div>
                 <div class="k"><small>IP-адресов</small><b>${ips.length}</b></div>
                 <div class="k"><small>Устройств</small><b>${devs.length}</b></div>
-                <div class="k"><small>ID игрока</small><b style="font-size:15px">${U.esc(ids.join(', ') || '—')}</b></div>
+                <div class="k"><small>ID игрока</small><b style="font-size:15px" class="vdl-copyid" data-v="${U.esc(ids.join(', '))}">${U.esc(ids.join(', ') || '—')}</b></div>
               </div>
               ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}</div>` : ''}
               <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button></div>
@@ -897,6 +993,7 @@ const Panel = {
                 const ex = conRows.slice().sort((a, b) => new Date(b.time) - new Date(a.time))[0];
                 pb.innerHTML = `<div class="vdl-row"><div class="main sub">${conRows.length ? 'В записях входа платформа не указана' : 'Входов за период нет'}${ex ? `<br>Пример записи входа: <span class="vdl-mono">${U.esc(String(ex.transaction_desc || '').slice(0, 200))}</span>` : ''}</div></div>`;
             }
+            o.querySelectorAll('.vdl-copyid').forEach(el => el.dataset.v && copyText(el, () => el.dataset.v, 'ID'));
             const li = o.querySelector('[data-l="ips"]');
             ips.slice(0, 30).forEach(g => li.appendChild(this.ipRow(g, nick)));
             const ld = o.querySelector('[data-l="devs"]');
@@ -986,7 +1083,7 @@ const Panel = {
         const byCat = sign => {
             const m = new Map();
             ops.filter(x => Math.sign(x.a) === sign).forEach(x => {
-                const k = catName(x.r);
+                const k = String(x.r.category_id ?? '');
                 const g = m.get(k) || { k, sum: 0, n: 0 };
                 g.sum += x.a;
                 g.n++;
@@ -996,7 +1093,12 @@ const Panel = {
         };
         const bars = (list, cls) => {
             const max = list.length ? Math.abs(list[0].sum) : 1;
-            return list.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="tr"><b class="${cls}" style="width:${Math.max(3, Math.round((Math.abs(g.sum) / max) * 100))}%"></b></span><span class="n ${cls}">${fmtMoney(g.sum)}</span></div>`).join('');
+            return list
+                .map(g => {
+                    const L = catLabel(g.k, d.rows);
+                    return `<div class="vdl-bar"><span class="nm ${L.known ? '' : 'guess'}" title="${U.esc(L.name)}"><span class="t">${U.esc(L.name)}</span>${L.known ? '' : `<button class="vdl-ren" data-cid="${U.esc(g.k)}" title="Подписать категорию">✎</button>`}</span><span class="tr"><b class="${cls}" style="width:${Math.max(3, Math.round((Math.abs(g.sum) / max) * 100))}%"></b></span><span class="n ${cls}">${fmtMoney(g.sum)}</span></div>`;
+                })
+                .join('');
         };
         const cIn = byCat(1), cOut = byCat(-1);
         this.report.money = { inc, exp, b0: b0 && b0.b, b1: b1 && b1.b, n: d.rows.length, capped: d.capped };
@@ -1011,16 +1113,42 @@ const Panel = {
           ${ops.length ? '' : '<div class="sub" style="padding:0 2px 8px">Денежных операций за период нет (или сайт не отдаёт сумму)</div>'}
           ${cIn.length ? `<div class="sub" style="padding:8px 2px 2px">Откуда приходили деньги</div>${bars(cIn, 'vdl-pos')}` : ''}
           ${cOut.length ? `<div class="sub" style="padding:8px 2px 2px">На что уходили</div>${bars(cOut, 'vdl-neg')}` : ''}
-          ${big.length ? `<div class="sub" style="padding:10px 2px 2px">Крупные операции</div>${big.map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="${cls(x.a)}">${fmtMoney(x.a)}</span><span class="vdl-tag">${U.esc(catName(x.r))}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(String(x.r.transaction_desc || '').slice(0, 140))}</div></div></div>`).join('')}` : ''}
+          ${big.length ? `<div class="sub" style="padding:10px 2px 2px">Крупные операции</div>${big.map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="${cls(x.a)}">${fmtMoney(x.a)}</span><span class="vdl-tag">${U.esc(catLabel(x.r.category_id, d.rows).name)}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(moneyText(String(x.r.transaction_desc || '').slice(0, 160)))}</div></div></div>`).join('')}` : ''}
           ${this.capNote(d)}`;
+        this.renameButtons(box, () => this.renderMoney(box, d));
+    },
+    // ✎ у категории без названия: подписать прямо в списке
+    renameButtons(box, redraw) {
+        box.querySelectorAll('.vdl-ren').forEach(
+            bt =>
+                (bt.onclick = e => {
+                    e.stopPropagation();
+                    const id = bt.dataset.cid;
+                    const nm = bt.closest('.nm');
+                    nm.innerHTML = `<input class="inp" maxlength="40" placeholder="Название #${U.esc(id)}" style="height:26px;width:100%">`;
+                    const inp = nm.querySelector('input');
+                    inp.value = guessCat(id, []) || '';
+                    let done = false;
+                    const ok = () => {
+                        if (done) return;
+                        done = true;
+                        const v = inp.value.trim();
+                        if (v) CatLearn.name(id, v);
+                        setTimeout(redraw, 0);
+                    };
+                    inp.addEventListener('keydown', ev => ev.key === 'Enter' && ok());
+                    inp.addEventListener('blur', ok);
+                    inp.focus();
+                })
+        );
     },
     renderCats(box, d) {
         if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
         const cats = group(d.rows, r => String(r.category_id ?? '')).slice(0, 14);
         const cmax = cats.length ? cats[0].n : 1;
-        const nm = id => (id === '' ? 'Без категории' : catName({ category_id: id }));
+        const nm = id => (id === '' ? 'Без категории' : catLabel(id, d.rows).name);
         this.report.cats = cats.slice(0, 8).map(g => `${nm(g.k)} — ${g.n}`);
-        const unknown = cats.filter(g => g.k !== '' && /^Категория #/.test(nm(g.k)));
+        const unknown = cats.filter(g => g.k !== '' && !catLabel(g.k, d.rows).known);
         box.innerHTML =
             cats
                 .map(g => {
@@ -1029,7 +1157,7 @@ const Panel = {
                     const ex = unk ? d.rows.find(r => String(r.category_id) === g.k) : null;
                     return `<div class="vdl-bar"><span class="nm" title="${U.esc(name)}">${U.esc(name)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>${
                         unk
-                            ? `<div class="vdl-catex" data-id="${U.esc(g.k)}"><span class="ex">пример: ${U.esc(String((ex && ex.transaction_desc) || '—').slice(0, 120))}</span><button class="btn" data-a="name">✎ подписать</button></div>`
+                            ? `<div class="vdl-catex" data-id="${U.esc(g.k)}"><span class="ex">пример: ${U.esc(moneyText(String((ex && ex.transaction_desc) || '—').slice(0, 120)))}</span><button class="btn" data-a="name">✎ подписать</button></div>`
                             : ''
                     }`;
                 })
@@ -1500,10 +1628,14 @@ const AdminView = {
             (String(r.transaction_desc || '').match(NICK_RE) || []).forEach(n => {
                 if (sameNick(n, nick) || seen.has(n)) return;
                 seen.add(n);
-                const g = tg.get(n) || { k: n, n: 0, cats: new Set(), last: 0 };
+                const g = tg.get(n) || { k: n, n: 0, acts: [], kinds: new Map(), last: 0 };
                 g.n++;
-                g.cats.add(catName(r));
-                g.last = Math.max(g.last, new Date(r.time).getTime() || 0);
+                const t = new Date(r.time).getTime() || 0;
+                const act = actionOf(r.transaction_desc, nick);
+                const kind = act.split(' · ')[0];
+                g.kinds.set(kind, (g.kinds.get(kind) || 0) + 1);
+                g.acts.push({ t, act, desc: r.transaction_desc });
+                g.last = Math.max(g.last, t);
                 tg.set(n, g);
             });
         });
@@ -1553,7 +1685,10 @@ const AdminView = {
                   ? targets
                         .slice(0, 50)
                         .map(
-                            g => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="vdl-tag">${g.n}</span></div><div class="sub">${U.esc([...g.cats].join(', '))} · ${fmtDate(g.last)}</div></div><div class="vdl-btns"><button class="btn" data-an="${U.esc(g.k)}">${icon('search', 13)}Разобрать</button></div></div>`
+                            g => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.k)}">${U.esc(g.k)}</span>${[...g.kinds].sort((x, y) => y[1] - x[1]).map(([k, n]) => `<span class="vdl-tag" style="--c:${/бан|блок|деморган/.test(k) ? '#e5484d' : /мут|предупр|кик/.test(k) ? '#f5a524' : '#3aa0ff'}">${U.esc(k.length > 24 ? 'действие' : k)}${n > 1 ? ' ×' + n : ''}</span>`).join('')}</div>${g.acts
+                                .sort((x, y) => y.t - x.t)
+                                .map((x, i) => `<div class="sub" ${i > 2 ? 'hidden' : ''} title="${U.esc(x.desc)}">${fmtDate(x.t)} — ${U.esc(x.act)}</div>`)
+                                .join('')}${g.acts.length > 3 ? `<button class="vdl-more-btn" data-more>и ещё ${g.acts.length - 3} — показать</button>` : ''}</div><div class="vdl-btns"><button class="btn" data-an="${U.esc(g.k)}">${icon('search', 13)}Разобрать</button></div></div>`
                         )
                         .join('')
                   : '<div class="vdl-row"><div class="main sub">В действиях нет ников игроков</div></div>'
@@ -1571,7 +1706,7 @@ const AdminView = {
             listBox.innerHTML = rows.length
                 ? rows
                       .slice(0, 300)
-                      .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub vdl-desc">${U.esc(String(r.transaction_desc || ''))}</div></div></div>`)
+                      .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
                       .join('') + (rows.length > 300 ? `<div class="sub" style="padding:8px 2px">Показаны 300 из ${rows.length}</div>` : '')
                 : '<div class="vdl-row"><div class="main sub">Ничего не нашлось</div></div>';
         };
@@ -1587,6 +1722,13 @@ const AdminView = {
         show(d.tab || 'cat');
         out.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
         out.querySelectorAll('[data-an]').forEach(bt => (bt.onclick = () => Panel.open('nick', bt.dataset.an, { stack: true })));
+        out.querySelectorAll('[data-more]').forEach(
+            bt =>
+                (bt.onclick = () => {
+                    bt.parentElement.querySelectorAll('.sub[hidden]').forEach(x => (x.hidden = false));
+                    bt.remove();
+                })
+        );
         // отметил категорию — запомнили и пересчитали (без новых запросов, если записей немного)
         out.querySelectorAll('[data-cat]').forEach(
             ch =>
@@ -1607,7 +1749,10 @@ const AdminView = {
                 L.push('По дням:');
                 days.forEach(k => perDay.get(k) && L.push(`  ${fmtDay(k)} — ${perDay.get(k)}`));
             }
-            if (targets.length) L.push('Чаще всего: ' + targets.slice(0, 5).map(g => `${g.k} (${g.n})`).join(', '));
+            if (targets.length) {
+                L.push('Игроки:');
+                targets.slice(0, 15).forEach(g => L.push(`  ${g.k}: ${[...g.kinds].map(([k, n]) => k + (n > 1 ? ' ×' + n : '')).join(', ')}`));
+            }
             navigator.clipboard.writeText(L.join('\n')).then(
                 () => toast('Отчёт скопирован'),
                 () => toast('Не удалось скопировать', 'err')
@@ -2201,15 +2346,35 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
             while (p.firstChild) td.insertBefore(p.firstChild, p);
             p.remove();
         });
-        ['vdl', 'hk', 'hv', 'trade', 'money', 'vdlSig', 'bot'].forEach(k => delete td.dataset[k]);
+        ['vdl', 'hk', 'hv', 'trade', 'money', 'vdlSig', 'bot', 'vdlMoneyText'].forEach(k => delete td.dataset[k]);
         td.classList.remove('vdl-done');
         const tr = td.closest('tr');
         if (tr) tr.classList.remove('vdl-done');
     },
 
+    // столбцы «ID игрока» и «ID аккаунта» — по заголовкам таблицы
+    idCols(table) {
+        if (table._vdlIdCols && table._vdlIdHead === table.tHead) return table._vdlIdCols;
+        const cols = new Set();
+        [...((table.tHead && table.tHead.rows[table.tHead.rows.length - 1]) || { cells: [] }).cells].forEach((th, i) => /\bID\b/i.test(th.textContent) && cols.add(i));
+        table._vdlIdHead = table.tHead;
+        return (table._vdlIdCols = cols);
+    },
     decorate() {
         const c = this.cfg();
         document.querySelectorAll('td').forEach(td => {
+            // ID игрока / аккаунта — кликом в буфер
+            const tb = td.closest('table');
+            if (tb && td.colSpan < 2 && (this.idCols(tb).has(td.cellIndex) || /\b(player|account)-?_?id\b/i.test(td.className))) copyText(td, () => this.rawOf(td), 'ID');
+            // суммы в описании записи — с разделителями
+            if (c.money && !td.dataset.vdlMoneyText && (td.colSpan > 1 || (td.closest('tr') && td.closest('tr').classList.contains('second-row')))) {
+                td.dataset.vdlMoneyText = '1';
+                td.childNodes.forEach(n => {
+                    if (n.nodeType !== 3) return;
+                    const v = moneyText(n.nodeValue);
+                    if (v !== n.nodeValue) n.nodeValue = v;
+                });
+            }
             if (td.dataset.vdlSig !== undefined && td.dataset.vdlSig !== this.rawOf(td)) this.reset(td);
             if (!td.dataset.vdl) {
                 const t = td.textContent.trim();
@@ -2280,7 +2445,7 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
         const c = Bots.cfg();
         if (!c.marks) return;
         document.querySelectorAll('td').forEach(td => {
-            if (td.dataset.bot || td.colSpan < 2) return;
+            if (td.dataset.bot || (td.colSpan < 2 && !(td.closest('tr') && td.closest('tr').classList.contains('second-row')))) return;
             td.dataset.bot = '1';
             const hit = Bots.match(this.rawOf(td));
             if (!hit.length) return;
@@ -2310,7 +2475,7 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                     }
                     const t = '👥 ' + n;
                     if (m.textContent !== t) m.textContent = t;
-                    m.title = `${n} разных аккаунтов с этого IP на странице`;
+                    m.title = `С этого IP на странице заходят ${n} разных ${plural(n, 'аккаунт', 'аккаунта', 'аккаунтов')} — возможно, твинки или боты`;
                 } else if (m) m.remove();
             });
         });
@@ -2330,6 +2495,7 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
     SPREAD: [0, 24, -24, 46, -46, 12, -12, 34, -34, 60],
     recolor() {
         const c = this.cfg();
+        const rowsDone = new Map();
         ['ip', 'nick', 'dev'].forEach(type => {
             const base = this.hueOf(c[type].col);
             const done = Store.get(type + 'Done', {});
@@ -2362,7 +2528,7 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                     if (h != null && !cnt) {
                         cnt = document.createElement('span');
                         cnt.className = 'vdl-cnt';
-                        cnt.title = 'Сколько раз среди загруженных строк. Клик — отметить «разобрано»';
+
                         cnt.onclick = e => {
                             e.preventDefault();
                             e.stopPropagation();
@@ -2376,6 +2542,9 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                     } else if (h == null && cnt) cnt.remove();
                     if (cnt) {
                         if (cnt.textContent !== '×' + n) cnt.textContent = '×' + n;
+                        const what = { ip: 'Этот IP-адрес', nick: 'Этот ник', dev: 'Это устройство (APPMDID)' }[type];
+                        const t = `${what} встречается в ${n} ${plural(n, 'строке', 'строках', 'строках')} на этой странице — одинаковые подсвечены одним цветом.\n${isDone ? 'Отмечено как проверенное. Нажми, чтобы снять отметку.' : 'Нажми, чтобы отметить как проверенное (строки зачеркнутся).'}`;
+                        if (cnt.title !== t) cnt.title = t;
                         cnt.style.background = `hsl(${h},68%,45%)`;
                     }
                     if (h == null && pill) {
@@ -2385,10 +2554,12 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                     const mark = c[type].on && isDone;
                     td.classList.toggle('vdl-done', mark);
                     const tr = td.closest('tr');
-                    if (tr) tr.classList.toggle('vdl-done', mark);
+                    // строку зачёркиваем, если её отметил хоть один вид (иначе выключенные ники снимали отметку IP)
+                    if (tr) rowsDone.set(tr, rowsDone.get(tr) || mark);
                 });
             });
         });
+        rowsDone.forEach((on, tr) => tr.classList.toggle('vdl-done', on));
     },
     hot(type, val, on) {
         document.querySelectorAll(`td[data-hk="${type}"][data-hv="${CSS.escape(val)}"] .vdl-hl`).forEach(p => p.classList.toggle('hot', on));
@@ -2433,7 +2604,7 @@ const TradeView = {
             box.innerHTML = rows.length
                 ? rows
                       .map(
-                          r => `<div class="vdl-tv-row"><span class="who">${U.esc(r.player_name || '—')}</span><span class="tm">${U.esc(fmtDate(r.time))}</span><span class="ds">${U.esc(String(r.transaction_desc || '').replace(/^\[TradeID:\s*\d+\]\s*/, ''))}</span></div>`
+                          r => `<div class="vdl-tv-row"><span class="who">${U.esc(r.player_name || '—')}</span><span class="tm">${U.esc(fmtDate(r.time))}</span><span class="ds">${U.esc(moneyText(String(r.transaction_desc || '').replace(/^\[TradeID:\s*\d+\]\s*/, '')))}</span></div>`
                       )
                       .join('')
                 : '<div class="vdl-tv-row"><span class="ds">По этому номеру трейда записей не нашлось (мог быть давно).</span></div>';
