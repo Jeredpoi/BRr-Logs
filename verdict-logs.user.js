@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.11
+// @version      1.2.0
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.11
+// @version      1.2.0
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.11';
+const VERSION = '1.2.0';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -796,6 +796,31 @@ const CatLearn = {
             const label = [...document.querySelectorAll('label, .form-label, h5, h6')].find(l => /^категори/i.test(l.textContent.trim()));
             const box = label && (label.closest('.mb-3, .form-group, .col, div') || label.parentElement);
             if (box) box.querySelectorAll('[data-value], [value], option').forEach(el => add(el.dataset.value ?? el.getAttribute('value'), el.textContent));
+            // 1б) ссылки категорий в таблице: …?category_id=70 → «Админ действия»
+            document.querySelectorAll('td.td-category a[href]').forEach(a => {
+                const m = a.getAttribute('href').match(/categor[a-z_]*(?:__exact)?[=/](\d{1,4})/i);
+                if (m) add(m[1], a.textContent);
+            });
+            // 1в) список категорий в коде сайта (подключённые скрипты): {id:70,name:"Админ действия"} или 70:"Админ действия"
+            const soft = (id, name) => map[String(id)] || add(id, name);
+            const scripts = [...document.querySelectorAll('script[src]')].map(x => x.src).filter(u => u.startsWith(location.origin)).slice(0, 8);
+            for (const u of scripts) {
+                if (this._seen && this._seen.has(u)) continue;
+                (this._seen = this._seen || new Set()).add(u);
+                try {
+                    let t = await (await fetch(u, { credentials: 'include' })).text();
+                    if (t.length > 8e6 || !/категори|админ|\\u04/i.test(t)) continue;
+                    t = t.replace(/\\u([0-9a-f]{4})/gi, (m, h) => String.fromCharCode(parseInt(h, 16)));
+                    const Q = `["'\`]`;
+                    for (const m of t.matchAll(new RegExp(`(?:id|value|pk|category_id)${Q}?\\s*:\\s*(\\d{1,4})\\s*,\\s*${Q}?(?:name|title|label|text)${Q}?\\s*:\\s*${Q}([^"'\`]{2,60})${Q}`, 'g'))) soft(m[1], m[2]);
+                    for (const m of t.matchAll(new RegExp(`(?:name|title|label|text)${Q}?\\s*:\\s*${Q}([^"'\`]{2,60})${Q}\\s*,\\s*${Q}?(?:id|value|pk|category_id)${Q}?\\s*:\\s*(\\d{1,4})`, 'g'))) soft(m[2], m[1]);
+                    // словарь «номер: название» — только если таких пар много (иначе это не список категорий)
+                    const pairs = [...t.matchAll(new RegExp(`[{,]\\s*${Q}?(\\d{1,4})${Q}?\\s*:\\s*${Q}([А-ЯЁ][^"'\`]{1,59})${Q}`, 'g'))];
+                    if (pairs.length >= 8) pairs.forEach(m => soft(m[1], m[2]));
+                } catch {
+                    /* скрипт не прочитать */
+                }
+            }
             // 2) данные в скриптах страницы рядом со словом «categor»
             const pick = arr => Array.isArray(arr) && arr.forEach(o => o && typeof o === 'object' && add(o.id ?? o.pk ?? o.value ?? o.category_id, o.name ?? o.title ?? o.label ?? o.text ?? o.category_name));
             document.querySelectorAll('script:not([src])').forEach(sc => {
@@ -1625,44 +1650,42 @@ const Feedback = {
 
 // ---------- Админ-действия: подсчёт для куратора по нику администратора и периоду ----------
 const NICK_RE = /\b[A-Z][A-Za-z0-9]{1,20}_[A-Z][A-Za-z0-9]{1,20}\b/g;
+// что считается админ-действиями: ровно эти категории сайта
+// desc — в описании таких записей админ может стоять не в поле «игрок», ищем его и по тексту
+const ADMIN_CATS = [
+    { k: 'act', name: 'Админ действия', re: /^админ\S*\s*действ/i, desc: true },
+    { k: 'gchat', name: 'Админ общий чат', re: /^админ\S*\s*общ\S*\s*чат/i },
+    { k: 'chat', name: 'Админ чат', re: /^админ\S*\s*чат/i },
+    { k: 'block', name: 'Админ блокировки', re: /^админ\S*\s*блок/i, desc: true },
+    { k: 'super', name: 'Супер наказания', re: /супер\s*-?\s*наказ/i, desc: true }
+];
 const AdminView = {
-    DEF: { kw: 'админ, наказан', on: {}, extra: [] },
-    cfg() {
-        const c = Object.assign({}, this.DEF, Store.get('adminCfg', {}));
-        c.on = Object.assign({}, c.on);
-        c.extra = (c.extra || []).map(String);
-        return c;
+    // номера категорий, вписанные вручную: { act: '70', … }
+    ids() {
+        return Object.assign({}, Store.get('adminIds', {}));
     },
-    save(c) {
-        Store.set('adminCfg', { kw: c.kw, on: c.on, extra: c.extra });
+    // категории с номерами: вписанный вручную важнее найденного по названию
+    resolve() {
+        catName({ category_id: 0 });
+        const man = this.ids();
+        const taken = new Set();
+        return ADMIN_CATS.map(c => {
+            let id = man[c.k] ? String(man[c.k]) : '';
+            let auto = false;
+            if (!id) {
+                const hit = Object.keys(CATS).find(k => /^\d+$/.test(k) && !taken.has(k) && c.re.test(String(CATS[k]).trim()));
+                if (hit) (id = hit), (auto = true);
+            }
+            if (id) taken.add(id);
+            return Object.assign({}, c, { id, auto });
+        });
     },
-    kws(c) {
-        return String(c.kw || '')
-            .split(/[,;\n]/)
-            .map(x => x.trim().toLowerCase())
-            .filter(Boolean);
-    },
-    // категория считается админской: ручная галочка важнее ключевых слов
-    isAdmin(id, c) {
-        id = String(id);
-        if (c.on[id] != null) return !!c.on[id];
-        if (c.extra.includes(id)) return true;
-        const name = catName({ category_id: id });
-        if (/^Категория #/.test(name)) return false;
-        const n = name.toLowerCase();
-        return this.kws(c).some(k => n.includes(k));
-    },
+    // все известные категории сайта (для ботов: какие из них чаты)
     known() {
         catName({ category_id: 0 });
-        const c = this.cfg();
-        const ids = new Set(Object.keys(CATS).concat(c.extra, Object.keys(c.on)).filter(k => /^\d+$/.test(k)));
-        return [...ids].map(id => ({ id, name: CATS[id] || catTitle(id, this._rows).replace(/ · #\d+$/, '') }));
-    },
-    selected(c) {
-        const ids = new Set(this.known().filter(x => this.isAdmin(x.id, c)).map(x => x.id));
-        c.extra.forEach(id => c.on[id] !== false && ids.add(id));
-        Object.keys(c.on).forEach(id => c.on[id] && ids.add(id));
-        return [...ids];
+        return Object.keys(CATS)
+            .filter(k => /^\d+$/.test(k))
+            .map(id => ({ id, name: CATS[id] }));
     },
 
     // даты в календаре — московские сутки
@@ -1773,37 +1796,54 @@ const AdminView = {
         const out = this.scrim.querySelector('.vdl-out');
         out.innerHTML = '';
         try {
-            const c = this.cfg();
+            // номера категорий ещё не известны — сначала ищем их на сайте
+            if (this.resolve().some(c => !c.id)) await CatLearn.discover().catch(() => {});
+            if (!alive()) return;
+            const cats = this.resolve();
+            const ready = cats.filter(c => c.id);
+            if (!ready.length) throw new Error('не найдены номера категорий — впиши их в «Что считать»');
             // конец периода — не позже «сейчас»: новые записи во время листания не сдвигают страницы
             const t0 = this.dayStart(a),
                 t1 = Math.min(this.dayStart(b) + 864e5 - 1, Date.now());
             const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
-            // все записи ника за период: из них видно, какие категории у него есть
-            const all = await Api.all({ player_name__exact: nick, ...range }, 25, (p, n) => this.prog(`Записи ${nick}: страница ${p}, записей ${n}…`, gen), null, alive);
-            if (!alive()) return;
-            const ids = this.selected(c);
-            let own,
-                capped = false;
-            if (all.capped && ids.length) {
-                // записей очень много — админские категории считаем отдельными запросами, точно
-                own = [];
-                for (const id of ids) {
-                    const r = await Api.all({ player_name__exact: nick, category_id__exact: id, ...range }, 25, (p, n) => this.prog(`${catName({ category_id: id })}: страница ${p}, записей ${n}…`, gen), null, alive);
-                    if (!alive()) return;
-                    capped = capped || r.capped;
-                    own.push(...r);
-                }
-            } else own = all.filter(r => ids.includes(String(r.category_id)));
-            // по категориям считали отдельно — запись могла попасть на стык страниц дважды
-            if (all.capped && ids.length) {
-                const seen = new Set();
-                own = own.filter(r => {
-                    const k = `${r.time}|${r.category_id}|${r.player_id}|${r.transaction_desc}`;
-                    return seen.has(k) ? false : seen.add(k);
+            const own = [],
+                seen = new Set();
+            let capped = false;
+            const key = r => `${r.time}|${r.category_id}|${r.player_id}|${r.transaction_desc}`;
+            const addRows = (rows, cat) =>
+                rows.forEach(r => {
+                    // только запрошенная категория, даже если сайт вернул лишнее
+                    if (r.category_id != null && String(r.category_id) !== String(cat.id)) return;
+                    const k = key(r);
+                    if (seen.has(k)) return;
+                    seen.add(k);
+                    // запись сайта могла прийти без номера категории — проставляем тот, по которому искали
+                    own.push(r.category_id == null ? Object.assign({}, r, { category_id: cat.id }) : r);
                 });
+            for (const [i, cat] of ready.entries()) {
+                const step = `${cat.name} (${i + 1}/${ready.length})`;
+                // 1) записи, где админ — сам «игрок» записи
+                const r = await Api.all({ player_name__exact: nick, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}: страница ${p}, записей ${n}…`, gen), null, alive);
+                if (!alive()) return;
+                capped = capped || r.capped;
+                addRows(r, cat);
+                // 2) наказания, где игрок записи — нарушитель, а админ назван в тексте первым
+                if (cat.desc) {
+                    const r2 = await Api.all({ transaction_desc__ilike: `%${nick}%`, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}, по тексту: страница ${p}, записей ${n}…`, gen), null, alive);
+                    if (!alive()) return;
+                    capped = capped || r2.capped;
+                    addRows(
+                        r2.filter(x => {
+                            if (sameNick(x.player_name, nick)) return true;
+                            const first = (String(x.transaction_desc || '').match(NICK_RE) || []).find(n => !sameNick(n, x.player_name)) || '';
+                            return sameNick(first, nick);
+                        }),
+                        cat
+                    );
+                }
             }
             this.prog('', gen);
-            this.render(out, { nick, a, b, all, own, ids, capped, tab: 'cat' });
+            this.render(out, { nick, a, b, all: own, own, cats, capped, tab: 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -1814,7 +1854,9 @@ const AdminView = {
     },
 
     render(out, d) {
-        const { nick, a, b, all, own, ids } = d;
+        const { nick, a, b, all, own } = d;
+        const list = d.cats || [];
+        const missing = list.filter(c => !c.id);
         const days = [];
         for (let t = this.dayStart(a); t <= this.dayStart(b); t += 864e5) days.push(this.mskDay(t + 3600e3));
         const perDay = new Map(days.map(x => [x, 0]));
@@ -1823,7 +1865,10 @@ const AdminView = {
             if (perDay.has(k)) perDay.set(k, perDay.get(k) + 1);
         });
         const active = [...perDay.values()].filter(Boolean).length;
-        const cats = group(own, r => String(r.category_id ?? ''));
+        const cnt = new Map();
+        own.forEach(r => cnt.set(String(r.category_id), (cnt.get(String(r.category_id)) || 0) + 1));
+        const cats = list.filter(c => c.id).map(c => ({ k: c.id, name: c.name, n: cnt.get(String(c.id)) || 0 }));
+        const catNm = new Map(cats.map(c => [String(c.k), c.name]));
         const dmax = Math.max(1, ...perDay.values());
         const cmax = Math.max(1, ...cats.map(g => g.n));
         // над кем работал: ники из описаний действий (кроме самого админа)
@@ -1850,7 +1895,7 @@ const AdminView = {
         const fmtDay = s => s.split('-').reverse().slice(0, 2).join('.');
         const ru = s => s.split('-').reverse().join('.');
         const wd = k => ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(k + 'T12:00:00Z').getUTCDay()];
-        const nm = id => catTitle(id, all);
+        const nm = id => catNm.get(String(id)) || catTitle(id, all);
         this.last = d;
         this._rows = all;
         out.innerHTML = `
@@ -1861,12 +1906,12 @@ const AdminView = {
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ' · записей очень много — посчитаны не все, возьми период короче' : ''}</div>
-          ${ids.length ? '' : `<div class="card" style="padding:12px 14px;margin-bottom:10px">Не выбрано ни одной категории админ-действий — отметь их в «Что считать».</div>`}
+          ${missing.length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
             <div class="sec"><h4>По категориям</h4><div class="card">${
                 cats.length
-                    ? cats.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(nm(g.k))}">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`).join('')
+                    ? cats.map(g => `<div class="vdl-bar${g.n ? '' : ' muted'}"><span class="nm" title="${U.esc(nm(g.k))}">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${g.n ? Math.max(3, Math.round((g.n / cmax) * 100)) : 0}%"></b></span><span class="n">${g.n}</span></div>`).join('')
                     : '<div class="vdl-row"><div class="main sub">Админ-действий за период нет</div></div>'
             }</div></div>
           </div>
@@ -1927,6 +1972,8 @@ const AdminView = {
                     bt.remove();
                 })
         );
+        const c2 = out.querySelector('[data-a="cfg2"]');
+        if (c2) c2.onclick = () => this.settings();
         out.querySelector('[data-a="copy"]').onclick = () => {
             const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
             cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
@@ -1947,88 +1994,54 @@ const AdminView = {
 
     // что считать админ-действиями
     settings() {
-        const c = this.cfg();
         if (this.cfgScrim) this.cfgScrim.remove();
-        const list = this.known().sort((x, y) => x.name.localeCompare(y.name, 'ru'));
+        const cats = this.resolve();
         const scrim = (this.cfgScrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal sm">
             <div class="m-head"><span class="vic" style="--c:#7a5cff;width:34px;height:34px;border-radius:10px">${icon('spark', 16)}</span>
               <div><div class="m-title">Что считать админ-действиями</div></div>
               <span style="flex:1"></span><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
-              <div class="sub" style="margin-bottom:6px">Слова в названии категории</div>
-              <input class="inp" data-a="kw" style="width:100%" value="${U.esc(c.kw)}">
-              <div class="sec"><h4>Категории</h4><div class="card" data-l="cats">${
-                  list.length
-                      ? list
-                            .map(
-                                x => `<div class="vdl-mrow" data-row="${x.id}"><input type="checkbox" data-cat="${x.id}" ${this.isAdmin(x.id, c) ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">${U.esc(x.name)}</span><span class="muted">#${x.id}</span><button class="icon-btn" data-ren="${x.id}" title="Переименовать">${icon('pen', 13)}</button></div>`
-                            )
-                            .join('')
-                      : '<div class="vdl-row"><div class="main sub">Пока пусто — добавь категорию ниже</div></div>'
-              }</div></div>
-              <div class="sec"><h4>Добавить категорию</h4>
-                <div class="btns"><input class="inp" data-a="id" placeholder="№" inputmode="numeric" style="width:70px"><input class="inp" data-a="nm" placeholder="Название, например «Админ действия»" style="flex:1;min-width:0"><button class="btn pri" data-a="add">Добавить</button></div></div>
+              <div class="card">${cats
+                  .map(
+                      c => `<div class="vdl-mrow"><span class="vic" style="--c:${c.id ? '#2fbf71' : '#f5a524'};width:22px;height:22px;border-radius:7px">${icon(c.id ? 'check' : 'x', 12)}</span><span class="nm">${U.esc(c.name)}</span><input class="inp" data-k="${c.k}" inputmode="numeric" maxlength="4" placeholder="№" value="${U.esc(c.id)}" title="Номер категории на сайте логов" style="width:74px;height:30px;text-align:center"></div>`
+                  )
+                  .join('')}</div>
+              <div class="btns" style="margin-top:10px"><button class="btn" data-a="find">${icon('search', 14)}Найти номера</button><span style="flex:1"></span><button class="btn pri" data-a="save">Сохранить</button></div>
             </div></div></div>`)
         ));
         const close = () => {
             scrim.remove();
-            this.cfgScrim = null;
+            if (this.cfgScrim === scrim) this.cfgScrim = null;
         };
         scrim.querySelector('[data-a="x"]').onclick = close;
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
-        scrim.querySelector('[data-a="kw"]').onchange = e => {
-            const n = this.cfg();
-            n.kw = e.target.value;
-            this.save(n);
-            scrim.querySelectorAll('[data-cat]').forEach(ch => (ch.checked = this.isAdmin(ch.dataset.cat, n)));
+        scrim.querySelector('[data-a="find"]').onclick = async e => {
+            const bt = e.currentTarget;
+            bt.disabled = true;
+            CatLearn._disc = null;
+            const n = await CatLearn.discover().catch(() => 0);
+            if (!scrim.isConnected) return;
+            const left = this.resolve().filter(c => !c.id).length;
+            toast(left ? `Не нашлось: ${left} — впиши номера вручную` : 'Номера найдены', left ? 'info' : 'ok');
+            if (n || !left) this.settings();
+            else bt.disabled = false;
         };
-        scrim.querySelectorAll('[data-cat]').forEach(
-            ch =>
-                (ch.onchange = () => {
-                    const n = this.cfg();
-                    n.on[ch.dataset.cat] = ch.checked;
-                    this.save(n);
-                })
-        );
-        scrim.querySelectorAll('[data-ren]').forEach(
-            bt =>
-                (bt.onclick = () => {
-                    const row = bt.closest('.vdl-mrow');
-                    const id = bt.dataset.ren;
-                    const span = row.querySelector('.nm');
-                    const inp = U.h(`<input class="inp" data-ren-inp style="flex:1;height:30px" maxlength="40">`);
-                    inp.value = span.textContent;
-                    span.replaceWith(inp);
-                    bt.remove();
-                    inp.focus();
-                    inp.select();
-                    let done = false;
-                    const ok = () => {
-                        if (done) return;
-                        done = true;
-                        const v = inp.value.trim();
-                        if (v) CatLearn.name(id, v);
-                        setTimeout(() => this.cfgScrim === scrim && scrim.isConnected && this.settings(), 0);
-                    };
-                    inp.addEventListener('keydown', e => e.key === 'Enter' && ok());
-                    inp.addEventListener('blur', ok);
-                })
-        );
-        const add = () => {
-            const id = scrim.querySelector('[data-a="id"]').value.trim();
-            const name = scrim.querySelector('[data-a="nm"]').value.trim();
-            if (!/^\d{1,4}$/.test(id)) return toast('Номер категории — число, например 41', 'err');
-            const n = this.cfg();
-            if (!n.extra.includes(id)) n.extra.push(id);
-            n.on[id] = true;
-            this.save(n);
-            if (name) CatLearn.name(id, name);
-            toast(`Добавлено: ${name || 'категория #' + id}`);
-            this.settings();
+        scrim.querySelector('[data-a="save"]').onclick = () => {
+            const man = {};
+            const auto = new Map(cats.filter(c => c.auto).map(c => [c.k, c.id]));
+            let bad = false;
+            scrim.querySelectorAll('[data-k]').forEach(inp => {
+                const v = inp.value.trim();
+                if (v && !/^\d{1,4}$/.test(v)) bad = true;
+                // найденный сам — не закрепляем, чтобы сайт мог его уточнить
+                else if (v && auto.get(inp.dataset.k) !== v) man[inp.dataset.k] = v;
+            });
+            if (bad) return toast('Номер категории — число, например 70', 'err');
+            Store.set('adminIds', man);
+            toast('Сохранено');
+            close();
         };
-        scrim.querySelector('[data-a="add"]').onclick = add;
-        scrim.querySelector('[data-a="nm"]').addEventListener('keydown', e => e.key === 'Enter' && add());
     }
 };
 
@@ -2197,10 +2210,14 @@ const BotView = {
             }
             // подозреваемые: по нику
             const sus = new Map();
+            const nickKey = new Map();
             rows.forEach(x => {
-                const n = x.player_name;
+                const n = String(x.player_name || '').trim();
                 if (!n) return;
-                const g = sus.get(n) || { nick: n, id: x.player_id, n: 0, hits: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
+                const low = n.toLowerCase();
+                const k = (x.player_id != null && x.player_id !== '' && 'id' + x.player_id) || nickKey.get(low) || 'n' + low;
+                nickKey.set(low, k);
+                const g = sus.get(k) || { nick: n, id: x.player_id, n: 0, hits: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
                 g.n++;
                 x._hit.forEach(h => g.hits.add(h));
                 if (x.player_ip) g.ips.add(x.player_ip);
@@ -2210,7 +2227,7 @@ const BotView = {
                     g.last = t;
                     g.sample = String(x.transaction_desc || '');
                 }
-                sus.set(n, g);
+                sus.set(k, g);
             });
             // сколько подозреваемых на каждом IP
             const byIp = new Map();
@@ -2262,10 +2279,17 @@ const BotView = {
         // IP, с которых писало больше всего подозреваемых аккаунтов
         const msgs = new Map();
         rows.forEach(x => x.player_ip && msgs.set(x.player_ip, (msgs.get(x.player_ip) || 0) + 1));
-        const topIps = [...ips]
-            .filter(([, set]) => set.size > 1)
+        const shown = new Set();
+        const topIps = [];
+        [...ips]
             .sort((x, y) => y[1].size - x[1].size || (msgs.get(y[0]) || 0) - (msgs.get(x[0]) || 0))
-            .slice(0, 5);
+            .forEach(([ip, set]) => {
+                if (topIps.length >= 5) return;
+                const fresh = [...set].filter(n => !shown.has(n));
+                if (fresh.length < 2) return;
+                fresh.forEach(n => shown.add(n));
+                topIps.push([ip, new Set(fresh)]);
+            });
         const hl = (text, hits) => {
             const raw = String(text).slice(0, 180);
             const pats = hits.filter(h => raw.toLowerCase().includes(h.toLowerCase())).map(h => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
