@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.8
+// @version      1.1.9
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.8
+// @version      1.1.9
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.8';
+const VERSION = '1.1.9';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -252,9 +252,32 @@ const Layer = {
         this.el().appendChild(node);
         return node;
     },
-    // ни одного «висящего» затемнения: перед открытием окна убираем прежние
-    closeModals() {
-        this.el().querySelectorAll('.scrim').forEach(x => x.remove());
+    // главные окна (Аналитика, Админ-действия, Боты) при закрытии прячутся: открыл снова — всё на месте
+    mains() {
+        return [typeof Panel !== 'undefined' && Panel.scrim, typeof AdminView !== 'undefined' && AdminView.scrim, typeof BotView !== 'undefined' && BotView.scrim].filter(Boolean);
+    },
+    hide(scrim) {
+        if (scrim) scrim.hidden = true;
+    },
+    // показать спрятанное окно поверх остальных
+    show(scrim) {
+        this.closeModals();
+        scrim.hidden = false;
+        this.el().appendChild(scrim);
+    },
+    // ни одного «висящего» затемнения: перед открытием окна убираем прежние (главные — прячем).
+    // hard — убрать совсем (доступ закрыли)
+    closeModals(hard) {
+        const keep = hard ? [] : this.mains();
+        this.el()
+            .querySelectorAll('.scrim')
+            .forEach(x => (keep.includes(x) ? (x.hidden = true) : x.remove()));
+        if (!hard) {
+            if (typeof TradeView !== 'undefined') TradeView.scrim = null;
+            if (typeof AdminView !== 'undefined') AdminView.cfgScrim = null;
+            if (typeof BotView !== 'undefined') BotView.cfgScrim = null;
+            return;
+        }
         if (typeof Panel !== 'undefined') {
             Panel.scrim = null;
             Panel._gen = (Panel._gen || 0) + 1;
@@ -503,6 +526,7 @@ const LOGS_UI_CSS = `
 .vdl-presets .btn { height: 28px; padding: 0 10px; font-size: 12px; }
 .vdl-chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-2); cursor: pointer; }
 .vdl-chk input { width: 15px; height: 15px; }
+.scrim[hidden] { display: none !important; }
 /* галочки — в цвет темы, а не белые квадраты браузера */
 input[type="checkbox"] { appearance: none; -webkit-appearance: none; flex: none; margin: 0; width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid rgba(255,255,255,.22); background: rgba(0,0,0,.28); display: inline-grid; place-content: center; cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s; }
 input[type="checkbox"]:hover { border-color: color-mix(in srgb, var(--acc) 70%, transparent); }
@@ -955,6 +979,14 @@ function sessionsOf(rows) {
 const Panel = {
     // stack — поверх текущего окна (Админ-действия, Боты): закрыл — вернулся к нему
     open(mode = 'nick', value = '', opts = {}) {
+        // без новой проверки — возвращаем прежнее окно с отчётом
+        if (!value && this.scrim) {
+            if (opts.stack) {
+                this.scrim.hidden = false;
+                Layer.el().appendChild(this.scrim);
+            } else Layer.show(this.scrim);
+            return;
+        }
         if (opts.stack) {
             if (this.scrim) this.scrim.remove();
         } else Layer.closeModals();
@@ -977,12 +1009,8 @@ const Panel = {
               <div class="vdl-out"></div>
             </div></div></div>`)
         ));
-        const close = () => {
-            scrim.remove();
-            if (this.scrim === scrim) this.scrim = null;
-            // проверки и вкладки этого окна больше не нужны
-            this._gen = (this._gen || 0) + 1;
-        };
+        // закрыл — окно прячется вместе с отчётом, начатая проверка доходит до конца
+        const close = () => Layer.hide(scrim);
         scrim.querySelector('[data-a="x"]').onclick = close;
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
         const q = scrim.querySelector('[data-a="q"]');
@@ -1665,6 +1693,10 @@ const AdminView = {
     },
 
     open(nick = '') {
+        // без нового ника — прежнее окно с подсчётом
+        if (this.scrim && (!nick || nick === this._nick)) return Layer.show(this.scrim);
+        if (this.scrim) this.scrim.remove();
+        this.scrim = null;
         Layer.closeModals();
         this._gen = (this._gen || 0) + 1;
         const last = Store.get('adminLast', {});
@@ -1687,11 +1719,7 @@ const AdminView = {
             </div></div></div>`)
         ));
         const $ = s => scrim.querySelector(s);
-        const close = () => {
-            scrim.remove();
-            if (this.scrim === scrim) this.scrim = null;
-            this._gen++;
-        };
+        const close = () => Layer.hide(scrim);
         $('[data-a="x"]').onclick = close;
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
         $('[data-a="cfg"]').onclick = () => this.settings();
@@ -1723,6 +1751,7 @@ const AdminView = {
             if (a > b) [a, b] = [b, a];
             if ((this.dayStart(b) - this.dayStart(a)) / 864e5 > 92) return this.msg('Период — не больше 3 месяцев');
             Store.set('adminLast', { nick: nk });
+            this._nick = nk;
             this.count(nk, a, b);
         };
         $('[data-a="go"]').onclick = go;
@@ -2057,7 +2086,7 @@ const Bots = {
     },
     // все известные категории чатов
     allChats() {
-        return AdminView.known().filter(x => /чат|chat/i.test(x.name));
+        return AdminView.known().filter(x => /чат|chat/i.test(x.name) && !/админ|admin/i.test(x.name));
     },
     // по умолчанию боты пишут в игровые чаты: RP и NonRP
     isGameChat(name) {
@@ -2116,6 +2145,7 @@ const BotView = {
         ['24 часа', () => [Date.now() - 864e5, Date.now()]]
     ],
     open() {
+        if (this.scrim) return Layer.show(this.scrim);
         Layer.closeModals();
         this._gen = (this._gen || 0) + 1;
         const sel = Store.get('botRange', 3);
@@ -2134,11 +2164,7 @@ const BotView = {
               <div class="vdl-out"></div>
             </div></div></div>`)
         ));
-        const close = () => {
-            scrim.remove();
-            if (this.scrim === scrim) this.scrim = null;
-            this._gen++;
-        };
+        const close = () => Layer.hide(scrim);
         scrim.querySelector('[data-a="x"]').onclick = close;
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
         scrim.querySelector('[data-a="cfg"]').onclick = () => this.settings();
@@ -2498,7 +2524,7 @@ html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__open-
         if (this.qmo) this.qmo.disconnect();
         if (this._onHash) removeEventListener('hashchange', this._onHash);
         // открытые окна и их загрузки
-        Layer.closeModals();
+        Layer.closeModals(true);
         if (this.head) this.head.remove();
         if (this.st) this.st.remove();
         document.querySelectorAll('.vdl-dates, .vdl-mini, .vdl-trade, .vdl-cnt, .vdl-bot, .vdl-multi').forEach(x => x.remove());
@@ -3057,21 +3083,13 @@ addEventListener(
                 a.blur();
                 return;
             }
-            const top = [...Layer._root.querySelectorAll('.scrim')].pop();
+            const top = [...Layer._root.querySelectorAll('.scrim:not([hidden])')].pop();
             if (!top) return;
+            // главные окна прячутся вместе с результатами
+            if (Layer.mains().includes(top)) return Layer.hide(top);
             top.remove();
-            if (Panel.scrim === top) {
-                Panel.scrim = null;
-                Panel._gen = (Panel._gen || 0) + 1;
-            }
             if (TradeView.scrim === top) TradeView.scrim = null;
-            if (AdminView.scrim === top) AdminView.scrim = null;
             if (AdminView.cfgScrim === top) AdminView.cfgScrim = null;
-            if (AdminView.scrim === top) AdminView._gen = (AdminView._gen || 0) + 1;
-            if (BotView.scrim === top) {
-                BotView.scrim = null;
-                BotView._gen = (BotView._gen || 0) + 1;
-            }
             if (BotView.cfgScrim === top) BotView.cfgScrim = null;
         }
     },
