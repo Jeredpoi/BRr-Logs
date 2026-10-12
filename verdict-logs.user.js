@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.5
+// @version      1.2.6
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.5
+// @version      1.2.6
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.5';
+const VERSION = '1.2.6';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -506,6 +506,20 @@ const LOGS_UI_CSS = `
 .vdl-tabs { display: flex; width: 100%; margin: 4px 0 2px; }
 .vdl-presets .btn.on { background: color-mix(in srgb, var(--acc) 30%, transparent); border-color: color-mix(in srgb, var(--acc) 50%, transparent); color: #fff; }
 .vdl-filter { width: 100%; margin-bottom: 8px; }
+/* фильтры античита: чипы-переключатели */
+.vdl-fbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
+.vdl-fbar .lbl { font-size: 11px; color: var(--tx-3, #8b8f9a); margin-right: 2px; }
+.vdl-fchip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); color: inherit; font: inherit; font-size: 12px; cursor: pointer; transition: background .15s, border-color .15s; }
+.vdl-fchip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vdl-fchip b { font-size: 11px; opacity: .7; }
+.vdl-fchip:hover { border-color: color-mix(in srgb, var(--acc) 60%, transparent); }
+.vdl-fchip.on { background: color-mix(in srgb, var(--acc) 22%, transparent); border-color: var(--acc); }
+.vdl-ftools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.vdl-ftools .inp { flex: 1; min-width: 160px; height: 32px; }
+.vdl-ftools select.inp { flex: none; min-width: 0; width: auto; color: #e8eaee; color-scheme: dark; padding: 0 10px; cursor: pointer; }
+.vdl-ftools select.inp option { background: #14161c; color: #e8eaee; }
+.vdl-bar.pick { cursor: pointer; }
+.vdl-bar.pick.on .nm { color: var(--acc); font-weight: 700; }
 .vdl-desc { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
 .vdl-desc mark { background: color-mix(in srgb, #f5a524 40%, transparent); color: #fff; border-radius: 3px; padding: 0 2px; }
 .vdl-nick { cursor: copy; }
@@ -1527,18 +1541,68 @@ const Panel = {
                 .trim()
                 .replace(/^(анти\s*-?\s*чит|anti\s*-?\s*cheat)\s*/i, '')
                 .slice(0, 70) || 'без описания';
-        const kinds = group(rows, kindOf).slice(0, 8);
+        rows.forEach(r => (r._kind = r._kind || kindOf(r)));
+        const kinds = group(rows, r => r._kind);
         const kmax = Math.max(1, ...kinds.map(g => g.n));
-        const days = new Set(rows.map(r => AdminView.mskDay(new Date(r.time).getTime()))).size;
+        const ips = group(rows.filter(r => r.player_ip), r => r.player_ip);
+        const dayOf = r => AdminView.mskDay(new Date(r.time).getTime());
+        const days = new Set(rows.map(dayOf)).size;
+        // фильтр: выбранные типы (пусто — все), IP, период, текст, порядок
+        const F = (this._acF = this._acF && this._acF.of === rows ? this._acF : { of: rows, kinds: new Set(), ip: '', per: 'all', q: '', sort: 'new' });
+        const PER = [['all', 'Весь период'], ['1', 'Сутки'], ['3', '3 дня'], ['7', '7 дней']];
         box.innerHTML = `
           <div class="vdl-row"><div class="main"><div class="ttl">${rows.length} ${plural(rows.length, 'срабатывание', 'срабатывания', 'срабатываний')}<span class="vdl-tag" style="--c:#e5484d">${days} ${plural(days, 'день', 'дня', 'дней')}</span></div><div class="sub">последнее — ${fmtDate(rows[0].time)}${d.capped ? (Api.order === 'time' ? ' · показаны первые за период' : ' · показаны последние') : ''}</div></div></div>
           <div class="sub" style="padding:10px 2px 4px">За что</div>
-          ${kinds.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`).join('')}
-          <div class="sub" style="padding:10px 2px 4px">Записи</div>
-          ${rows
-              .slice(0, 100)
-              .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${r.player_ip ? `<span class="vdl-tag">${U.esc(r.player_ip)}</span>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
-              .join('')}${rows.length > 100 ? `<div class="sub" style="padding:8px 2px">Показаны 100 из ${rows.length}</div>` : ''}`;
+          <div data-l="bars">${kinds
+              .slice(0, 8)
+              .map(g => `<div class="vdl-bar pick" data-k="${U.esc(g.k)}" title="Показать только это"><span class="nm">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
+              .join('')}</div>
+          <div class="sub" style="padding:12px 2px 6px">Фильтр</div>
+          <div class="vdl-fbar" data-l="kinds"><span class="lbl">Тип</span>${kinds.map(g => `<button class="vdl-fchip" data-k="${U.esc(g.k)}" title="${U.esc(g.k)}"><span>${U.esc(g.k)}</span><b>${g.n}</b></button>`).join('')}</div>
+          ${ips.length > 1 ? `<div class="vdl-fbar" data-l="ips"><span class="lbl">IP</span><button class="vdl-fchip" data-ip="">Все</button>${ips.slice(0, 12).map(g => `<button class="vdl-fchip" data-ip="${U.esc(g.k)}"><span>${U.esc(g.k)}</span><b>${g.n}</b></button>`).join('')}</div>` : ''}
+          <div class="vdl-fbar" data-l="per"><span class="lbl">Когда</span>${PER.map(([v, t]) => `<button class="vdl-fchip" data-per="${v}">${t}</button>`).join('')}</div>
+          <div class="vdl-ftools"><input class="inp" data-a="q" placeholder="Найти в тексте…"><select class="inp" data-a="sort"><option value="new">Сначала новые</option><option value="old">Сначала старые</option></select><button class="btn" data-a="reset">Сбросить</button></div>
+          <div class="sub" data-l="cnt" style="padding:2px 2px 6px"></div>
+          <div data-l="list"></div>`;
+        const $ = q => box.querySelector(q);
+        const draw = () => {
+            const q = F.q.trim().toLowerCase();
+            const from = F.per === 'all' ? 0 : new Date(rows[0].time).getTime() - +F.per * 864e5;
+            let list = rows.filter(r => (!F.kinds.size || F.kinds.has(r._kind)) && (!F.ip || r.player_ip === F.ip) && (!from || new Date(r.time).getTime() >= from) && (!q || String(r.transaction_desc || '').toLowerCase().includes(q)));
+            if (F.sort === 'old') list = list.slice().reverse();
+            box.querySelectorAll('[data-l="kinds"] [data-k], [data-l="bars"] [data-k]').forEach(b => b.classList.toggle('on', F.kinds.has(b.dataset.k)));
+            box.querySelectorAll('[data-ip]').forEach(b => b.classList.toggle('on', b.dataset.ip === F.ip));
+            box.querySelectorAll('[data-per]').forEach(b => b.classList.toggle('on', b.dataset.per === F.per));
+            const any = F.kinds.size || F.ip || F.per !== 'all' || q;
+            $('[data-a="reset"]').hidden = !any;
+            $('[data-l="cnt"]').textContent = any ? `Показано ${list.length} из ${rows.length}` : '';
+            $('[data-l="list"]').innerHTML = list.length
+                ? list
+                      .slice(0, 150)
+                      .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${r.player_ip ? `<span class="vdl-tag">${U.esc(r.player_ip)}</span>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
+                      .join('') + (list.length > 150 ? `<div class="sub" style="padding:8px 2px">Показаны 150 из ${list.length}</div>` : '')
+                : '<div class="vdl-row"><div class="main sub">Под фильтр ничего не подходит</div></div>';
+        };
+        const toggle = k => {
+            F.kinds.has(k) ? F.kinds.delete(k) : F.kinds.add(k);
+            draw();
+        };
+        box.querySelectorAll('[data-l="kinds"] [data-k], [data-l="bars"] [data-k]').forEach(b => (b.onclick = () => toggle(b.dataset.k)));
+        box.querySelectorAll('[data-ip]').forEach(b => (b.onclick = () => ((F.ip = b.dataset.ip), draw())));
+        box.querySelectorAll('[data-per]').forEach(b => (b.onclick = () => ((F.per = b.dataset.per), draw())));
+        const qi = $('[data-a="q"]');
+        qi.value = F.q;
+        qi.oninput = U.debounce(() => ((F.q = qi.value), draw()), 150);
+        const so = $('[data-a="sort"]');
+        so.value = F.sort;
+        so.onchange = () => ((F.sort = so.value), draw());
+        $('[data-a="reset"]').onclick = () => {
+            Object.assign(F, { kinds: new Set(), ip: '', per: 'all', q: '', sort: 'new' });
+            qi.value = '';
+            so.value = 'new';
+            draw();
+        };
+        draw();
     },
     renderTrades(box, list) {
         this.report.trades = list.length;
