@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.0.0
+// @version      1.1.0
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.0.0
+// @version      1.1.0
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -91,6 +91,8 @@ const ICONS = {
     eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
     lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+    bot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/><circle cx="12" cy="3.5" r="1"/>',
     spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>'
 };
 const icon = (n, s = 16) =>
@@ -256,6 +258,7 @@ const Layer = {
         if (typeof Panel !== 'undefined') Panel.scrim = null;
         if (typeof TradeView !== 'undefined') TradeView.scrim = null;
         if (typeof AdminView !== 'undefined') AdminView.scrim = AdminView.cfgScrim = null;
+        if (typeof BotView !== 'undefined') BotView.scrim = BotView.cfgScrim = null;
     },
     accent(info) {
         const el = this.el();
@@ -349,6 +352,12 @@ const LOGS_UI_CSS = `
 .vdl-money .k b + small { margin-top: 2px; }
 .vdl-pos { color: #3ecf8e; } .vdl-neg { color: #ff6b6b; }
 .vdl-tabs { display: flex; width: 100%; margin: 4px 0 2px; }
+.vdl-presets .btn.on { background: color-mix(in srgb, var(--acc) 30%, transparent); border-color: color-mix(in srgb, var(--acc) 50%, transparent); color: #fff; }
+.vdl-filter { width: 100%; margin-bottom: 8px; }
+.vdl-desc { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+.vdl-desc mark { background: color-mix(in srgb, #f5a524 40%, transparent); color: #fff; border-radius: 3px; padding: 0 2px; }
+.vdl-nick { cursor: copy; }
+.vdl-botrow.is-bot { box-shadow: inset 3px 0 0 #e5484d; padding-left: 10px; }
 .vdl-catex { display: flex; align-items: center; gap: 8px; margin: -2px 2px 8px; padding-left: 2px; font-size: 11.5px; color: var(--tx-3); }
 .vdl-catex .ex { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vdl-catex .btn { height: 26px; padding: 0 9px; font-size: 11.5px; }
@@ -721,8 +730,11 @@ function sessionsOf(rows) {
 }
 
 const Panel = {
-    open(mode = 'nick', value = '') {
-        Layer.closeModals();
+    // stack — поверх текущего окна (Админ-действия, Боты): закрыл — вернулся к нему
+    open(mode = 'nick', value = '', opts = {}) {
+        if (opts.stack) {
+            if (this.scrim) this.scrim.remove();
+        } else Layer.closeModals();
         // поколение окна: результаты проверки из закрытого окна в новое не попадают
         this._gen = (this._gen || 0) + 1;
         this.days = this.days || Store.get('days', 30);
@@ -1022,7 +1034,6 @@ const Panel = {
                     }`;
                 })
                 .join('') +
-            (unknown.length ? '<div class="sub" style="padding:8px 2px 0">Сайт отдаёт только номер категории. Названия появятся сами, когда такие записи попадутся в таблице логов, — или подпиши номер сам, он запомнится.</div>' : '') +
             this.capNote(d);
         box.querySelectorAll('.vdl-catex [data-a="name"]').forEach(
             bt =>
@@ -1287,8 +1298,9 @@ const Feedback = {
 };
 
 // ---------- Админ-действия: подсчёт для куратора по нику администратора и периоду ----------
+const NICK_RE = /\b[A-Z][A-Za-z0-9]{1,20}_[A-Z][A-Za-z0-9]{1,20}\b/g;
 const AdminView = {
-    DEF: { kw: 'админ, наказан', on: {}, extra: [], mention: false },
+    DEF: { kw: 'админ, наказан', on: {}, extra: [] },
     cfg() {
         const c = Object.assign({}, this.DEF, Store.get('adminCfg', {}));
         c.on = Object.assign({}, c.on);
@@ -1296,7 +1308,7 @@ const AdminView = {
         return c;
     },
     save(c) {
-        Store.set('adminCfg', c);
+        Store.set('adminCfg', { kw: c.kw, on: c.on, extra: c.extra });
     },
     kws(c) {
         return String(c.kw || '')
@@ -1357,18 +1369,17 @@ const AdminView = {
         const P = this.presets();
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
-            <div class="m-head"><span class="vic" style="--c:var(--acc);width:34px;height:34px;border-radius:10px">${icon('lock', 16)}</span>
-              <div><div class="m-title">Админ-действия</div><div class="m-sub">Подсчёт по нику администратора за период · сервер ${U.esc(Api.server() || '?')}</div></div>
-              <span style="flex:1"></span><button class="btn" data-a="cfg" title="Какие категории считать админ-действиями">${icon('spark', 14)}Что считать</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
+            <div class="m-head"><span class="vic" style="--c:#7a5cff;width:34px;height:34px;border-radius:10px">${icon('lock', 16)}</span>
+              <div><div class="m-title">Админ-действия</div><div class="m-sub">Сервер ${U.esc(Api.server() || '?')} · время МСК</div></div>
+              <span style="flex:1"></span><button class="btn" data-a="cfg">${icon('spark', 14)}Что считать</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
               <div class="vdl-form">
-                <input class="inp" data-a="q" placeholder="Ник администратора: Ivan_Ivanov" value="${U.esc(nick || last.nick || '')}">
+                <input class="inp" data-a="q" placeholder="Ник администратора" value="${U.esc(nick || last.nick || '')}">
                 <label class="vdl-date">с <input class="inp" type="date" data-a="from"></label>
                 <label class="vdl-date">по <input class="inp" type="date" data-a="to"></label>
                 <button class="btn pri" data-a="go">${icon('search', 14)}Посчитать</button>
               </div>
-              <div class="vdl-presets">${P.map((x, i) => `<button class="btn" data-p="${i}">${x[0]}</button>`).join('')}
-                <label class="vdl-chk"><input type="checkbox" data-a="mention"> и упоминания ника в описании</label></div>
+              <div class="vdl-presets">${P.map((x, i) => `<button class="btn" data-p="${i}">${x[0]}</button>`).join('')}</div>
               <div class="vdl-prog"></div>
               <div class="vdl-out"></div>
             </div></div></div>`)
@@ -1384,32 +1395,31 @@ const AdminView = {
         const from = $('[data-a="from"]'),
             to = $('[data-a="to"]'),
             q = $('[data-a="q"]');
-        from.value = last.from || P[4][1];
-        to.value = last.to || P[4][2];
+        // по умолчанию — сегодня
+        from.value = P[0][1];
+        to.value = P[0][2];
         from.max = to.max = P[0][1];
-        $('[data-a="mention"]').checked = !!this.cfg().mention;
-        $('[data-a="mention"]').onchange = e => {
-            const c = this.cfg();
-            c.mention = e.target.checked;
-            this.save(c);
-        };
+        const mark = () => scrim.querySelectorAll('[data-p]').forEach(b => b.classList.toggle('on', P[+b.dataset.p][1] === from.value && P[+b.dataset.p][2] === to.value));
+        from.onchange = to.onchange = mark;
+        mark();
         scrim.querySelectorAll('[data-p]').forEach(b => {
             b.onclick = () => {
                 const p = P[+b.dataset.p];
                 from.value = p[1];
                 to.value = p[2];
+                mark();
                 if (q.value.trim()) go();
             };
         });
         const go = () => {
             const nk = q.value.trim();
-            if (!/^[A-Za-z0-9]+_[A-Za-z0-9]+$/.test(nk)) return this.msg('Впиши ник администратора в формате Имя_Фамилия');
-            if (!from.value || !to.value) return this.msg('Выбери даты «с» и «по»');
+            if (!/^[A-Za-z0-9]+_[A-Za-z0-9]+$/.test(nk)) return this.msg('Впиши ник администратора: Имя_Фамилия');
+            if (!from.value || !to.value) return this.msg('Выбери даты');
             let a = from.value,
                 b = to.value;
             if (a > b) [a, b] = [b, a];
-            if ((this.dayStart(b) - this.dayStart(a)) / 864e5 > 92) return this.msg('Период не больше 3 месяцев — выбери короче');
-            Store.set('adminLast', { nick: nk, from: a, to: b });
+            if ((this.dayStart(b) - this.dayStart(a)) / 864e5 > 92) return this.msg('Период — не больше 3 месяцев');
+            Store.set('adminLast', { nick: nk });
             this.count(nk, a, b);
         };
         $('[data-a="go"]').onclick = go;
@@ -1437,13 +1447,13 @@ const AdminView = {
             const t0 = this.dayStart(a),
                 t1 = this.dayStart(b) + 864e5 - 1;
             const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
-            // 1) все записи ника за период: из них видно, какие категории у него есть
+            // все записи ника за период: из них видно, какие категории у него есть
             const all = await Api.all({ player_name__exact: nick, ...range }, 25, (p, n) => this.prog(`Записи ${nick}: страница ${p}, записей ${n}…`, gen));
             if (gen !== this._gen) return;
             const ids = this.selected(c);
             let own;
             if (all.capped && ids.length) {
-                // записей слишком много — админские категории считаем отдельными запросами, точно
+                // записей очень много — админские категории считаем отдельными запросами, точно
                 own = [];
                 for (const id of ids) {
                     const r = await Api.all({ player_name__exact: nick, category_id__exact: id, ...range }, 25, (p, n) => this.prog(`${catName({ category_id: id })}: страница ${p}, записей ${n}…`, gen));
@@ -1451,17 +1461,8 @@ const AdminView = {
                     own.push(...r);
                 }
             } else own = all.filter(r => ids.includes(String(r.category_id)));
-            // 2) упоминания: ник в описании чужих записей админских категорий
-            let ment = [];
-            if (c.mention && ids.length) {
-                for (const id of ids) {
-                    const r = await Api.all({ transaction_desc__ilike: `%${nick}%`, category_id__exact: id, ...range }, 10, (p, n) => this.prog(`Упоминания в «${catName({ category_id: id })}»: страница ${p}, записей ${n}…`, gen));
-                    if (gen !== this._gen) return;
-                    ment.push(...r.filter(x => !sameNick(x.player_name, nick)));
-                }
-            }
             this.prog('', gen);
-            this.render(out, { nick, a, b, t0, t1, all, own, ment, ids, c });
+            this.render(out, { nick, a, b, all, own, ids, tab: 'cat' });
         } catch (e) {
             if (gen !== this._gen) return;
             this.prog('', gen);
@@ -1472,7 +1473,7 @@ const AdminView = {
     },
 
     render(out, d) {
-        const { nick, a, b, all, own, ment, ids } = d;
+        const { nick, a, b, all, own, ids } = d;
         const days = [];
         for (let t = this.dayStart(a); t <= this.dayStart(b); t += 864e5) days.push(this.mskDay(t + 3600e3));
         const perDay = new Map(days.map(x => [x, 0]));
@@ -1482,7 +1483,6 @@ const AdminView = {
         });
         const active = [...perDay.values()].filter(Boolean).length;
         const cats = group(own, r => String(r.category_id ?? ''));
-        const mcats = group(ment, r => String(r.category_id ?? ''));
         const dmax = Math.max(1, ...perDay.values());
         const cmax = Math.max(1, ...cats.map(g => g.n));
         const other = group(
@@ -1493,65 +1493,100 @@ const AdminView = {
             const r = all.find(x => String(x.category_id) === id);
             return r ? String(r.transaction_desc || '').slice(0, 110) : '';
         };
+        // над кем работал: ники из описаний действий (кроме самого админа)
+        const tg = new Map();
+        own.forEach(r => {
+            const seen = new Set();
+            (String(r.transaction_desc || '').match(NICK_RE) || []).forEach(n => {
+                if (sameNick(n, nick) || seen.has(n)) return;
+                seen.add(n);
+                const g = tg.get(n) || { k: n, n: 0, cats: new Set(), last: 0 };
+                g.n++;
+                g.cats.add(catName(r));
+                g.last = Math.max(g.last, new Date(r.time).getTime() || 0);
+                tg.set(n, g);
+            });
+        });
+        const targets = [...tg.values()].sort((x, y) => y.n - x.n || y.last - x.last);
+        const H = hoursHtml(own.map(r => new Date(r.time).getTime()));
         const fmtDay = s => s.split('-').reverse().slice(0, 2).join('.');
         const ru = s => s.split('-').reverse().join('.');
+        const wd = k => ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(k + 'T12:00:00Z').getUTCDay()];
+        const nm = id => catName({ category_id: id });
         this.last = d;
         out.innerHTML = `
           <div class="vdl-sum">
             <div class="k"><small>Админ-действий</small><b>${own.length}</b></div>
             <div class="k"><small>Дней с действиями</small><b>${active} / ${days.length}</b></div>
-            <div class="k"><small>В среднем в день</small><b>${days.length ? (own.length / days.length).toFixed(1).replace('.0', '') : 0}</b></div>
-            <div class="k"><small>${d.c.mention ? 'Упоминаний' : 'Категорий'}</small><b>${d.c.mention ? ment.length : cats.length}</b></div>
+            <div class="k"><small>В среднем в день</small><b>${days.length ? String(+(own.length / days.length).toFixed(1)) : 0}</b></div>
+            <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${ru(a)} — ${ru(b)} (МСК)${all.capped ? ' · у ника очень много записей — админские посчитаны отдельно' : ''}</div>
-          ${ids.length ? '' : `<div class="card" style="padding:12px 14px;margin-bottom:10px">Не выбрано ни одной категории админ-действий. Отметь их ниже в «Остальные категории этого ника» или в «Что считать».</div>`}
-          <div class="seg vdl-tabs" data-g="atab"><button data-v="cat" class="on">${icon('spark', 13)}По категориям</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="list">${icon('eye', 13)}Список действий</button></div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}</div>
+          ${ids.length ? '' : `<div class="card" style="padding:12px 14px;margin-bottom:10px">Не выбрано ни одной категории админ-действий — отметь их ниже или в «Что считать».</div>`}
+          <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
-            <div class="sec"><h4>Админ-действия по категориям</h4><div class="card">${
+            <div class="sec"><h4>По категориям</h4><div class="card">${
                 cats.length
-                    ? cats
-                          .map(g => {
-                              const m = mcats.find(x => x.k === g.k);
-                              return `<div class="vdl-bar"><span class="nm" title="${U.esc(catName({ category_id: g.k }))}">${U.esc(catName({ category_id: g.k }))}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}${m ? ` <span class="muted">+${m.n}</span>` : ''}</span></div>`;
-                          })
-                          .join('')
-                    : '<div class="vdl-row"><div class="main sub">За период админ-действий не найдено</div></div>'
-            }${mcats.filter(x => !cats.find(g => g.k === x.k)).map(m => `<div class="vdl-bar"><span class="nm">${U.esc(catName({ category_id: m.k }))}</span><span class="tr"></span><span class="n muted">+${m.n}</span></div>`).join('')}
-            ${d.c.mention ? '<div class="sub" style="padding:6px 2px">«+N» — записи, где ник упомянут в описании (действия над игроками)</div>' : ''}</div></div>
-            <div class="sec"><h4>Остальные категории этого ника — отметь, если это тоже админ-действия</h4><div class="card" data-l="other">${
-                other.length
-                    ? other
-                          .map(
-                              g => `<div class="vdl-row"><div class="main"><div class="ttl"><label class="vdl-chk"><input type="checkbox" data-cat="${U.esc(g.k)}"> ${U.esc(catName({ category_id: g.k }))}</label><span class="vdl-tag">${g.n} ${plural(g.n, 'запись', 'записи', 'записей')}</span></div><div class="sub">пример: ${U.esc(sample(g.k)) || '—'}</div></div></div>`
-                          )
-                          .join('')
-                    : '<div class="vdl-row"><div class="main sub">Других категорий у ника за период нет</div></div>'
+                    ? cats.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(nm(g.k))}">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`).join('')
+                    : '<div class="vdl-row"><div class="main sub">Админ-действий за период нет</div></div>'
             }</div></div>
+            ${
+                other.length
+                    ? `<div class="sec"><h4>Другие категории ника</h4><div class="card" data-l="other">${other
+                          .map(
+                              g => `<div class="vdl-row"><div class="main"><div class="ttl"><label class="vdl-chk"><input type="checkbox" data-cat="${U.esc(g.k)}"> ${U.esc(nm(g.k))}</label><span class="vdl-tag">${g.n}</span></div><div class="sub">${U.esc(sample(g.k)) || '—'}</div></div></div>`
+                          )
+                          .join('')}</div></div>`
+                    : ''
+            }
           </div>
-          <div data-at="day" hidden><div class="sec"><h4>Админ-действия по дням (МСК)</h4><div class="card">${days
-              .slice()
-              .reverse()
-              .map(k => `<div class="vdl-bar"><span class="nm">${fmtDay(k)} ${['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(k + 'T12:00:00Z').getUTCDay()]}</span><span class="tr"><b style="width:${perDay.get(k) ? Math.max(3, Math.round((perDay.get(k) / dmax) * 100)) : 0}%"></b></span><span class="n${perDay.get(k) ? '' : ' muted'}">${perDay.get(k)}</span></div>`)
-              .join('')}</div></div></div>
-          <div data-at="list" hidden><div class="sec"><h4>Действия (последние 300)</h4><div class="card" data-l="list">${
-              own.length
-                  ? own
-                        .slice()
-                        .sort((x, y) => new Date(y.time) - new Date(x.time))
-                        .slice(0, 300)
-                        .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub">${U.esc(String(r.transaction_desc || '').slice(0, 220))}</div></div></div>`)
+          <div data-at="day" hidden>
+            ${own.length ? `<div class="sec"><h4>Часы активности</h4><div class="card">${H.html}<div class="sub" style="padding:0 2px 8px">Чаще всего — ${String(H.peak).padStart(2, '0')}:00–${String(H.peak).padStart(2, '0')}:59</div></div></div>` : ''}
+            <div class="sec"><h4>По дням</h4><div class="card">${days
+                .slice()
+                .reverse()
+                .map(k => `<div class="vdl-bar"><span class="nm">${fmtDay(k)} ${wd(k)}</span><span class="tr"><b style="width:${perDay.get(k) ? Math.max(3, Math.round((perDay.get(k) / dmax) * 100)) : 0}%"></b></span><span class="n${perDay.get(k) ? '' : ' muted'}">${perDay.get(k)}</span></div>`)
+                .join('')}</div></div>
+          </div>
+          <div data-at="who" hidden><div class="sec"><h4>Над кем работал</h4><div class="card" data-l="who">${
+              targets.length
+                  ? targets
+                        .slice(0, 50)
+                        .map(
+                            g => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.k)}">${U.esc(g.k)}</span><span class="vdl-tag">${g.n}</span></div><div class="sub">${U.esc([...g.cats].join(', '))} · ${fmtDate(g.last)}</div></div><div class="vdl-btns"><button class="btn" data-an="${U.esc(g.k)}">${icon('search', 13)}Разобрать</button></div></div>`
+                        )
                         .join('')
-                  : '<div class="vdl-row"><div class="main sub">Пусто</div></div>'
+                  : '<div class="vdl-row"><div class="main sub">В действиях нет ников игроков</div></div>'
           }</div></div></div>
+          <div data-at="list" hidden><div class="sec"><h4>Действия</h4>
+            <input class="inp vdl-filter" data-a="flt" placeholder="Найти: ник, слово…">
+            <div class="card" data-l="list"></div></div></div>
           <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
+        // список действий с поиском
+        const sorted = own.slice().sort((x, y) => new Date(y.time) - new Date(x.time));
+        const listBox = out.querySelector('[data-l="list"]');
+        const drawList = () => {
+            const f = out.querySelector('[data-a="flt"]').value.trim().toLowerCase();
+            const rows = f ? sorted.filter(r => `${r.transaction_desc || ''} ${catName(r)}`.toLowerCase().includes(f)) : sorted;
+            listBox.innerHTML = rows.length
+                ? rows
+                      .slice(0, 300)
+                      .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub vdl-desc">${U.esc(String(r.transaction_desc || ''))}</div></div></div>`)
+                      .join('') + (rows.length > 300 ? `<div class="sub" style="padding:8px 2px">Показаны 300 из ${rows.length}</div>` : '')
+                : '<div class="vdl-row"><div class="main sub">Ничего не нашлось</div></div>';
+        };
+        out.querySelector('[data-a="flt"]').oninput = U.debounce(drawList, 150);
+        drawList();
         const tabs = out.querySelector('[data-g="atab"]');
-        tabs.querySelectorAll('button').forEach(
-            bt =>
-                (bt.onclick = () => {
-                    tabs.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === bt));
-                    out.querySelectorAll('[data-at]').forEach(x => (x.hidden = x.dataset.at !== bt.dataset.v));
-                })
-        );
+        const show = t => {
+            d.tab = t;
+            tabs.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.v === t));
+            out.querySelectorAll('[data-at]').forEach(x => (x.hidden = x.dataset.at !== t));
+        };
+        tabs.querySelectorAll('button').forEach(bt => (bt.onclick = () => show(bt.dataset.v)));
+        show(d.tab || 'cat');
+        out.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
+        out.querySelectorAll('[data-an]').forEach(bt => (bt.onclick = () => Panel.open('nick', bt.dataset.an, { stack: true })));
         // отметил категорию — запомнили и пересчитали (без новых запросов, если записей немного)
         out.querySelectorAll('[data-cat]').forEach(
             ch =>
@@ -1561,18 +1596,18 @@ const AdminView = {
                     this.save(c);
                     if (!all.capped) {
                         const ids2 = this.selected(c);
-                        this.render(out, Object.assign({}, d, { c, ids: ids2, own: all.filter(r => ids2.includes(String(r.category_id))), ment: d.ment.filter(r => ids2.includes(String(r.category_id))) }));
+                        this.render(out, Object.assign({}, d, { ids: ids2, own: all.filter(r => ids2.includes(String(r.category_id))) }));
                     } else toast('Отмечено — нажми «Посчитать» ещё раз', 'info');
                 })
         );
         out.querySelector('[data-a="copy"]').onclick = () => {
-            const L = [`Админ-действия ${nick} · ${ru(a)} — ${ru(b)} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
-            cats.forEach(g => {
-                const m = mcats.find(x => x.k === g.k);
-                L.push(`• ${catName({ category_id: g.k })}: ${g.n}${m ? ` (+${m.n} упоминаний)` : ''}`);
-            });
-            L.push('По дням:');
-            days.forEach(k => perDay.get(k) && L.push(`  ${fmtDay(k)} — ${perDay.get(k)}`));
+            const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
+            cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
+            if (days.length > 1) {
+                L.push('По дням:');
+                days.forEach(k => perDay.get(k) && L.push(`  ${fmtDay(k)} — ${perDay.get(k)}`));
+            }
+            if (targets.length) L.push('Чаще всего: ' + targets.slice(0, 5).map(g => `${g.k} (${g.n})`).join(', '));
             navigator.clipboard.writeText(L.join('\n')).then(
                 () => toast('Отчёт скопирован'),
                 () => toast('Не удалось скопировать', 'err')
@@ -1587,20 +1622,23 @@ const AdminView = {
         const list = this.known().sort((x, y) => x.name.localeCompare(y.name, 'ru'));
         const scrim = (this.cfgScrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal sm">
-            <div class="m-head"><span class="vic" style="--c:var(--acc);width:34px;height:34px;border-radius:10px">${icon('spark', 16)}</span>
-              <div><div class="m-title">Что считать админ-действиями</div><div class="m-sub">Категории логов, которые идут в подсчёт</div></div>
+            <div class="m-head"><span class="vic" style="--c:#7a5cff;width:34px;height:34px;border-radius:10px">${icon('spark', 16)}</span>
+              <div><div class="m-title">Что считать админ-действиями</div></div>
               <span style="flex:1"></span><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
-              <div class="sub" style="margin-bottom:6px">Считать категории, в названии которых есть (через запятую):</div>
+              <div class="sub" style="margin-bottom:6px">Слова в названии категории</div>
               <input class="inp" data-a="kw" style="width:100%" value="${U.esc(c.kw)}">
-              <div class="sec"><h4>Известные категории (${list.length})</h4><div class="card" data-l="cats">${
+              <div class="sec"><h4>Категории</h4><div class="card" data-l="cats">${
                   list.length
-                      ? list.map(x => `<div class="vdl-mrow"><input type="checkbox" data-cat="${x.id}" ${this.isAdmin(x.id, c) ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">${U.esc(x.name)}</span><span class="muted">#${x.id}</span></div>`).join('')
-                      : '<div class="vdl-row"><div class="main sub">Названия категорий ещё не известны</div></div>'
+                      ? list
+                            .map(
+                                x => `<div class="vdl-mrow" data-row="${x.id}"><input type="checkbox" data-cat="${x.id}" ${this.isAdmin(x.id, c) ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">${U.esc(x.name)}</span><span class="muted">#${x.id}</span><button class="icon-btn" data-ren="${x.id}" title="Переименовать">${icon('pen', 13)}</button></div>`
+                            )
+                            .join('')
+                      : '<div class="vdl-row"><div class="main sub">Пока пусто — добавь категорию ниже</div></div>'
               }</div></div>
-              <div class="sub" style="margin:8px 0 6px">Добавить категорию по номеру (если название не известно):</div>
-              <div class="btns"><input class="inp" data-a="id" placeholder="например 41" style="flex:1"><button class="btn" data-a="add">Добавить</button></div>
-              <div class="muted" style="font-size:12px;margin-top:10px">Названия скрипт узнаёт со страницы логов: если какой-то категории нет в списке — открой в логах записи этой категории, она появится. Ещё проще — посчитай админа и отметь категории в блоке «Остальные категории этого ника».</div>
+              <div class="sec"><h4>Добавить категорию</h4>
+                <div class="btns"><input class="inp" data-a="id" placeholder="№" inputmode="numeric" style="width:70px"><input class="inp" data-a="nm" placeholder="Название, например «Админ действия»" style="flex:1;min-width:0"><button class="btn pri" data-a="add">Добавить</button></div></div>
             </div></div></div>`)
         ));
         const close = () => {
@@ -1623,15 +1661,339 @@ const AdminView = {
                     this.save(n);
                 })
         );
-        scrim.querySelector('[data-a="add"]').onclick = () => {
-            const v = scrim.querySelector('[data-a="id"]').value.trim();
-            if (!/^\d{1,4}$/.test(v)) return toast('Номер категории — число', 'err');
+        scrim.querySelectorAll('[data-ren]').forEach(
+            bt =>
+                (bt.onclick = () => {
+                    const row = bt.closest('.vdl-mrow');
+                    const id = bt.dataset.ren;
+                    const span = row.querySelector('.nm');
+                    const inp = U.h(`<input class="inp" style="flex:1;height:30px" maxlength="40">`);
+                    inp.value = span.textContent;
+                    span.replaceWith(inp);
+                    bt.remove();
+                    inp.focus();
+                    inp.select();
+                    let done = false;
+                    const ok = () => {
+                        if (done) return;
+                        done = true;
+                        const v = inp.value.trim();
+                        if (v) CatLearn.name(id, v);
+                        setTimeout(() => this.settings(), 0);
+                    };
+                    inp.addEventListener('keydown', e => e.key === 'Enter' && ok());
+                    inp.addEventListener('blur', ok);
+                })
+        );
+        const add = () => {
+            const id = scrim.querySelector('[data-a="id"]').value.trim();
+            const name = scrim.querySelector('[data-a="nm"]').value.trim();
+            if (!/^\d{1,4}$/.test(id)) return toast('Номер категории — число, например 41', 'err');
             const n = this.cfg();
-            if (!n.extra.includes(v)) n.extra.push(v);
-            n.on[v] = true;
+            if (!n.extra.includes(id)) n.extra.push(id);
+            n.on[id] = true;
             this.save(n);
-            toast(`Категория #${v} добавлена`);
+            if (name) CatLearn.name(id, name);
+            toast(`Добавлено: ${name || 'категория #' + id}`);
             this.settings();
+        };
+        scrim.querySelector('[data-a="add"]').onclick = add;
+        scrim.querySelector('[data-a="nm"]').addEventListener('keydown', e => e.key === 'Enter' && add());
+    }
+};
+
+// ---------- Боты: реклама в чатах, много аккаунтов с одного IP, низкий уровень ----------
+const BOT_PHRASES = ['телеграм', 'телеграмм', 'телега', 'тг канал', 'тгк', 't.me', 'шок', 'подпишись', 'подписывайся', 'переходи', 'халява', 'раздача', 'бесплатно'];
+// латиница и цифры, похожие на русские буквы, — к русским; без пробелов и знаков
+const BOT_LOOK = { a: 'а', b: 'в', c: 'с', e: 'е', h: 'н', k: 'к', m: 'м', o: 'о', p: 'р', t: 'т', x: 'х', y: 'у', 0: 'о', 3: 'з', 6: 'б', ё: 'е' };
+function botNorm(s, keepLatin) {
+    const t = String(s || '').toLowerCase();
+    let out = '';
+    for (const ch of t) {
+        if (/[а-яё]/.test(ch)) out += BOT_LOOK[ch] || ch;
+        else if (/[a-z0-9]/.test(ch)) out += keepLatin ? ch : BOT_LOOK[ch] || ch;
+    }
+    return out;
+}
+const Bots = {
+    DEF: { phrases: BOT_PHRASES.join('\n'), level: 2, minAcc: 3, fuzzy: false, levels: true, marks: true },
+    cfg() {
+        return Object.assign({}, this.DEF, Store.get('botCfg', {}));
+    },
+    phrases(c = this.cfg()) {
+        return String(c.phrases || '')
+            .split(/\n|,/)
+            .map(x => x.trim())
+            .filter(x => x.length >= 2);
+    },
+    // какие фразы есть в тексте: точное совпадение и «похожее» (тeлеграм латиницей, т е л е г р а м)
+    match(text, list) {
+        const low = String(text || '').toLowerCase();
+        const norm = botNorm(text);
+        const latin = botNorm(text, true);
+        const hit = [];
+        (list || this._list || (this._list = this.phrases())).forEach(p => {
+            const pl = p.toLowerCase();
+            const bn = botNorm(p);
+            // короткие фразы («шок», «тгк») — только целым словом, иначе «шоколад» тоже реклама
+            if (bn.length <= 4) {
+                const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const wb = '[^а-яёa-z0-9]';
+                const word = new RegExp(`(^|${wb})${esc(pl)}($|${wb})`, 'i');
+                // и по словам с латиницей-двойниками: «тгк», «tgк»
+                const words = low.split(/\s+/).map(w => botNorm(w)).join(' ');
+                if (word.test(low) || new RegExp(`(^|${wb})${esc(bn)}($|${wb})`).test(words)) hit.push(p);
+                return;
+            }
+            if (low.includes(pl) || (bn && norm.includes(bn)) || (/[a-z]/.test(pl) && botNorm(p, true) && latin.includes(botNorm(p, true)))) hit.push(p);
+        });
+        return hit;
+    },
+    reset() {
+        this._list = null;
+    }
+};
+
+const BotView = {
+    RANGES: [
+        ['1 час', () => [Date.now() - 3600e3, Date.now()]],
+        ['3 часа', () => [Date.now() - 3 * 3600e3, Date.now()]],
+        ['6 часов', () => [Date.now() - 6 * 3600e3, Date.now()]],
+        ['Сегодня', () => [AdminView.dayStart(AdminView.mskDay(Date.now())), Date.now()]],
+        ['Вчера', () => {
+            const s = AdminView.dayStart(AdminView.mskDay(Date.now()));
+            return [s - 864e5, s - 1];
+        }],
+        ['24 часа', () => [Date.now() - 864e5, Date.now()]]
+    ],
+    open() {
+        Layer.closeModals();
+        this._gen = (this._gen || 0) + 1;
+        const sel = Store.get('botRange', 3);
+        const scrim = (this.scrim = Layer.add(
+            U.h(`<div class="scrim"><div class="modal vdl">
+            <div class="m-head"><span class="vic" style="--c:#f5a524;width:34px;height:34px;border-radius:10px">${icon('bot', 16)}</span>
+              <div><div class="m-title">Поиск ботов</div><div class="m-sub">Реклама в чатах · аккаунты с одного IP · низкий уровень</div></div>
+              <span style="flex:1"></span><button class="btn" data-a="cfg">${icon('spark', 14)}Что ловить</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
+            <div class="pane">
+              <div class="vdl-form">
+                <div class="seg" data-g="rng">${this.RANGES.map((r, i) => `<button data-v="${i}" class="${i === sel ? 'on' : ''}">${r[0]}</button>`).join('')}</div>
+                <span style="flex:1"></span>
+                <button class="btn pri" data-a="go">${icon('search', 14)}Искать</button>
+              </div>
+              <div class="vdl-prog"></div>
+              <div class="vdl-out"></div>
+            </div></div></div>`)
+        ));
+        const close = () => {
+            scrim.remove();
+            if (this.scrim === scrim) this.scrim = null;
+        };
+        scrim.querySelector('[data-a="x"]').onclick = close;
+        scrim.addEventListener('mousedown', e => e.target === scrim && close());
+        scrim.querySelector('[data-a="cfg"]').onclick = () => this.settings();
+        let r = sel;
+        scrim.querySelectorAll('[data-g="rng"] button').forEach(
+            b =>
+                (b.onclick = () => {
+                    r = +b.dataset.v;
+                    Store.set('botRange', r);
+                    scrim.querySelectorAll('[data-g="rng"] button').forEach(x => x.classList.toggle('on', x === b));
+                })
+        );
+        scrim.querySelector('[data-a="go"]').onclick = () => this.search(this.RANGES[r]);
+        CatLearn.discover().catch(() => {});
+    },
+    prog(t, gen) {
+        if (this.scrim && gen === this._gen) this.scrim.querySelector('.vdl-prog').textContent = t;
+    },
+    async search([label, get]) {
+        if (this.busy) return toast('Подожди, поиск ещё идёт', 'info');
+        this.busy = true;
+        const gen = this._gen;
+        const out = this.scrim.querySelector('.vdl-out');
+        out.innerHTML = '';
+        const c = Bots.cfg();
+        Bots.reset();
+        const list = Bots.phrases(c);
+        try {
+            if (!list.length) throw new Error('список фраз пуст — добавь их в «Что ловить»');
+            const [t0, t1] = get();
+            const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
+            const seen = new Set(),
+                rows = [];
+            const take = arr =>
+                arr.forEach(x => {
+                    const k = `${x.time}|${x.player_name}|${x.transaction_desc}`;
+                    if (seen.has(k)) return;
+                    seen.add(k);
+                    const hit = Bots.match(x.transaction_desc, list);
+                    if (hit.length) rows.push(Object.assign({ _hit: hit }, x));
+                });
+            // 1) точные фразы — поиском сайта
+            for (const [i, p] of list.entries()) {
+                const r = await Api.all({ transaction_desc__ilike: `%${p}%`, ...range }, 5, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length}): страница ${pg}, записей ${n}…`, gen));
+                if (gen !== this._gen) return;
+                take(r);
+            }
+            // 2) похожие написания — читаем чаты целиком
+            if (c.fuzzy) {
+                const chats = AdminView.known().filter(x => /чат/i.test(x.name) && !/админ/i.test(x.name));
+                if (!chats.length) toast('Категории чатов ещё не известны — ищу только точные фразы', 'info');
+                for (const ch of chats) {
+                    const r = await Api.all({ category_id__exact: ch.id, ...range }, 10, (pg, n) => this.prog(`${ch.name}: страница ${pg}, записей ${n}…`, gen));
+                    if (gen !== this._gen) return;
+                    take(r);
+                }
+            }
+            // подозреваемые: по нику
+            const sus = new Map();
+            rows.forEach(x => {
+                const n = x.player_name;
+                if (!n) return;
+                const g = sus.get(n) || { nick: n, id: x.player_id, n: 0, hits: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
+                g.n++;
+                x._hit.forEach(h => g.hits.add(h));
+                if (x.player_ip) g.ips.add(x.player_ip);
+                g.cats.add(catName(x));
+                const t = new Date(x.time).getTime() || 0;
+                if (t >= g.last) {
+                    g.last = t;
+                    g.sample = String(x.transaction_desc || '');
+                }
+                sus.set(n, g);
+            });
+            // сколько подозреваемых на каждом IP
+            const byIp = new Map();
+            sus.forEach(g => g.ips.forEach(ip => byIp.set(ip, (byIp.get(ip) || new Set()).add(g.nick))));
+            sus.forEach(g => (g.acc = Math.max(1, ...[...g.ips].map(ip => byIp.get(ip).size))));
+            const arr = [...sus.values()].sort((x, y) => y.acc - x.acc || y.n - x.n);
+            // уровни: последний вход/выход с «Уровень: N»
+            if (c.levels) {
+                const top = arr.slice(0, 40);
+                for (const [i, g] of top.entries()) {
+                    this.prog(`Уровни: ${i + 1} из ${top.length}…`, gen);
+                    try {
+                        const r = await Api.page({ player_name__exact: g.nick, category_id__exact: 38, transaction_desc__ilike: '%ровень%' }, 0);
+                        if (gen !== this._gen) return;
+                        const m = r.map(x => String(x.transaction_desc || '').match(/ровень\D{0,3}(\d+)/i)).find(Boolean);
+                        g.level = m ? +m[1] : null;
+                    } catch {
+                        g.level = null;
+                    }
+                }
+            }
+            this.prog('', gen);
+            arr.forEach(g => {
+                g.why = [];
+                if (g.level != null && g.level <= c.level) g.why.push(`уровень ${g.level}`);
+                if (g.acc >= c.minAcc) g.why.push(`${g.acc} акк. с одного IP`);
+                if (g.n >= 3) g.why.push(`${g.n} сообщ.`);
+                g.bot = g.why.some(w => /уровень|акк/.test(w));
+            });
+            arr.sort((x, y) => y.bot - x.bot || y.why.length - x.why.length || y.n - x.n);
+            this.render(out, { label, arr, rows, c, ips: byIp });
+        } catch (e) {
+            if (gen !== this._gen) return;
+            this.prog('', gen);
+            out.innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(e.message)}</div>`;
+        } finally {
+            this.busy = false;
+        }
+    },
+    render(out, d) {
+        const { arr, rows, c, ips } = d;
+        const bots = arr.filter(g => g.bot);
+        const groups = [...ips.values()].filter(s => s.size >= c.minAcc).length;
+        const hl = (text, hits) => {
+            let s = U.esc(String(text).slice(0, 180));
+            hits.forEach(h => {
+                const re = new RegExp(U.esc(h).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+                s = s.replace(re, m => `<mark>${m}</mark>`);
+            });
+            return s;
+        };
+        out.innerHTML = `
+          <div class="vdl-sum">
+            <div class="k"><small>Похожи на ботов</small><b>${bots.length}</b></div>
+            <div class="k"><small>Писали рекламу</small><b>${arr.length}</b></div>
+            <div class="k"><small>Сообщений</small><b>${rows.length}</b></div>
+            <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
+          </div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}</div>
+          <div class="card" data-l="list">${
+              arr.length
+                  ? arr
+                        .map(
+                            g => `<div class="vdl-row vdl-botrow ${g.bot ? 'is-bot' : ''}"><div class="main">
+                      <div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>
+                        ${g.bot ? '<span class="vdl-tag" style="--c:#e5484d">похож на бота</span>' : ''}
+                        ${g.level != null ? `<span class="vdl-tag" style="--c:${g.level <= c.level ? '#e5484d' : '#8b8f9a'}">ур. ${g.level}</span>` : ''}
+                        ${[...g.ips].slice(0, 2).map(ip => `<span class="vdl-tag" style="--c:${ips.get(ip).size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}${ips.get(ip).size > 1 ? ` · ${ips.get(ip).size} акк.` : ''}</span>`).join('')}
+                        <span class="vdl-tag" style="--c:#8b8f9a">${g.n} сообщ.</span></div>
+                      <div class="sub vdl-desc">${hl(g.sample, [...g.hits])}</div>
+                      <div class="sub">${fmtDate(g.last)} · ${U.esc([...g.cats].join(', '))}${g.why.length ? ' · ' + U.esc(g.why.join(', ')) : ''}</div></div>
+                    <div class="vdl-btns"><button class="btn" data-an="${U.esc(g.nick)}">${icon('search', 13)}Игрок</button>${g.ips.size ? `<button class="btn" data-ip="${U.esc([...g.ips][0])}">IP</button>` : ''}</div></div>`
+                        )
+                        .join('')
+                  : '<div class="vdl-row"><div class="main sub">За этот период рекламных сообщений не найдено</div></div>'
+          }</div>
+          ${arr.length ? `<div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copyb">${icon('download', 14)}Ники ботов</button><button class="btn" data-a="copy">${icon('download', 14)}Весь список</button></div>` : ''}`;
+        out.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
+        out.querySelectorAll('[data-an]').forEach(b => (b.onclick = () => Panel.open('nick', b.dataset.an, { stack: true })));
+        out.querySelectorAll('[data-ip]').forEach(b => (b.onclick = () => Panel.open('ip', b.dataset.ip, { stack: true })));
+        const copy = (list, what) =>
+            navigator.clipboard.writeText(list.map(g => `${g.nick}${g.level != null ? ` (ур. ${g.level})` : ''} — ${[...g.ips].join(', ')}${g.why.length ? ' — ' + g.why.join(', ') : ''} — «${g.sample.slice(0, 80)}»`).join('\n')).then(
+                () => toast(`Скопировано: ${what}`),
+                () => toast('Не удалось скопировать', 'err')
+            );
+        const cb = out.querySelector('[data-a="copyb"]');
+        if (cb) cb.onclick = () => (bots.length ? copy(bots, `${bots.length} ботов`) : toast('Похожих на ботов нет', 'info'));
+        const ca = out.querySelector('[data-a="copy"]');
+        if (ca) ca.onclick = () => copy(arr, `${arr.length} ников`);
+    },
+    settings() {
+        const c = Bots.cfg();
+        if (this.cfgScrim) this.cfgScrim.remove();
+        const scrim = (this.cfgScrim = Layer.add(
+            U.h(`<div class="scrim"><div class="modal sm">
+            <div class="m-head"><span class="vic" style="--c:#f5a524;width:34px;height:34px;border-radius:10px">${icon('spark', 16)}</span>
+              <div><div class="m-title">Что ловить</div></div>
+              <span style="flex:1"></span><button class="icon-btn" data-a="x">${icon('x')}</button></div>
+            <div class="pane">
+              <div class="sub" style="margin-bottom:6px">Фразы ботов — по одной в строке</div>
+              <textarea class="inp" data-k="phrases" rows="8" style="width:100%;resize:vertical">${U.esc(c.phrases)}</textarea>
+              <div class="sec"><h4>Признаки бота</h4><div class="card">
+                <div class="vdl-mrow"><span class="nm">Уровень не выше</span><input class="inp" type="number" min="0" max="99" data-k="level" value="${c.level}" style="width:70px"></div>
+                <div class="vdl-mrow"><span class="nm">Аккаунтов с одного IP от</span><input class="inp" type="number" min="2" max="50" data-k="minAcc" value="${c.minAcc}" style="width:70px"></div>
+                <div class="vdl-mrow"><input type="checkbox" data-k="levels" ${c.levels ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Проверять уровень</span></div>
+                <div class="vdl-mrow"><input type="checkbox" data-k="fuzzy" ${c.fuzzy ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Похожие написания <span class="muted">(тeлеграм латиницей, т е л е г р а м — дольше)</span></span></div>
+                <div class="vdl-mrow"><input type="checkbox" data-k="marks" ${c.marks ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Пометки в таблице логов</span></div>
+              </div></div>
+              <div class="btns" style="margin-top:10px"><button class="btn" data-a="def">Сбросить фразы</button><span style="flex:1"></span><button class="btn pri" data-a="save">Сохранить</button></div>
+            </div></div></div>`)
+        ));
+        const close = () => {
+            scrim.remove();
+            this.cfgScrim = null;
+        };
+        scrim.querySelector('[data-a="x"]').onclick = close;
+        scrim.addEventListener('mousedown', e => e.target === scrim && close());
+        scrim.querySelector('[data-a="def"]').onclick = () => (scrim.querySelector('[data-k="phrases"]').value = Bots.DEF.phrases);
+        scrim.querySelector('[data-a="save"]').onclick = () => {
+            const v = k => scrim.querySelector(`[data-k="${k}"]`);
+            Store.set('botCfg', {
+                phrases: v('phrases').value,
+                level: Math.max(0, parseInt(v('level').value, 10) || 0),
+                minAcc: Math.max(2, parseInt(v('minAcc').value, 10) || 3),
+                levels: v('levels').checked,
+                fuzzy: v('fuzzy').checked,
+                marks: v('marks').checked
+            });
+            Bots.reset();
+            toast('Сохранено');
+            close();
+            LogsPage.refreshMarks();
         };
     }
 };
@@ -1656,9 +2018,10 @@ const LogsPage = {
         // кнопки — в шапке сайта рядом с «Black Log · сервер»; без шапки — внизу слева
         const head = (this.head = document.createElement('span'));
         head.className = 'vdl-head';
-        head.innerHTML = `<button type="button" class="vdl-hbtn" data-a="an" title="Аналитика по игроку, ID, IP и устройству">${icon('shield', 14)}Аналитика</button><button type="button" class="vdl-hbtn vdl-hadm" data-a="adm" title="Подсчёт админ-действий по нику администратора за период">${icon('lock', 14)}Админ-действия</button><button type="button" class="vdl-hbtn vdl-hcog" data-a="cog" title="Подсветка и оформление">${icon('spark', 14)}</button>`;
+        head.innerHTML = `<button type="button" class="vdl-hbtn" data-a="an" title="Аналитика по игроку, ID, IP и устройству">${icon('shield', 14)}<span class="lbl">Аналитика</span></button><button type="button" class="vdl-hbtn vdl-hadm" data-a="adm" title="Подсчёт админ-действий по нику администратора за период">${icon('lock', 14)}<span class="lbl">Админ-действия</span></button><button type="button" class="vdl-hbtn vdl-hbot" data-a="bot" title="Поиск ботов: реклама, аккаунты с одного IP, низкий уровень">${icon('bot', 14)}<span class="lbl">Боты</span></button><button type="button" class="vdl-hbtn vdl-hcog" data-a="cog" title="Подсветка и оформление">${icon('spark', 14)}</button>`;
         head.querySelector('[data-a="an"]').onclick = () => Panel.open();
         head.querySelector('[data-a="adm"]').onclick = () => AdminView.open();
+        head.querySelector('[data-a="bot"]').onclick = () => BotView.open();
         head.querySelector('[data-a="cog"]').onclick = () => this.settings();
         this.placeHead();
         const st = document.createElement('style');
@@ -1667,7 +2030,12 @@ const LogsPage = {
 .vdl-hbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 999px; border: 0; font: 700 12.5px/1 Inter, "Segoe UI", system-ui, sans-serif; color: #fff; cursor: pointer; white-space: nowrap;
   background: linear-gradient(135deg, ${acc}, color-mix(in srgb, ${acc} 55%, #3aa0ff)); box-shadow: 0 6px 16px -8px ${acc}; }
 .vdl-hbtn:hover { filter: brightness(1.1); }
+/* узкое окно: в шапке только иконки, чтобы не сжимать «Black Log» и «Выйти» */
+@media (max-width: 1200px) { .vdl-hbtn .lbl { display: none; } .vdl-hbtn { padding: 0 9px; } .vdl-head { margin: 0 auto 0 8px; } }
 .vdl-hadm { background: linear-gradient(135deg, color-mix(in srgb, ${acc} 55%, #7a5cff), #7a5cff); box-shadow: 0 6px 16px -8px #7a5cff; }
+.vdl-hbot { background: linear-gradient(135deg, #f5a524, #e5484d); box-shadow: 0 6px 16px -8px #f5a524; }
+.vdl-bot { display: inline-flex; align-items: center; margin-left: 8px; padding: 1px 8px; vertical-align: middle; border-radius: 7px; font-size: 11.5px; font-weight: 750; color: #fff; background: color-mix(in srgb, #e5484d 75%, #f5a524); cursor: help; }
+.vdl-multi { display: inline-flex; align-items: center; margin-left: 6px; padding: 0 6px; height: 18px; vertical-align: middle; border-radius: 999px; font-size: 11px; font-weight: 800; color: #1a1205; background: #f5a524; cursor: help; }
 .vdl-hcog { padding: 0 8px; background: rgba(255,255,255,.08); border: 1px solid color-mix(in srgb, ${acc} 40%, transparent); box-shadow: none; }
 .vdl-hcog:hover { background: ${acc}; }
 .vdl-mini { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 6px; vertical-align: middle; border-radius: 6px; border: 1px solid color-mix(in srgb, ${acc} 45%, transparent); background: color-mix(in srgb, ${acc} 16%, transparent); color: #fff; font-size: 11px; cursor: pointer; opacity: .75; }
@@ -1822,18 +2190,18 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
         let s = '';
         td.childNodes.forEach(n => {
             if (n.nodeType === 3) s += n.nodeValue;
-            else if (n.nodeType === 1 && !/\bvdl-(mini|trade|cnt)\b/.test(n.className)) s += n.textContent;
+            else if (n.nodeType === 1 && !/\bvdl-(mini|trade|cnt|bot|multi)\b/.test(n.className)) s += n.textContent;
         });
         return s.replace(/\s+/g, ' ').trim();
     },
     // сайт (Vue) переиспользует ячейки под новые строки — снимаем всё наше и разбираем заново
     reset(td) {
-        td.querySelectorAll(':scope > .vdl-mini, :scope > .vdl-trade, :scope > .vdl-cnt').forEach(x => x.remove());
+        td.querySelectorAll(':scope > .vdl-mini, :scope > .vdl-trade, :scope > .vdl-cnt, :scope > .vdl-bot, :scope > .vdl-multi').forEach(x => x.remove());
         td.querySelectorAll(':scope > .vdl-hl').forEach(p => {
             while (p.firstChild) td.insertBefore(p.firstChild, p);
             p.remove();
         });
-        ['vdl', 'hk', 'hv', 'trade', 'money', 'vdlSig'].forEach(k => delete td.dataset[k]);
+        ['vdl', 'hk', 'hv', 'trade', 'money', 'vdlSig', 'bot'].forEach(k => delete td.dataset[k]);
         td.classList.remove('vdl-done');
         const tr = td.closest('tr');
         if (tr) tr.classList.remove('vdl-done');
@@ -1898,7 +2266,54 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
             }
             td.dataset.vdlSig = this.rawOf(td);
         });
+        this.botMarks();
         this.recolor();
+    },
+
+    // пометки ботов прямо в таблице: реклама в описании и много разных аккаунтов с одного IP
+    refreshMarks() {
+        document.querySelectorAll('.vdl-bot, .vdl-multi').forEach(x => x.remove());
+        document.querySelectorAll('td[data-bot]').forEach(td => delete td.dataset.bot);
+        this.botMarks();
+    },
+    botMarks() {
+        const c = Bots.cfg();
+        if (!c.marks) return;
+        document.querySelectorAll('td').forEach(td => {
+            if (td.dataset.bot || td.colSpan < 2) return;
+            td.dataset.bot = '1';
+            const hit = Bots.match(this.rawOf(td));
+            if (!hit.length) return;
+            const b = document.createElement('span');
+            b.className = 'vdl-bot';
+            b.textContent = 'бот?';
+            b.title = `Похоже на рекламу ботов: «${hit.join('», «')}»`;
+            td.appendChild(b);
+        });
+        const per = new Map();
+        document.querySelectorAll('td[data-hk="ip"]').forEach(td => {
+            const tr = td.closest('tr');
+            const nk = tr && tr.querySelector('.td-player-name');
+            const g = per.get(td.dataset.hv) || per.set(td.dataset.hv, { tds: [], nicks: new Set() }).get(td.dataset.hv);
+            g.tds.push(td);
+            if (nk && this.rawOf(nk)) g.nicks.add(this.rawOf(nk).toLowerCase());
+        });
+        per.forEach(g => {
+            const n = g.nicks.size;
+            g.tds.forEach(td => {
+                let m = td.querySelector(':scope > .vdl-multi');
+                if (n >= c.minAcc) {
+                    if (!m) {
+                        m = document.createElement('span');
+                        m.className = 'vdl-multi';
+                        td.appendChild(m);
+                    }
+                    const t = '👥 ' + n;
+                    if (m.textContent !== t) m.textContent = t;
+                    m.title = `${n} разных аккаунтов с этого IP на странице`;
+                } else if (m) m.remove();
+            });
+        });
     },
 
     hueOf(hex) {
@@ -2126,6 +2541,8 @@ addEventListener(
             if (TradeView.scrim === top) TradeView.scrim = null;
             if (AdminView.scrim === top) AdminView.scrim = null;
             if (AdminView.cfgScrim === top) AdminView.cfgScrim = null;
+            if (BotView.scrim === top) BotView.scrim = null;
+            if (BotView.cfgScrim === top) BotView.cfgScrim = null;
         }
     },
     true
