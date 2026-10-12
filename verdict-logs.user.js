@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.10
+// @version      1.1.11
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.10
+// @version      1.1.11
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.10';
+const VERSION = '1.1.11';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -1826,14 +1826,6 @@ const AdminView = {
         const cats = group(own, r => String(r.category_id ?? ''));
         const dmax = Math.max(1, ...perDay.values());
         const cmax = Math.max(1, ...cats.map(g => g.n));
-        const other = group(
-            all.filter(r => !ids.includes(String(r.category_id))),
-            r => String(r.category_id ?? '')
-        );
-        const sample = id => {
-            const r = all.find(x => String(x.category_id) === id);
-            return r ? String(r.transaction_desc || '').slice(0, 110) : '';
-        };
         // над кем работал: ники из описаний действий (кроме самого админа)
         const tg = new Map();
         own.forEach(r => {
@@ -1869,7 +1861,7 @@ const AdminView = {
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ' · записей очень много — посчитаны не все, возьми период короче' : ''}</div>
-          ${ids.length ? '' : `<div class="card" style="padding:12px 14px;margin-bottom:10px">Не выбрано ни одной категории админ-действий — отметь их ниже или в «Что считать».</div>`}
+          ${ids.length ? '' : `<div class="card" style="padding:12px 14px;margin-bottom:10px">Не выбрано ни одной категории админ-действий — отметь их в «Что считать».</div>`}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
             <div class="sec"><h4>По категориям</h4><div class="card">${
@@ -1877,15 +1869,6 @@ const AdminView = {
                     ? cats.map(g => `<div class="vdl-bar"><span class="nm" title="${U.esc(nm(g.k))}">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`).join('')
                     : '<div class="vdl-row"><div class="main sub">Админ-действий за период нет</div></div>'
             }</div></div>
-            ${
-                other.length
-                    ? `<div class="sec"><h4>Другие категории ника</h4><div class="card" data-l="other">${other
-                          .map(
-                              g => `<div class="vdl-row"><div class="main"><div class="ttl"><b>${U.esc(nm(g.k))}</b><span class="vdl-tag">${g.n}</span></div><div class="sub">${U.esc(sample(g.k)) || '—'}</div></div><div class="vdl-btns"><button class="btn" data-cat="${U.esc(g.k)}" title="Считать эту категорию админ-действиями">${icon('check', 13)}Считать</button></div></div>`
-                          )
-                          .join('')}</div></div>`
-                    : ''
-            }
           </div>
           <div data-at="day" hidden>
             ${own.length ? `<div class="sec"><h4>Часы активности</h4><div class="card">${H.html}<div class="sub" style="padding:0 2px 8px">Чаще всего — ${String(H.peak).padStart(2, '0')}:00–${String(H.peak).padStart(2, '0')}:59</div></div></div>` : ''}
@@ -1942,19 +1925,6 @@ const AdminView = {
                 (bt.onclick = () => {
                     bt.parentElement.querySelectorAll('.sub[hidden]').forEach(x => (x.hidden = false));
                     bt.remove();
-                })
-        );
-        // отметил категорию — запомнили и пересчитали (без новых запросов, если записей немного)
-        out.querySelectorAll('[data-cat]').forEach(
-            ch =>
-                (ch.onclick = () => {
-                    const c = this.cfg();
-                    c.on[ch.dataset.cat] = true;
-                    this.save(c);
-                    if (!all.capped) {
-                        const ids2 = this.selected(c);
-                        this.render(out, Object.assign({}, d, { ids: ids2, own: all.filter(r => ids2.includes(String(r.category_id))) }));
-                    } else toast('Отмечено — нажми «Посчитать» ещё раз', 'info');
                 })
         );
         out.querySelector('[data-a="copy"]').onclick = () => {
