@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.1
+// @version      1.1.3
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.1
+// @version      1.1.3
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.1';
+const VERSION = '1.1.3';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -228,7 +228,7 @@ const Access = {
             Store.set('access', out);
             return out;
         } catch (e) {
-            if (c && c.lid === info.lid && c.allowed && Date.now() - c.at < 6 * 3600e3) return c;
+            if (c && c.lid === info.lid && c.allowed && Date.now() - c.at < 6 * 3600e3 && (!logsNick || c.logsNick === logsNick)) return c;
             return { allowed: false, state: 'error', why: e.message, code: info.lid.slice(0, 8).toUpperCase() };
         }
     }
@@ -255,10 +255,19 @@ const Layer = {
     // ни одного «висящего» затемнения: перед открытием окна убираем прежние
     closeModals() {
         this.el().querySelectorAll('.scrim').forEach(x => x.remove());
-        if (typeof Panel !== 'undefined') Panel.scrim = null;
+        if (typeof Panel !== 'undefined') {
+            Panel.scrim = null;
+            Panel._gen = (Panel._gen || 0) + 1;
+        }
         if (typeof TradeView !== 'undefined') TradeView.scrim = null;
-        if (typeof AdminView !== 'undefined') AdminView.scrim = AdminView.cfgScrim = null;
-        if (typeof BotView !== 'undefined') BotView.scrim = BotView.cfgScrim = null;
+        if (typeof AdminView !== 'undefined') {
+            AdminView.scrim = AdminView.cfgScrim = null;
+            AdminView._gen = (AdminView._gen || 0) + 1;
+        }
+        if (typeof BotView !== 'undefined') {
+            BotView.scrim = BotView.cfgScrim = null;
+            BotView._gen = (BotView._gen || 0) + 1;
+        }
     },
     accent(info) {
         const el = this.el();
@@ -278,6 +287,7 @@ function copyText(el, get, what) {
     if (el._vdlCopyT) return;
     el._vdlCopyT = true;
     el.addEventListener('click', e => {
+        if (typeof LogsPage !== 'undefined' && LogsPage.off) return;
         const v = String(el._vdlGet() || '').trim();
         if (!v || v === '–' || v === '-') return;
         e.preventDefault();
@@ -292,14 +302,16 @@ function copyText(el, get, what) {
 function moneyText(s) {
     const sp = n => n.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
     return String(s ?? '')
-        .replace(/(^|[^\d.:#№\w])(-?\d{4,})(?=\s*(?:руб|р\.|\$|долл|вирт))/gi, (m, a, n) => a + sp(n))
+        .replace(/(^|[^\d.#№\w])(-?\d{4,})(?=\s*(?:руб|р\.|р(?![а-яё])|\$|долл|вирт))/gi, (m, a, n) => a + sp(n))
         .replace(/(\$\s?)(\d{4,})(?!\d)/g, (m, a, n) => a + sp(n));
 }
 // что админ сделал игроку: вид наказания, срок и причина — из текста записи
 // \b в JS не видит русские буквы — границы слова для кириллицы задаём сами
 const RW = w => new RegExp(`(^|[^а-яёa-z0-9])(${w})($|[^а-яёa-z0-9])`, 'i');
 const ACTIONS = [
-    [/снял (наказание|бан|мут|деморган|варн)|снятие наказ/i, 'снятие наказания'],
+    [/снял (наказание|бан|мут|деморган|варн|блокировк|предупрежд|джайл|jail)|снятие наказ/i, 'снятие наказания'],
+    [/\bunwarn/i, 'снятие предупреждения'],
+    [/unfreeze|разморозил/i, 'разморозка'],
     [/разбан|\bunban/i, 'разбан'],
     [/размут|\bunmute/i, 'размут'],
     [/unjail|выпустил|освободил/i, 'выпуск из деморгана'],
@@ -323,12 +335,12 @@ const ACTIONS = [
 function actionOf(desc, admin) {
     const t = String(desc || '');
     const hit = ACTIONS.find(([re]) => re.test(t));
-    const dur = t.match(/(\d+)\s*(мин(?:ут)?\.?|min|час(?:ов|а)?|ч\.?|дн(?:я|ей)?\.?|д\.|day|days|сут(?:ок|ки)?)/i);
-    const why = t.match(/(?:причин[аы]?|reason)\s*[:-]?\s*([^,.;)\]]{2,40})|\s[—–-]\s*([^,.;)\]]{2,40})\s*$/i);
+    const dur = t.match(/(\d+)\s*(минут[аы]?|мин\.?|min|час(?:ов|а)?|ч\.?|д(?:ень|ня|ней)|дн\.?|д\.|days?|сут(?:ок|ки)?)(?![а-яёa-z])/i);
+    const why = t.match(/(?:причин[аеуы]?|reason)\s*[:-]?\s*([^,;)\]]{2,40}?)\s*\.?\s*(?:$|[,;)\]])|\s[—–-]\s*([^,;)\]]{2,40}?)\s*\.?\s*$/i);
     if (!hit) return moneyText(t.replace(new RegExp(String(admin || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '').replace(/\s+/g, ' ').trim()).slice(0, 90);
     // причина без повтора вида наказания и срока
     let reason = why ? (why[1] || why[2]).trim() : '';
-    if (reason && (/\d/.test(reason) || hit[0].test(reason))) reason = '';
+    if (reason && dur && reason.replace(/\s+/g, '') === dur[0].replace(/\s+/g, '')) reason = '';
     return [hit[1], dur ? `${dur[1]} ${dur[2].replace(/\.$/, '')}` : '', reason].filter(Boolean).join(' · ');
 }
 // название категории, которой нет в списке: по самым частым словам её записей («Продал машину»)
@@ -341,7 +353,7 @@ function guessCat(id, rows) {
             .replace(NICK_RE, ' ')
             .replace(/[\d.,:;()"«»#№+$%/\\-]+/g, ' ')
             .split(/\s+/)
-            .filter(x => x.length > 2 && !/^(рубл|руб|долл|вирт|игрок|для|при|без)/i.test(x))
+            .filter(x => x.length > 2 && !/^(руб\S*|рубл\S*|долл\S*|вирт\S*|игрок[ауе]?|для|при|без)$/i.test(x))
             .slice(0, 3)
             .join(' ');
         if (w) cnt.set(w, (cnt.get(w) || 0) + 1);
@@ -353,6 +365,7 @@ function guessCat(id, rows) {
 }
 // подпись категории в списках: название или «≈ угаданное (#id)»
 function catLabel(id, rows) {
+    if (id === 'none' || id === '' || id == null) return { name: 'Без категории', known: true };
     const n = catName({ category_id: id });
     if (!/^Категория #/.test(n)) return { name: n, known: true };
     const g = guessCat(id, rows);
@@ -367,9 +380,11 @@ function copyNick(el, nick) {
     if (el._vdlCopy) return;
     el._vdlCopy = true;
     el.addEventListener('click', e => {
+        // ячейку отдали под другой текст (не ник) или доступ закрыли — ссылка работает как обычно
+        const nick = el._vdlNick;
+        if (!nick || (typeof LogsPage !== 'undefined' && LogsPage.off)) return;
         e.preventDefault();
         e.stopPropagation();
-        const nick = el._vdlNick;
         navigator.clipboard.writeText(nick).then(
             () => toast('Ник скопирован: ' + nick),
             () => toast('Не удалось скопировать', 'err')
@@ -486,7 +501,7 @@ const Api = {
         this._q = p.catch(() => {});
         return p;
     },
-    async _page(params, offset) {
+    async _page(params, offset, retried) {
         const wait = 1100 - (Date.now() - this.last);
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
         this.last = Date.now();
@@ -496,14 +511,29 @@ const Api = {
         q.set('auto', 'false');
         const url = new URL(`/gslogs/${this.server()}/api/list-game-logs/?${q}`, location.href).href;
         this.mine.add(url);
-        const r = await fetch(url, { credentials: 'include' });
+        // запрос не висит вечно: иначе встанет вся очередь
+        const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = ctl && setTimeout(() => ctl.abort(), 30000);
+        let r;
+        try {
+            r = await fetch(url, { credentials: 'include', signal: ctl ? ctl.signal : undefined });
+        } catch (e) {
+            clearTimeout(timer);
+            throw new Error(e && e.name === 'AbortError' ? 'сайт логов долго не отвечает' : 'нет связи с сайтом логов');
+        }
+        if (!r.ok) clearTimeout(timer);
         if (r.status === 401 || r.status === 403) throw new Error('сайт логов не пускает — войди заново');
         if (!r.ok) {
-            // сайт мог не понять сортировку «сначала новые» — пробуем обычную, но остаёмся на ней, только если она сработала
-            if (this.order === '-time') {
+            // сбой сайта — одна повторная попытка с той же сортировкой
+            if ((r.status >= 500 || r.status === 429) && !retried) {
+                await new Promise(res => setTimeout(res, 1500));
+                return this._page(params, offset, true);
+            }
+            // сайт не понял сортировку «сначала новые» — меняем только на первой странице, чтобы не смешать порядок посреди листания
+            if (r.status >= 400 && r.status < 500 && this.order === '-time' && !offset) {
                 this.order = 'time';
                 try {
-                    return await this._page(params, offset);
+                    return await this._page(params, offset, true);
                 } catch (e) {
                     this.order = '-time';
                     throw e;
@@ -511,7 +541,16 @@ const Api = {
             }
             throw new Error('сайт логов ответил ' + r.status);
         }
-        const d = await r.json();
+        let d;
+        try {
+            d = await r.json();
+        } catch (e) {
+            if (e && e.name === 'AbortError') throw new Error('сайт логов долго не отвечает');
+            // вместо данных пришла страница (вход истёк)
+            throw new Error('сайт логов не пускает — войди заново');
+        } finally {
+            clearTimeout(timer);
+        }
         if (!Array.isArray(d)) throw new Error('сайт логов ответил не списком');
         return d;
     },
@@ -521,13 +560,15 @@ const Api = {
         if (!this.size) this.size = Store.get('pageSize', 0);
         return this.size;
     },
-    // first — уже полученная первая страница (чтобы не качать её второй раз)
-    async all(params, maxPages, onPage, first) {
+    // first — уже полученная первая страница (чтобы не качать её второй раз);
+    // alive() — окно ещё открыто: иначе листание прекращается и не занимает очередь
+    async all(params, maxPages, onPage, first, alive) {
         const out = [];
         out.capped = false;
         let off = 0,
             prev = 0;
         for (let i = 0; i < maxPages; i++) {
+            if (alive && !alive()) break;
             const d = i === 0 && first ? first : await this.page(params, off);
             if (i > 0 && d.length && prev > this.pageSize()) {
                 this.size = prev;
@@ -612,7 +653,7 @@ const IP_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
 const DEV_RE = /APPMDID:\s*([A-Za-z0-9+/=_-]{6,})/i;
 function fmtDate(t) {
     const d = new Date(t);
-    return isNaN(d) ? '' : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return isNaN(d) ? '' : d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 function group(rows, keyOf) {
     const m = new Map();
@@ -620,13 +661,16 @@ function group(rows, keyOf) {
         const k = keyOf(r);
         if (!k) return;
         const t = new Date(r.time).getTime() || 0;
-        const g = m.get(k) || { k, n: 0, first: t, last: t, ids: new Set() };
+        const g = m.get(k) || { k, n: 0, first: t || Infinity, last: t, ids: new Set() };
         g.n++;
-        g.first = Math.min(g.first, t);
-        g.last = Math.max(g.last, t);
+        if (t) {
+            g.first = Math.min(g.first, t);
+            g.last = Math.max(g.last, t);
+        }
         if (r.player_id) g.ids.add(String(r.player_id));
         m.set(k, g);
     });
+    m.forEach(g => g.first === Infinity && (g.first = 0));
     return [...m.values()].sort((a, b) => b.n - a.n || b.last - a.last);
 }
 const devOf = r => {
@@ -637,8 +681,12 @@ const sameNick = (a, b) => String(a || '').toLowerCase() === String(b || '').toL
 
 // деньги и категории из записи API (названия полей — как в фильтрах сайта)
 const numOf = v => {
-    if (v == null || v === '') return NaN;
-    const n = Number(String(v).replace(/[\s ]/g, '').replace(',', '.'));
+    if (v == null) return NaN;
+    let t = String(v).replace(/[\s ]/g, '').replace(/−/g, '-');
+    if (!t) return NaN;
+    // «1,000,000» — разделители тысяч, «1,5» — дробь
+    t = (t.match(/,/g) || []).length > 1 ? t.replace(/,/g, '') : t.replace(',', '.');
+    const n = Number(t);
     return Number.isFinite(n) ? n : NaN;
 };
 const amtOf = r => numOf(r.transaction_amount ?? r.amount);
@@ -651,8 +699,13 @@ function catName(r) {
     if (!CATS || CatLearn.dirty) {
         CatLearn.dirty = false;
         CATS = Object.assign({ 38: 'Подключения / Отключения' }, Store.get('cats', {}));
-        document.querySelectorAll('select option').forEach(o => {
-            if (/^\d+$/.test(o.value) && o.textContent.trim()) CATS[o.value] = o.textContent.trim();
+        document.querySelectorAll('select').forEach(sel => {
+            const box = sel.closest('.mb-3, .form-group, .col, div');
+            const isCat = /categ/i.test(`${sel.name} ${sel.id} ${sel.className}`) || (box && /категори/i.test((box.querySelector('label, .form-label') || {}).textContent || ''));
+            if (!isCat) return;
+            sel.querySelectorAll('option').forEach(o => {
+                if (/^\d+$/.test(o.value) && o.textContent.trim()) CATS[o.value] = o.textContent.trim();
+            });
         });
     }
     const c = r.category;
@@ -706,7 +759,7 @@ const CatLearn = {
             const urls = performance
                 .getEntriesByType('resource')
                 .map(e => e.name)
-                .filter(u => u.startsWith(location.origin) && /categor/i.test(u) && !Api.mine.has(u));
+                .filter(u => u.startsWith(location.origin) && /categor/i.test(u) && !u.includes('/list-game-logs/') && !Api.mine.has(u));
             for (const u of [...new Set(urls)].slice(0, 3)) {
                 try {
                     const r = await fetch(u, { credentials: 'include' });
@@ -720,6 +773,8 @@ const CatLearn = {
                 Store.set('cats', map);
                 this.dirty = true;
             }
+            // ничего не нашли (страница ещё не дорисовалась) — следующий вызов поищет снова
+            if (!n) setTimeout(() => (this._disc = null), 0);
             return n;
         })();
         return this._disc;
@@ -740,20 +795,40 @@ const CatLearn = {
         const rows = await new Promise((res, rej) => {
             const p = (Api._q || Promise.resolve()).then(async () => {
                 Api.mine.add(url);
-                const r = await fetch(url, { credentials: 'include' });
-                return r.ok ? r.json() : [];
+                const wait = 1100 - (Date.now() - Api.last);
+                if (wait > 0) await new Promise(res2 => setTimeout(res2, wait));
+                Api.last = Date.now();
+                const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+                const timer = ctl && setTimeout(() => ctl.abort(), 20000);
+                try {
+                    const r = await fetch(url, { credentials: 'include', signal: ctl ? ctl.signal : undefined });
+                    return r.ok ? await r.json() : [];
+                } finally {
+                    clearTimeout(timer);
+                }
             });
             Api._q = p.catch(() => {});
             p.then(res, rej);
         });
         if (!Array.isArray(rows)) return;
-        const tab = tds.map(td => ({ name: LogsPage.rawOf(td), nick: LogsPage.rawOf(td.closest('tr').querySelector('.td-player-name') || td) }));
+        // ключ строки — ник и текст описания (без пробелов: суммы в таблице с разделителями)
+        const key = (nick, desc) => `${String(nick || '').toLowerCase()}|${String(desc || '').replace(/\s+/g, '')}`;
+        const tab = new Map();
+        tds.forEach(td => {
+            const tr = td.closest('tr');
+            const next = tr && tr.nextElementSibling;
+            const dtd = next && next.classList.contains('second-row') ? next.querySelector('td') : null;
+            if (!dtd) return;
+            const k = key(LogsPage.rawOf(tr.querySelector('.td-player-name') || td), LogsPage.rawOf(dtd));
+            // одинаковые ключи с разными категориями — не учим
+            tab.set(k, tab.has(k) && tab.get(k) !== LogsPage.rawOf(td) ? null : LogsPage.rawOf(td));
+        });
         let n = 0;
-        rows.forEach((r, i) => {
-            const t = tab[i];
-            if (!t || !t.name || r.category_id == null || !sameNick(r.player_name, t.nick)) return;
-            if (map[r.category_id] !== t.name) {
-                map[r.category_id] = t.name;
+        rows.forEach(r => {
+            const name = tab.get(key(r.player_name, moneyText(r.transaction_desc)));
+            if (!name || r.category_id == null) return;
+            if (map[r.category_id] !== name) {
+                map[r.category_id] = name;
                 n++;
             }
         });
@@ -804,6 +879,11 @@ function durHM(ms) {
         m = Math.floor((s % 3600) / 60);
     return h ? `${h} ч ${m} мин` : `${m} мин`;
 }
+// записи о входе; если их нет — все записи
+const conn = rows => {
+    const c = rows.filter(r => /подключ/i.test(r.transaction_desc || ''));
+    return c.length ? c : rows;
+};
 // сессии игрока из логов подключений: пары подключился/отключился
 function sessionsOf(rows) {
     const ev = rows
@@ -812,7 +892,22 @@ function sessionsOf(rows) {
         .sort((a, b) => a.t - b.t);
     const out = [];
     let open = null;
-    ev.forEach(e => {
+    // события одной секунды: если сессия открыта — сначала выход, потом новый вход (переподключение);
+    // если нет — сначала вход, потом выход (зашёл и сразу вылетел)
+    const ordered = [];
+    let isOpen = false;
+    for (let i = 0; i < ev.length; ) {
+        let j = i;
+        while (j < ev.length && ev[j].t === ev[i].t) j++;
+        const grp = ev.slice(i, j);
+        const offs = grp.filter(e => e.off && !e.on),
+            ons = grp.filter(e => !(e.off && !e.on));
+        const part = isOpen ? offs.concat(ons) : ons.concat(offs);
+        ordered.push(...part);
+        part.forEach(e => (isOpen = e.on ? true : e.off ? false : isOpen));
+        i = j;
+    }
+    ordered.forEach(e => {
         if (e.on) {
             if (open) out.push({ start: open.t, end: null, ip: open.ip, plat: open.plat, lost: true });
             open = e;
@@ -852,7 +947,9 @@ const Panel = {
         ));
         const close = () => {
             scrim.remove();
-            this.scrim = null;
+            if (this.scrim === scrim) this.scrim = null;
+            // проверки и вкладки этого окна больше не нужны
+            this._gen = (this._gen || 0) + 1;
         };
         scrim.querySelector('[data-a="x"]').onclick = close;
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
@@ -868,7 +965,15 @@ const Panel = {
             scrim.querySelectorAll('[data-g="days"] button').forEach(b => b.classList.toggle('on', +b.dataset.v === d));
         };
         scrim.querySelectorAll('[data-g="mode"] button').forEach(b => (b.onclick = () => setMode(b.dataset.v)));
-        scrim.querySelectorAll('[data-g="days"] button').forEach(b => (b.onclick = () => setDays(+b.dataset.v)));
+        // сменил период при открытом отчёте — пересчитываем, чтобы отчёт и вкладки были за один период
+        scrim.querySelectorAll('[data-g="days"] button').forEach(
+            b =>
+                (b.onclick = () => {
+                    const was = this.days;
+                    setDays(+b.dataset.v);
+                    if (was !== this.days && q.value.trim() && scrim.querySelector('.vdl-out').children.length) go();
+                })
+        );
         setMode(mode);
         setDays(this.days);
         q.value = value;
@@ -900,29 +1005,46 @@ const Panel = {
     },
     // box — блок вложенной проверки («Кто ещё с этого IP»): ошибка пишется в него, а не поверх отчёта
     async run(fn, box) {
-        if (this.busy) {
-            toast('Подожди, предыдущая проверка ещё идёт', 'info');
-            return false;
+        const want = this._gen;
+        while (this.busy) {
+            if (box || !this.stale()) {
+                toast('Подожди, предыдущая проверка ещё идёт', 'info');
+                return false;
+            }
+            // проверка из закрытого окна сама прекращает листание — ждём её
+            await this._running;
         }
+        // пока ждали, окно сменили или запустили другую проверку — эта уже не нужна
+        if (!box && this._gen !== want) return false;
+        // каждый отчёт — своё поколение: догружающиеся вкладки прошлого отчёта в новый не пишут
+        if (!box) this._gen = (this._gen || 0) + 1;
         this.busy = true;
         this._runGen = this._gen;
         // новая проверка — прежний отчёт убираем сразу, чтобы по нему не кликали, пока грузится новый
         if (!box) this.out('');
-        try {
-            await fn();
-            return true;
-        } catch (e) {
-            if (this.stale()) return false;
-            this.prog('');
-            const msg = `${icon('x', 14)} Не получилось: ${U.esc(e.message)}`;
-            if (box) {
-                box.hidden = false;
-                box.innerHTML = `<div class="sub" style="margin:4px 0">${msg}</div>`;
-            } else this.out(`<div class="card" style="padding:14px">${msg}</div>`);
-            return false;
-        } finally {
-            this.busy = false;
-        }
+        const p = (async () => {
+            try {
+                await fn();
+                return true;
+            } catch (e) {
+                if (this.stale()) return false;
+                this.prog('');
+                const msg = `${icon('x', 14)} Не получилось: ${U.esc(e.message)}`;
+                if (box) {
+                    box.hidden = false;
+                    box.innerHTML = `<div class="sub" style="margin:4px 0">${msg}</div>`;
+                } else this.out(`<div class="card" style="padding:14px">${msg}</div>`);
+                return false;
+            } finally {
+                if (this._running === p) this.busy = false;
+            }
+        })();
+        this._running = p;
+        return p;
+    },
+    // проверка ещё нужна (окно не закрыто и не заменено)
+    alive() {
+        return () => !this.stale();
     },
 
     byNick(nick) {
@@ -932,6 +1054,7 @@ const Panel = {
     byId(id) {
         const v = String(id).trim();
         if (!/^\d+$/.test(v)) {
+            if (this.busy) return toast('ID — это число, например 1016171', 'err');
             this.out(`<div class="card" style="padding:14px">${icon('x', 14)} ID — это число, например 1016171</div>`);
             return;
         }
@@ -941,12 +1064,13 @@ const Panel = {
     // общее ядро: собирает сводку по игроку, выбранному либо по нику, либо по ID
     player(sel, nick, id) {
         return this.run(async () => {
-            const base = Object.assign({}, sel, Api.range(this.days));
+            const days = this.days;
+            const base = Object.assign({}, sel, Api.range(days));
             this.prog('Читаю подключения игрока…');
-            let rows = await Api.all(Object.assign({ category_id__exact: 38 }, base), 10, (p, n) => this.prog(`Подключения: страница ${p}, записей ${n}…`));
+            let rows = await Api.all(Object.assign({ category_id__exact: 38 }, base), 10, (p, n) => this.prog(`Подключения: страница ${p}, записей ${n}…`), null, this.alive());
             let note = '';
             if (!rows.length) {
-                rows = await Api.all(base, 4, (p, n) => this.prog(`Все записи игрока: страница ${p}, записей ${n}…`));
+                rows = await Api.all(base, 4, (p, n) => this.prog(`Все записи игрока: страница ${p}, записей ${n}…`), null, this.alive());
                 note = 'Подключений за период нет — IP взяты из остальных записей игрока.';
             }
             this.prog('');
@@ -956,10 +1080,12 @@ const Panel = {
                 nick = (nk[0] && nk[0].k) || '';
                 if (nk.length > 1) note = (note ? note + ' ' : '') + `На этом ID встречались ники: ${nk.slice(0, 6).map(g => g.k).join(', ')}.`;
             }
-            const ips = group(rows, r => r.player_ip),
-                devs = group(rows, devOf);
-            this.report = { kind: 'nick', nick: nick || ('ID ' + id), id: id || null, days: this.days, ips, devs, related: new Map() };
+            // «входов» — только записи о входе (иначе выходы удваивают счёт)
+            const con = conn(rows);
+            const ips = group(con, r => r.player_ip),
+                devs = group(con, devOf);
             const ids = id ? [id] : [...new Set(rows.map(r => r.player_id).filter(Boolean))];
+            this.report = { kind: 'nick', nick: nick || ('ID ' + id), id: id || null, days, ips, devs, related: new Map(), idSet: new Set(rows.map(r => String(r.player_id || '')).concat(ids.map(String)).filter(Boolean)) };
             const o = this.out(`
               <div class="vdl-sum">
                 <div class="k"><small>Записей</small><b>${rows.length}</b></div>
@@ -976,9 +1102,9 @@ const Panel = {
                 <div class="sec"><h4>Сессии (вход / выход)</h4><div class="card" data-l="ses"></div></div>
                 <div class="sec"><h4>Когда играет (по входам, МСК)</h4><div class="card" data-l="hrs"></div></div>
               </div>
-              <div data-tab="money" hidden><div class="sec"><h4>Деньги за ${this.days} дн.</h4><div class="card" data-l="money"></div></div></div>
-              <div data-tab="act" hidden><div class="sec"><h4>Чем занимался за ${this.days} дн. (записей по категориям)</h4><div class="card" data-l="cats"></div></div></div>
-              <div data-tab="tr" hidden><div class="sec"><h4>Трейды игрока за ${this.days} дн.</h4><div class="card" data-l="tr"></div></div></div>
+              <div data-tab="money" hidden><div class="sec"><h4>Деньги за ${days} дн.</h4><div class="card" data-l="money"></div></div></div>
+              <div data-tab="act" hidden><div class="sec"><h4>Чем занимался за ${days} дн. (записей по категориям)</h4><div class="card" data-l="cats"></div></div></div>
+              <div data-tab="tr" hidden><div class="sec"><h4>Трейды игрока за ${days} дн.</h4><div class="card" data-l="tr"></div></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
             // платформы входа
             const conRows = rows.filter(r => /подключ/i.test(r.transaction_desc || ''));
@@ -1030,7 +1156,7 @@ const Panel = {
             const loaders = {
                 money: box => this.loadAll(base, gen).then(d => gen === this._gen && this.renderMoney(box, d)),
                 act: box => this.loadAll(base, gen).then(d => gen === this._gen && this.renderCats(box, d)),
-                tr: box => this.loadTrades(sel, gen).then(list => gen === this._gen && this.renderTrades(box, list))
+                tr: box => this.loadTrades(sel, gen, base).then(list => gen === this._gen && this.renderTrades(box, list))
             };
             const started = {};
             const show = t => {
@@ -1060,7 +1186,7 @@ const Panel = {
         const key = gen + '|' + JSON.stringify(base);
         if (this._all && this._all.key === key) return this._all.p;
         const LIM = 10;
-        const p = Api.all(base, LIM, (pg, n) => gen === this._gen && this.prog(`Все записи игрока: страница ${pg}, записей ${n}…`)).then(rows => {
+        const p = Api.all(base, LIM, (pg, n) => gen === this._gen && this.prog(`Все записи игрока: страница ${pg}, записей ${n}…`), null, () => gen === this._gen).then(rows => {
             if (gen === this._gen) this.prog('');
             return { rows, capped: rows.capped };
         });
@@ -1076,14 +1202,18 @@ const Panel = {
         const ops = d.rows.map(r => ({ r, a: amtOf(r), t: new Date(r.time).getTime() || 0 })).filter(x => Number.isFinite(x.a) && x.a !== 0);
         const inc = ops.filter(x => x.a > 0).reduce((s, x) => s + x.a, 0);
         const exp = ops.filter(x => x.a < 0).reduce((s, x) => s + x.a, 0);
-        const bals = d.rows.map(r => ({ b: balOf(r), t: new Date(r.time).getTime() || 0 })).filter(x => Number.isFinite(x.b)).sort((a, b) => a.t - b.t);
+        const newestFirst = Api.order === '-time';
+        const bals = d.rows
+            .map((r, i) => ({ b: balOf(r), t: new Date(r.time).getTime() || 0, i }))
+            .filter(x => Number.isFinite(x.b))
+            .sort((a, b) => a.t - b.t || (newestFirst ? b.i - a.i : a.i - b.i));
         const b0 = bals[0], b1 = bals[bals.length - 1];
         const big = ops.slice().sort((a, b) => Math.abs(b.a) - Math.abs(a.a)).slice(0, 10);
         // доходы и расходы по категориям
         const byCat = sign => {
             const m = new Map();
             ops.filter(x => Math.sign(x.a) === sign).forEach(x => {
-                const k = String(x.r.category_id ?? '');
+                const k = String(x.r.category_id ?? 'none');
                 const g = m.get(k) || { k, sum: 0, n: 0 };
                 g.sum += x.a;
                 g.n++;
@@ -1115,19 +1245,19 @@ const Panel = {
           ${cOut.length ? `<div class="sub" style="padding:8px 2px 2px">На что уходили</div>${bars(cOut, 'vdl-neg')}` : ''}
           ${big.length ? `<div class="sub" style="padding:10px 2px 2px">Крупные операции</div>${big.map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="${cls(x.a)}">${fmtMoney(x.a)}</span><span class="vdl-tag">${U.esc(catLabel(x.r.category_id, d.rows).name)}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(moneyText(String(x.r.transaction_desc || '').slice(0, 160)))}</div></div></div>`).join('')}` : ''}
           ${this.capNote(d)}`;
-        this.renameButtons(box, () => this.renderMoney(box, d));
+        this.renameButtons(box, () => this.renderMoney(box, d), d.rows);
     },
     // ✎ у категории без названия: подписать прямо в списке
-    renameButtons(box, redraw) {
+    renameButtons(box, redraw, rows) {
         box.querySelectorAll('.vdl-ren').forEach(
             bt =>
                 (bt.onclick = e => {
                     e.stopPropagation();
                     const id = bt.dataset.cid;
                     const nm = bt.closest('.nm');
-                    nm.innerHTML = `<input class="inp" maxlength="40" placeholder="Название #${U.esc(id)}" style="height:26px;width:100%">`;
+                    nm.innerHTML = `<input class="inp" data-ren-inp maxlength="40" placeholder="Название #${U.esc(id)}" style="height:26px;width:100%">`;
                     const inp = nm.querySelector('input');
-                    inp.value = guessCat(id, []) || '';
+                    inp.value = guessCat(id, rows || []) || '';
                     let done = false;
                     const ok = () => {
                         if (done) return;
@@ -1144,11 +1274,11 @@ const Panel = {
     },
     renderCats(box, d) {
         if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
-        const cats = group(d.rows, r => String(r.category_id ?? '')).slice(0, 14);
+        const cats = group(d.rows, r => String(r.category_id ?? 'none')).slice(0, 14);
         const cmax = cats.length ? cats[0].n : 1;
-        const nm = id => (id === '' ? 'Без категории' : catLabel(id, d.rows).name);
+        const nm = id => catLabel(id, d.rows).name;
         this.report.cats = cats.slice(0, 8).map(g => `${nm(g.k)} — ${g.n}`);
-        const unknown = cats.filter(g => g.k !== '' && !catLabel(g.k, d.rows).known);
+        const unknown = cats.filter(g => !catLabel(g.k, d.rows).known);
         box.innerHTML =
             cats
                 .map(g => {
@@ -1168,7 +1298,7 @@ const Panel = {
                 (bt.onclick = () => {
                     const row = bt.closest('.vdl-catex');
                     const id = row.dataset.id;
-                    row.innerHTML = `<input class="inp" placeholder="Название для категории #${U.esc(id)}" maxlength="40" style="flex:1;height:30px"><button class="btn" data-a="ok">Сохранить</button>`;
+                    row.innerHTML = `<input class="inp" data-ren-inp placeholder="Название для категории #${U.esc(id)}" maxlength="40" style="flex:1;height:30px"><button class="btn" data-a="ok">Сохранить</button>`;
                     const inp = row.querySelector('input');
                     const ok = () => {
                         const v = inp.value.trim();
@@ -1182,8 +1312,10 @@ const Panel = {
                 })
         );
     },
-    async loadTrades(sel, gen) {
-        const tr = await Api.all({ ...sel, transaction_desc__ilike: '%TradeID%', ...Api.range(this.days) }, 6, (pp, nn) => gen === this._gen && this.prog(`Трейды: страница ${pp}, записей ${nn}…`));
+    // период — тот же, что у отчёта (base), а не текущие 7/30/90 дней
+    async loadTrades(sel, gen, base) {
+        const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Api.range(this.days);
+        const tr = await Api.all({ ...sel, transaction_desc__ilike: '%TradeID%', ...range }, 6, (pp, nn) => gen === this._gen && this.prog(`Трейды: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen);
         if (gen === this._gen) this.prog('');
         const byT = new Map();
         tr.forEach(r => {
@@ -1209,26 +1341,29 @@ const Panel = {
     byIp(ip, into, except) {
         return this.run(async () => {
             if (!IP_RE.test(ip)) throw new Error('это не IP-адрес');
-            const rows = await this.ipRows(ip, (p, n) => this.prog(`IP ${ip}: страница ${p}, записей ${n}…`));
+            // вложенная проверка — за период отчёта, своя — за выбранный сейчас
+            const days = into && this.report ? this.report.days : this.days;
+            const rows = await this.ipRows(ip, (p, n) => this.prog(`IP ${ip}: страница ${p}, записей ${n}…`), days);
             this.prog('');
-            const nicks = group(rows, r => r.player_name);
+            const nicks = group(conn(rows), r => r.player_name);
             if (into) return this.fillMore(into, nicks, except, 'IP', ip);
             const devN = group(rows, devOf).length;
-            this.report = { kind: 'ip', ip, days: this.days, nicks };
+            this.report = { kind: 'ip', ip, days, nicks };
+            const rep = this.report;
             const o = this.out(`
               <div class="card" style="padding:12px 14px;margin-bottom:12px"><div class="ttl"><span class="vdl-mono">${U.esc(ip)}</span></div><div class="sub" data-geo>определяю провайдера…</div></div>
               <div class="vdl-sum">
                 <div class="k"><small>Записей</small><b>${rows.length}</b></div>
                 <div class="k"><small>Аккаунтов</small><b>${nicks.length}</b></div>
                 <div class="k"><small>Устройств</small><b>${devN}</b></div>
-                <div class="k"><small>Период</small><b style="font-size:15px">${this.days} дн.</b></div>
+                <div class="k"><small>Период</small><b style="font-size:15px">${days} дн.</b></div>
               </div>
               <div class="sec"><h4>Аккаунты с этого IP</h4><div class="card" data-l="nicks"></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
             Geo.get(ip).then(g => {
-                const el = o.querySelector('[data-geo]');
+                const el = o && o.querySelector('[data-geo]');
                 if (el) el.innerHTML = Geo.html(g);
-                this.report.geo = g;
+                rep.geo = g;
             });
             const l = o.querySelector('[data-l="nicks"]');
             if (!nicks.length) l.innerHTML = '<div class="vdl-row"><div class="main sub">С этого IP за период никто не заходил</div></div>';
@@ -1239,15 +1374,18 @@ const Panel = {
 
     byDev(dev, into, except) {
         return this.run(async () => {
+            const days = into && this.report ? this.report.days : this.days;
             const rows = await Api.all(
-                Object.assign({ category_id__exact: 38, transaction_desc__ilike: `%${dev}%` }, Api.range(this.days)),
+                Object.assign({ category_id__exact: 38, transaction_desc__ilike: `%${dev}%` }, Api.range(days)),
                 6,
-                (p, n) => this.prog(`Устройство: страница ${p}, записей ${n}…`)
+                (p, n) => this.prog(`Устройство: страница ${p}, записей ${n}…`),
+                null,
+                this.alive()
             );
             this.prog('');
             const nicks = group(rows.filter(r => devOf(r) === dev), r => r.player_name);
             if (into) return this.fillMore(into, nicks, except, 'устройство', dev);
-            this.report = { kind: 'dev', dev, days: this.days, nicks };
+            this.report = { kind: 'dev', dev, days, nicks };
             const o = this.out(`
               <div class="vdl-sum"><div class="k"><small>Записей</small><b>${rows.length}</b></div><div class="k"><small>Аккаунтов</small><b>${nicks.length}</b></div></div>
               <div class="sec"><h4>Аккаунты с этого устройства</h4><div class="card" data-l="nicks"></div></div>`);
@@ -1257,13 +1395,13 @@ const Panel = {
         }, into);
     },
 
-    async ipRows(ip, onPage) {
+    async ipRows(ip, onPage, days) {
         for (const key of ['player_ip__exact', 'player_ip__ilike', 'player_ip']) {
-            const params = Object.assign({ category_id__exact: 38, [key]: ip }, Api.range(this.days));
+            const params = Object.assign({ category_id__exact: 38, [key]: ip }, Api.range(days || this.days));
             const first = await Api.page(params, 0);
             if (first.length && first.some(r => r.player_ip && r.player_ip !== ip)) continue;
             if (!first.length || (Api.pageSize() && first.length < Api.pageSize())) return first;
-            return Api.all(params, 10, onPage, first);
+            return Api.all(params, 10, onPage, first, this.alive());
         }
         throw new Error('сайт логов не дал искать по IP');
     },
@@ -1309,11 +1447,12 @@ const Panel = {
     },
     fillMore(box, nicks, except, what, key) {
         box.hidden = false;
-        const others = nicks.filter(x => !sameNick(x.k, except));
+        const own = (this.report && this.report.idSet) || new Set();
+        const others = nicks.filter(x => !sameNick(x.k, except) && ![...x.ids].some(i => own.has(i)));
         if (this.report && this.report.related) this.report.related.set(what + ' ' + key, others.map(x => x.k));
         box.innerHTML = others.length
             ? `<div class="sub" style="margin:2px 0 4px"><span class="vdl-tag" style="--c:#f5a524">возможные твинки: ${others.length}</span></div>`
-            : `<div class="sub" style="margin:4px 0">С этого ${what === 'IP' ? 'IP' : 'устройства'} за ${this.days} дн. заходил только ${U.esc(except)}</div>`;
+            : `<div class="sub" style="margin:4px 0">С этого ${what === 'IP' ? 'IP' : 'устройства'} за ${(this.report && this.report.days) || this.days} дн. заходил только ${U.esc(except)}</div>`;
         others.forEach(g => box.appendChild(this.nickRow(g)));
     },
 
@@ -1325,12 +1464,12 @@ const Panel = {
             L.push(`Игрок ${r.nick}${r.id ? ` (ID ${r.id})` : ''} — за ${r.days} дн. (сервер ${Api.server()})`);
             L.push(`IP-адресов: ${r.ips.length}, устройств: ${r.devs.length}`);
             if (r.plats && r.plats.length) L.push('Платформы: ' + r.plats.join('; '));
-            if (r.ses && r.ses.n) L.push(`Сессий: ${r.ses.n}, в игре ${durHM(r.ses.total)}, в среднем ${durHM(r.ses.avg)}${r.peak >= 0 ? `, чаще всего в ${r.peak}:00 МСК` : ''}`);
+            if (r.ses && r.ses.n) L.push(`Сессий: ${r.ses.n}, в игре ${durHM(r.ses.total)}, в среднем ${durHM(r.ses.avg)}${r.peak >= 0 ? `, чаще всего в ${String(r.peak).padStart(2, '0')}:00 МСК` : ''}`);
             if (r.money) L.push(`Деньги: пришло ${fmtMoney(r.money.inc)}, ушло ${fmtMoney(r.money.exp)}${Number.isFinite(r.money.b0) ? `, баланс ${fmtNum(r.money.b0)} → ${fmtNum(r.money.b1)}` : ''}${r.money.capped ? ' (по последним 500 записям)' : ''}`);
             if (r.cats && r.cats.length) L.push('Категории: ' + r.cats.join('; '));
             if (r.trades != null) L.push(`Трейдов: ${r.trades}`);
             r.ips.slice(0, 15).forEach(g =>
-                L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}${g.geo ? ` · ${[g.geo.country, g.geo.city].filter(Boolean).join(', ')} · ${g.geo.isp}${g.geo.host ? ' (хостинг/VPN?)' : ''}` : ''}`)
+                L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}${g.geo ? ` · ${[g.geo.country, g.geo.city, g.geo.isp].filter(Boolean).join(', ')}${g.geo.host ? ' (хостинг/VPN?)' : ''}` : ''}`)
             );
             if (r.related.size) {
                 L.push('Другие аккаунты:');
@@ -1384,10 +1523,11 @@ const Feedback = {
                 })
         );
         scrim.querySelector('[data-a="send"]').onclick = async e => {
+            const btn = e.currentTarget;
             const title = scrim.querySelector('[data-a="t"]').value.trim(),
                 text = scrim.querySelector('[data-a="b"]').value.trim();
             if (text.length < 3) return toast('Напиши, о чём обращение', 'err');
-            e.currentTarget.disabled = true;
+            btn.disabled = true;
             try {
                 await mailCall({
                     action: 'send',
@@ -1405,7 +1545,7 @@ const Feedback = {
                 close();
             } catch (err) {
                 toast(err.message, 'err');
-                e.currentTarget.disabled = false;
+                btn.disabled = false;
             }
         };
         const box = scrim.querySelector('[data-l="mine"]');
@@ -1456,9 +1596,9 @@ const AdminView = {
     },
     known() {
         catName({ category_id: 0 });
-        return Object.keys(CATS)
-            .filter(k => /^\d+$/.test(k))
-            .map(id => ({ id, name: CATS[id] }));
+        const c = this.cfg();
+        const ids = new Set(Object.keys(CATS).concat(c.extra, Object.keys(c.on)).filter(k => /^\d+$/.test(k)));
+        return [...ids].map(id => ({ id, name: CATS[id] || 'Категория #' + id }));
     },
     selected(c) {
         const ids = new Set(this.known().filter(x => this.isAdmin(x.id, c)).map(x => x.id));
@@ -1469,7 +1609,7 @@ const AdminView = {
 
     // даты в календаре — московские сутки
     mskDay(t) {
-        return new Date(t + 3 * 3600e3).toISOString().slice(0, 10);
+        return Number.isFinite(t) ? new Date(t + 3 * 3600e3).toISOString().slice(0, 10) : '';
     },
     dayStart(s) {
         const [y, m, d] = s.split('-').map(Number);
@@ -1516,6 +1656,7 @@ const AdminView = {
         const close = () => {
             scrim.remove();
             if (this.scrim === scrim) this.scrim = null;
+            this._gen++;
         };
         $('[data-a="x"]').onclick = close;
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
@@ -1565,38 +1706,51 @@ const AdminView = {
     },
 
     async count(nick, a, b) {
-        if (this.busy) return toast('Подожди, подсчёт ещё идёт', 'info');
+        // подсчёт из закрытого окна не мешает: он уже остановлен поколением
+        if (this.busy && this._busyGen === this._gen) return toast('Подожди, подсчёт ещё идёт', 'info');
         this.busy = true;
-        const gen = this._gen;
+        const gen = (this._busyGen = this._gen);
+        const alive = () => gen === this._gen;
         const out = this.scrim.querySelector('.vdl-out');
         out.innerHTML = '';
         try {
             const c = this.cfg();
+            // конец периода — не позже «сейчас»: новые записи во время листания не сдвигают страницы
             const t0 = this.dayStart(a),
-                t1 = this.dayStart(b) + 864e5 - 1;
+                t1 = Math.min(this.dayStart(b) + 864e5 - 1, Date.now());
             const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
             // все записи ника за период: из них видно, какие категории у него есть
-            const all = await Api.all({ player_name__exact: nick, ...range }, 25, (p, n) => this.prog(`Записи ${nick}: страница ${p}, записей ${n}…`, gen));
-            if (gen !== this._gen) return;
+            const all = await Api.all({ player_name__exact: nick, ...range }, 25, (p, n) => this.prog(`Записи ${nick}: страница ${p}, записей ${n}…`, gen), null, alive);
+            if (!alive()) return;
             const ids = this.selected(c);
-            let own;
+            let own,
+                capped = false;
             if (all.capped && ids.length) {
                 // записей очень много — админские категории считаем отдельными запросами, точно
                 own = [];
                 for (const id of ids) {
-                    const r = await Api.all({ player_name__exact: nick, category_id__exact: id, ...range }, 25, (p, n) => this.prog(`${catName({ category_id: id })}: страница ${p}, записей ${n}…`, gen));
-                    if (gen !== this._gen) return;
+                    const r = await Api.all({ player_name__exact: nick, category_id__exact: id, ...range }, 25, (p, n) => this.prog(`${catName({ category_id: id })}: страница ${p}, записей ${n}…`, gen), null, alive);
+                    if (!alive()) return;
+                    capped = capped || r.capped;
                     own.push(...r);
                 }
             } else own = all.filter(r => ids.includes(String(r.category_id)));
+            // по категориям считали отдельно — запись могла попасть на стык страниц дважды
+            if (all.capped && ids.length) {
+                const seen = new Set();
+                own = own.filter(r => {
+                    const k = `${r.time}|${r.category_id}|${r.player_id}|${r.transaction_desc}`;
+                    return seen.has(k) ? false : seen.add(k);
+                });
+            }
             this.prog('', gen);
-            this.render(out, { nick, a, b, all, own, ids, tab: 'cat' });
+            this.render(out, { nick, a, b, all, own, ids, capped, tab: 'cat' });
         } catch (e) {
-            if (gen !== this._gen) return;
+            if (!alive()) return;
             this.prog('', gen);
             this.msg('Не получилось: ' + e.message);
         } finally {
-            this.busy = false;
+            if (this._busyGen === gen) this.busy = false;
         }
     },
 
@@ -1632,7 +1786,8 @@ const AdminView = {
                 g.n++;
                 const t = new Date(r.time).getTime() || 0;
                 const act = actionOf(r.transaction_desc, nick);
-                const kind = act.split(' · ')[0];
+                const hitA = ACTIONS.find(([re]) => re.test(String(r.transaction_desc || '')));
+                const kind = hitA ? hitA[1] : 'действие';
                 g.kinds.set(kind, (g.kinds.get(kind) || 0) + 1);
                 g.acts.push({ t, act, desc: r.transaction_desc });
                 g.last = Math.max(g.last, t);
@@ -1653,7 +1808,7 @@ const AdminView = {
             <div class="k"><small>В среднем в день</small><b>${days.length ? String(+(own.length / days.length).toFixed(1)) : 0}</b></div>
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}</div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ' · записей очень много — посчитаны не все, возьми период короче' : ''}</div>
           ${ids.length ? '' : `<div class="card" style="padding:12px 14px;margin-bottom:10px">Не выбрано ни одной категории админ-действий — отметь их ниже или в «Что считать».</div>`}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
@@ -1685,7 +1840,7 @@ const AdminView = {
                   ? targets
                         .slice(0, 50)
                         .map(
-                            g => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.k)}">${U.esc(g.k)}</span>${[...g.kinds].sort((x, y) => y[1] - x[1]).map(([k, n]) => `<span class="vdl-tag" style="--c:${/бан|блок|деморган/.test(k) ? '#e5484d' : /мут|предупр|кик/.test(k) ? '#f5a524' : '#3aa0ff'}">${U.esc(k.length > 24 ? 'действие' : k)}${n > 1 ? ' ×' + n : ''}</span>`).join('')}</div>${g.acts
+                            g => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.k)}">${U.esc(g.k)}</span>${[...g.kinds].sort((x, y) => y[1] - x[1]).map(([k, n]) => `<span class="vdl-tag" style="--c:${/^раз|снят|выпуск/.test(k) ? '#2fbf71' : /бан|блок|деморган/.test(k) ? '#e5484d' : /мут|предупр|кик/.test(k) ? '#f5a524' : '#3aa0ff'}">${U.esc(k)}${n > 1 ? ' ×' + n : ''}</span>`).join('')}</div>${g.acts
                                 .sort((x, y) => y.t - x.t)
                                 .map((x, i) => `<div class="sub" ${i > 2 ? 'hidden' : ''} title="${U.esc(x.desc)}">${fmtDate(x.t)} — ${U.esc(x.act)}</div>`)
                                 .join('')}${g.acts.length > 3 ? `<button class="vdl-more-btn" data-more>и ещё ${g.acts.length - 3} — показать</button>` : ''}</div><div class="vdl-btns"><button class="btn" data-an="${U.esc(g.k)}">${icon('search', 13)}Разобрать</button></div></div>`
@@ -1812,7 +1967,7 @@ const AdminView = {
                     const row = bt.closest('.vdl-mrow');
                     const id = bt.dataset.ren;
                     const span = row.querySelector('.nm');
-                    const inp = U.h(`<input class="inp" style="flex:1;height:30px" maxlength="40">`);
+                    const inp = U.h(`<input class="inp" data-ren-inp style="flex:1;height:30px" maxlength="40">`);
                     inp.value = span.textContent;
                     span.replaceWith(inp);
                     bt.remove();
@@ -1824,7 +1979,7 @@ const AdminView = {
                         done = true;
                         const v = inp.value.trim();
                         if (v) CatLearn.name(id, v);
-                        setTimeout(() => this.settings(), 0);
+                        setTimeout(() => this.cfgScrim === scrim && scrim.isConnected && this.settings(), 0);
                     };
                     inp.addEventListener('keydown', e => e.key === 'Enter' && ok());
                     inp.addEventListener('blur', ok);
@@ -1848,9 +2003,9 @@ const AdminView = {
 };
 
 // ---------- Боты: реклама в чатах, много аккаунтов с одного IP, низкий уровень ----------
-const BOT_PHRASES = ['телеграм', 'телеграмм', 'телега', 'тг канал', 'тгк', 't.me', 'шок', 'подпишись', 'подписывайся', 'переходи', 'халява', 'раздача', 'бесплатно'];
+const BOT_PHRASES = ['телеграм', 'телеграмм', 'телега', 'тг канал', 'тгк', 't.me', 'шок', 'подпишись', 'подписывайся', 'переходи по ссылке', 'переходи в', 'халява', 'раздача', 'бесплатно'];
 // латиница и цифры, похожие на русские буквы, — к русским; без пробелов и знаков
-const BOT_LOOK = { a: 'а', b: 'в', c: 'с', e: 'е', h: 'н', k: 'к', m: 'м', o: 'о', p: 'р', t: 'т', x: 'х', y: 'у', 0: 'о', 3: 'з', 6: 'б', ё: 'е' };
+const BOT_LOOK = { a: 'а', b: 'в', c: 'с', e: 'е', g: 'г', h: 'н', k: 'к', m: 'м', n: 'п', o: 'о', p: 'р', r: 'г', t: 'т', u: 'и', x: 'х', y: 'у', 0: 'о', 3: 'з', 6: 'б', ё: 'е' };
 function botNorm(s, keepLatin) {
     const t = String(s || '').toLowerCase();
     let out = '';
@@ -1869,7 +2024,7 @@ const Bots = {
         return String(c.phrases || '')
             .split(/\n|,/)
             .map(x => x.trim())
-            .filter(x => x.length >= 2);
+            .filter(x => x.length >= 2 && botNorm(x, true).length >= 2);
     },
     // какие фразы есть в тексте: точное совпадение и «похожее» (тeлеграм латиницей, т е л е г р а м)
     match(text, list) {
@@ -1933,6 +2088,7 @@ const BotView = {
         const close = () => {
             scrim.remove();
             if (this.scrim === scrim) this.scrim = null;
+            this._gen++;
         };
         scrim.querySelector('[data-a="x"]').onclick = close;
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
@@ -1953,9 +2109,11 @@ const BotView = {
         if (this.scrim && gen === this._gen) this.scrim.querySelector('.vdl-prog').textContent = t;
     },
     async search([label, get]) {
-        if (this.busy) return toast('Подожди, поиск ещё идёт', 'info');
+        if (this.busy && this._busyGen === this._gen) return toast('Подожди, поиск ещё идёт', 'info');
         this.busy = true;
-        const gen = this._gen;
+        const gen = (this._busyGen = this._gen);
+        const alive = () => gen === this._gen;
+        let capped = false;
         const out = this.scrim.querySelector('.vdl-out');
         out.innerHTML = '';
         const c = Bots.cfg();
@@ -1977,8 +2135,9 @@ const BotView = {
                 });
             // 1) точные фразы — поиском сайта
             for (const [i, p] of list.entries()) {
-                const r = await Api.all({ transaction_desc__ilike: `%${p}%`, ...range }, 5, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length}): страница ${pg}, записей ${n}…`, gen));
-                if (gen !== this._gen) return;
+                const r = await Api.all({ transaction_desc__ilike: `%${p}%`, ...range }, 5, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length}): страница ${pg}, записей ${n}…`, gen), null, alive);
+                if (!alive()) return;
+                capped = capped || r.capped;
                 take(r);
             }
             // 2) похожие написания — читаем чаты целиком
@@ -1986,8 +2145,9 @@ const BotView = {
                 const chats = AdminView.known().filter(x => /чат/i.test(x.name) && !/админ/i.test(x.name));
                 if (!chats.length) toast('Категории чатов ещё не известны — ищу только точные фразы', 'info');
                 for (const ch of chats) {
-                    const r = await Api.all({ category_id__exact: ch.id, ...range }, 10, (pg, n) => this.prog(`${ch.name}: страница ${pg}, записей ${n}…`, gen));
-                    if (gen !== this._gen) return;
+                    const r = await Api.all({ category_id__exact: ch.id, ...range }, 10, (pg, n) => this.prog(`${ch.name}: страница ${pg}, записей ${n}…`, gen), null, alive);
+                    if (!alive()) return;
+                    capped = capped || r.capped;
                     take(r);
                 }
             }
@@ -2017,11 +2177,16 @@ const BotView = {
             if (c.levels) {
                 const top = arr.slice(0, 40);
                 for (const [i, g] of top.entries()) {
+                    if (!alive()) return;
                     this.prog(`Уровни: ${i + 1} из ${top.length}…`, gen);
                     try {
                         const r = await Api.page({ player_name__exact: g.nick, category_id__exact: 38, transaction_desc__ilike: '%ровень%' }, 0);
                         if (gen !== this._gen) return;
-                        const m = r.map(x => String(x.transaction_desc || '').match(/ровень\D{0,3}(\d+)/i)).find(Boolean);
+                        const m = r
+                            .slice()
+                            .sort((x, y) => new Date(y.time) - new Date(x.time))
+                            .map(x => String(x.transaction_desc || '').match(/ровень\D{0,3}(\d+)/i))
+                            .find(Boolean);
                         g.level = m ? +m[1] : null;
                     } catch {
                         g.level = null;
@@ -2037,13 +2202,13 @@ const BotView = {
                 g.bot = g.why.some(w => /уровень|акк/.test(w));
             });
             arr.sort((x, y) => y.bot - x.bot || y.why.length - x.why.length || y.n - x.n);
-            this.render(out, { label, arr, rows, c, ips: byIp });
+            this.render(out, { label, arr, rows, c, ips: byIp, capped });
         } catch (e) {
             if (gen !== this._gen) return;
             this.prog('', gen);
             out.innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(e.message)}</div>`;
         } finally {
-            this.busy = false;
+            if (this._busyGen === gen) this.busy = false;
         }
     },
     render(out, d) {
@@ -2051,12 +2216,13 @@ const BotView = {
         const bots = arr.filter(g => g.bot);
         const groups = [...ips.values()].filter(s => s.size >= c.minAcc).length;
         const hl = (text, hits) => {
-            let s = U.esc(String(text).slice(0, 180));
-            hits.forEach(h => {
-                const re = new RegExp(U.esc(h).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-                s = s.replace(re, m => `<mark>${m}</mark>`);
-            });
-            return s;
+            const raw = String(text).slice(0, 180);
+            const pats = hits.filter(h => raw.toLowerCase().includes(h.toLowerCase())).map(h => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+            if (!pats.length) return U.esc(raw);
+            return raw
+                .split(new RegExp(`(${pats.join('|')})`, 'gi'))
+                .map((part, i) => (i % 2 ? `<mark>${U.esc(part)}</mark>` : U.esc(part)))
+                .join('');
         };
         out.innerHTML = `
           <div class="vdl-sum">
@@ -2065,7 +2231,7 @@ const BotView = {
             <div class="k"><small>Сообщений</small><b>${rows.length}</b></div>
             <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
           </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}</div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}${d.capped ? ' · сообщений очень много — проверены не все, возьми период короче' : ''}</div>
           <div class="card" data-l="list">${
               arr.length
                   ? arr
@@ -2188,54 +2354,87 @@ const LogsPage = {
 .vdl-hl { border-radius: 6px; padding: 1px 6px; transition: box-shadow .12s, filter .12s; }
 .vdl-hl.hot { filter: brightness(1.3); box-shadow: 0 0 0 2px #fff7; }
 .vdl-cnt { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 18px; margin-left: 6px; padding: 0 5px; vertical-align: middle; border-radius: 999px; font-size: 11px; font-weight: 800; color: #fff; cursor: pointer; }
-.vdl-done { text-decoration: line-through; opacity: .45; }
+.vdl-done { text-decoration: line-through; }
+tr.vdl-done { opacity: .45; }
 .vdl-dates { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
 .vdl-dates button { height: 28px; padding: 0 11px; border-radius: 8px; font-weight: 650; font-size: 12px; line-height: 1; font-family: inherit; color: #fff; border: 1px solid color-mix(in srgb, ${acc} 40%, transparent); background: color-mix(in srgb, ${acc} 14%, transparent); cursor: pointer; }
 .vdl-dates button:hover { background: ${acc}; }
 .vdl-trade { display: inline-flex; align-items: center; margin-left: 10px; padding: 2px 10px; vertical-align: middle; border-radius: 7px; font-size: 12px; font-weight: 700; color: #fff; cursor: pointer; background: color-mix(in srgb, ${acc} 80%, #1b6cff); box-shadow: 0 2px 8px -3px ${acc}; }
 .vdl-trade:hover { filter: brightness(1.12); }
 /* Bootstrap 5.3 красит ячейки светлой заливкой через inset box-shadow поверх любого фона — убираем, ячейки тёмные */
-html body table td, html body table th { box-shadow: none !important; --bs-table-bg-type: transparent; --bs-table-bg-state: transparent; --bs-table-accent-bg: transparent; --bs-table-striped-bg: transparent; --bs-table-hover-bg: transparent; }
-html body :is(#log-table, table), html body :is(#log-table, table) tbody, html body :is(#log-table, table) tbody tr { background: transparent !important; --bs-table-bg: transparent; }
-/* ячейки — стекло темы VERDICT (как блоки на форуме): полупрозрачные, фон просвечивает */
-html body :is(#log-table, table) tbody :is(.first-row, tr) td { background: var(--vd-glass, rgba(18,20,27,.42)) !important; backdrop-filter: blur(10px) saturate(1.15); -webkit-backdrop-filter: blur(10px) saturate(1.15); color: #e4e6eb; }
-html body :is(#log-table, table) tbody :is(.second-row, tr) td[colspan] { background: linear-gradient(rgba(0,0,0,.2), rgba(0,0,0,.2)), var(--vd-glass, rgba(18,20,27,.42)) !important; color: #cfd2d8; }
-/* выпадающие списки фильтров (vue-select и любые listbox): тёмные вместо белых */
-html body :is(.vs__dropdown-toggle, .vs__dropdown-menu, [role="listbox"], .multiselect__content-wrapper, .multiselect__tags) { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; }
-html body :is(.vs__dropdown-option, [role="listbox"] [role="option"], [role="listbox"] li, .multiselect__option) { background: transparent !important; color: #e8eaee !important; }
-html body :is(.vs__dropdown-option--highlight, .vs__dropdown-option--selected, [role="option"][aria-selected="true"], [role="listbox"] li:hover, .multiselect__option--highlight) { background: ${acc} !important; color: #fff !important; }
-html body :is(.vs__search, .vs__selected) { color: #e8eaee !important; background: transparent !important; border: 0 !important; }
-html body .vs__search::placeholder { color: rgba(232,234,238,.5) !important; }
-html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
-html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background: linear-gradient(color-mix(in srgb, ${acc} 16%, transparent), color-mix(in srgb, ${acc} 16%, transparent)), var(--vd-glass, rgba(18,20,27,.42)) !important; }`;
+html body :is(#log-table, table:has(tr.first-row)) td, html body :is(#log-table, table:has(tr.first-row)) th { box-shadow: none !important; --bs-table-bg-type: transparent; --bs-table-bg-state: transparent; --bs-table-accent-bg: transparent; --bs-table-striped-bg: transparent; --bs-table-hover-bg: transparent; }
+html body :is(#log-table, table:has(tr.first-row)), html body :is(#log-table, table:has(tr.first-row)) > tbody, html body :is(#log-table, table:has(tr.first-row)) > tbody > tr { background: transparent !important; --bs-table-bg: transparent; }
+/* ячейки — стекло темы VERDICT (как блоки на форуме); размытие — общее под таблицей, а не на каждой ячейке */
+html body :is(#log-table, table:has(tr.first-row)) { backdrop-filter: blur(10px) saturate(1.15); -webkit-backdrop-filter: blur(10px) saturate(1.15); }
+html body :is(#log-table, table:has(tr.first-row)) > tbody > tr > td { background: var(--vd-glass, rgba(18,20,27,.42)) !important; color: #e4e6eb; }
+html body :is(#log-table, table:has(tr.first-row)) > tbody > tr > td[colspan] { background: linear-gradient(rgba(0,0,0,.2), rgba(0,0,0,.2)), var(--vd-glass, rgba(18,20,27,.42)) !important; color: #cfd2d8; }
+html body :is(#log-table, table:has(tr.first-row)) > tbody > tr.first-row:hover > td { background: linear-gradient(color-mix(in srgb, ${acc} 16%, transparent), color-mix(in srgb, ${acc} 16%, transparent)), var(--vd-glass, rgba(18,20,27,.42)) !important; }
+/* выпадающие списки в фильтрах (vue-select и listbox): тёмные вместо белых */
+html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__dropdown-toggle, .vs__dropdown-menu, [role="listbox"], .multiselect__content-wrapper, .multiselect__tags) { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; }
+html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__dropdown-option, [role="listbox"] [role="option"], .multiselect__option) { background: transparent !important; color: #e8eaee !important; }
+html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__dropdown-option--highlight, .vs__dropdown-option--selected, [role="option"][aria-selected="true"], .multiselect__option--highlight) { background: ${acc} !important; color: #fff !important; }
+html body :is(#log-filter-form, #log-filter, #log-filter-section) .vs__search { color: #e8eaee !important; background: transparent !important; border: 0 !important; }
+html body :is(#log-filter-form, #log-filter, #log-filter-section) .vs__selected { color: #e8eaee !important; }
+html body > .vs__dropdown-menu { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; }
+html body > .vs__dropdown-menu .vs__dropdown-option { color: #e8eaee !important; }
+html body > .vs__dropdown-menu .vs__dropdown-option--highlight { background: ${acc} !important; color: #fff !important; }
+html body :is(#log-filter-form, #log-filter, #log-filter-section) .vs__search::placeholder { color: rgba(232,234,238,.5) !important; }
+html body :is(#log-filter-form, #log-filter, #log-filter-section) :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }`;
         document.head.appendChild(st);
+        this.st = st;
+        try {
+            performance.setResourceTimingBufferSize(3000);
+        } catch {
+            /* старый браузер */
+        }
         let queued = false;
         const run = () => {
             queued = false;
+            if (this.off) return;
             mo.disconnect();
             try {
                 this.placeHead();
                 this.decorate();
                 CatLearn.learn().catch(() => {});
             } finally {
-                mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+                if (!this.off) mo.observe(document.body, { childList: true, subtree: true, characterData: true });
             }
         };
-        const mo = new MutationObserver(() => {
-            if (queued) return;
+        const mo = (this.mo = new MutationObserver(() => {
+            if (queued || this.off) return;
             queued = true;
             requestAnimationFrame(run);
-        });
+        }));
         run();
         this.quickDates();
         CatLearn.discover().catch(() => {});
         this.fromHash();
-        addEventListener('hashchange', () => this.fromHash());
+        this._onHash = () => this.fromHash();
+        addEventListener('hashchange', this._onHash);
+    },
+    // доступ закрыли — убираем всё своё со страницы и больше ничего не размечаем
+    teardown() {
+        this.off = true;
+        if (this.mo) this.mo.disconnect();
+        if (this.qmo) this.qmo.disconnect();
+        if (this._onHash) removeEventListener('hashchange', this._onHash);
+        // открытые окна и их загрузки
+        Layer.closeModals();
+        if (this.head) this.head.remove();
+        if (this.st) this.st.remove();
+        document.querySelectorAll('.vdl-dates, .vdl-mini, .vdl-trade, .vdl-cnt, .vdl-bot, .vdl-multi').forEach(x => x.remove());
+        document.querySelectorAll('td').forEach(td => td.dataset.vdl !== undefined && this.reset(td));
     },
     fromHash() {
+        if (this.off) return;
         const m = location.hash.match(/^#vd-(nick|id|ip|dev)=(.+)$/);
         if (!m) return;
-        const v = decodeURIComponent(m[2]);
+        let v;
+        try {
+            v = decodeURIComponent(m[2]);
+        } catch {
+            return history.replaceState(null, '', location.pathname + location.search);
+        }
         history.replaceState(null, '', location.pathname + location.search);
         if (m[1] === 'nick' && !/^[A-Za-z0-9]+_[A-Za-z0-9]+$/.test(v)) Panel.open('nick', '') || (Panel.scrim.querySelector('[data-a="q"]').value = v);
         else Panel.open(m[1], v);
@@ -2275,7 +2474,8 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
             form.insertBefore(bar, form.firstChild);
         };
         place();
-        new MutationObserver(U.debounce(place, 300)).observe(document.body, { childList: true, subtree: true });
+        this.qmo = new MutationObserver(U.debounce(() => !this.off && place(), 300));
+        this.qmo.observe(document.body, { childList: true, subtree: true });
     },
 
     // окно настроек подсветки
@@ -2342,27 +2542,53 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
     // сайт (Vue) переиспользует ячейки под новые строки — снимаем всё наше и разбираем заново
     reset(td) {
         td.querySelectorAll(':scope > .vdl-mini, :scope > .vdl-trade, :scope > .vdl-cnt, :scope > .vdl-bot, :scope > .vdl-multi').forEach(x => x.remove());
-        td.querySelectorAll(':scope > .vdl-hl').forEach(p => {
-            while (p.firstChild) td.insertBefore(p.firstChild, p);
-            p.remove();
-        });
+        this.unpill(td);
+        // ник-ссылка сайта: ник для копирования и подсказку — убрать
+        const a = td.querySelector(':scope > a');
+        if (a && a._vdlNick !== undefined) {
+            a._vdlNick = '';
+            a.title = '';
+            a.style.cursor = '';
+        }
+        if (td._vdlCopyT) {
+            td.title = '';
+            td.style.cursor = '';
+        }
         ['vdl', 'hk', 'hv', 'trade', 'money', 'vdlSig', 'bot', 'vdlMoneyText'].forEach(k => delete td.dataset[k]);
         td.classList.remove('vdl-done');
         const tr = td.closest('tr');
         if (tr) tr.classList.remove('vdl-done');
     },
 
-    // столбцы «ID игрока» и «ID аккаунта» — по заголовкам таблицы
+    // своя обёртка подсветки — снимаем; ссылка сайта — только класс, цвет и обработчики
+    unpill(td) {
+        td.querySelectorAll(':scope > .vdl-hl').forEach(p => {
+            if (p.dataset.vdlOwn) {
+                while (p.firstChild) td.insertBefore(p.firstChild, p);
+                p.remove();
+            } else {
+                p.classList.remove('vdl-hl', 'hot');
+                if (!p.className) p.removeAttribute('class');
+                p.style.background = p.style.boxShadow = '';
+                p.onmouseenter = p.onmouseleave = null;
+                delete p.dataset.vdlH;
+            }
+        });
+    },
+    // столбцы «ID игрока» и «ID аккаунта» — по заголовкам таблицы (заголовок могут дорисовать позже)
     idCols(table) {
-        if (table._vdlIdCols && table._vdlIdHead === table.tHead) return table._vdlIdCols;
+        const key = table.tHead ? table.tHead.textContent : '';
+        if (table._vdlIdCols && table._vdlIdKey === key) return table._vdlIdCols;
         const cols = new Set();
         [...((table.tHead && table.tHead.rows[table.tHead.rows.length - 1]) || { cells: [] }).cells].forEach((th, i) => /\bID\b/i.test(th.textContent) && cols.add(i));
-        table._vdlIdHead = table.tHead;
+        table._vdlIdKey = key;
         return (table._vdlIdCols = cols);
     },
     decorate() {
         const c = this.cfg();
         document.querySelectorAll('td').forEach(td => {
+            // сайт подменил текст в ячейке — сначала снимаем своё, потом размечаем заново
+            if (td.dataset.vdlSig !== undefined && td.dataset.vdlSig !== this.rawOf(td)) this.reset(td);
             // ID игрока / аккаунта — кликом в буфер
             const tb = td.closest('table');
             if (tb && td.colSpan < 2 && (this.idCols(tb).has(td.cellIndex) || /\b(player|account)-?_?id\b/i.test(td.className))) copyText(td, () => this.rawOf(td), 'ID');
@@ -2375,7 +2601,6 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                     if (v !== n.nodeValue) n.nodeValue = v;
                 });
             }
-            if (td.dataset.vdlSig !== undefined && td.dataset.vdlSig !== this.rawOf(td)) this.reset(td);
             if (!td.dataset.vdl) {
                 const t = td.textContent.trim();
                 let mode = '',
@@ -2492,7 +2717,7 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
         let h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
         return Math.round(h * 60);
     },
-    SPREAD: [0, 24, -24, 46, -46, 12, -12, 34, -34, 60],
+    SPREAD: [0, 24, -24, 46, -46, 12, -12, 34, -34, 60, -60, 80, -80, 100, -100, 130, -130, 160],
     recolor() {
         const c = this.cfg();
         const rowsDone = new Map();
@@ -2511,16 +2736,32 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                 const isDone = !!done[val];
                 tds.forEach(td => {
                     let pill = td.querySelector('.vdl-hl');
-                    const txt = [...td.childNodes].find(x => x.nodeType === 3 && x.textContent.trim());
-                    if (h != null && !pill && txt) {
-                        pill = document.createElement('span');
-                        pill.className = 'vdl-hl';
-                        td.insertBefore(pill, txt);
-                        pill.appendChild(txt);
-                        pill.onmouseenter = () => this.hot(type, val, true);
-                        pill.onmouseleave = () => this.hot(type, val, false);
+                    if (h != null && !pill) {
+                        const txt = [...td.childNodes].find(x => x.nodeType === 3 && x.textContent.trim());
+                        const link = !txt && td.querySelector(':scope > a');
+                        if (txt) {
+                            pill = document.createElement('span');
+                            pill.className = 'vdl-hl';
+                            pill.dataset.vdlOwn = '1';
+                            td.insertBefore(pill, txt);
+                            pill.appendChild(txt);
+                        } else if (link) {
+                            // ник — ссылка сайта: не оборачиваем, только красим её саму
+                            pill = link;
+                            pill.classList.add('vdl-hl');
+                        }
+                        if (pill) {
+                            pill.onmouseenter = () => this.hot(type, val, true);
+                            pill.onmouseleave = () => this.hot(type, val, false);
+                        }
                     }
-                    if (pill) {
+                    // значение больше не повторяется — подсветку снимаем совсем
+                    if (h == null && pill) {
+                        this.unpill(td);
+                        pill = null;
+                    }
+                    if (pill && pill.dataset.vdlH !== String(h)) {
+                        pill.dataset.vdlH = String(h);
                         pill.style.background = h != null ? `hsla(${h},72%,55%,.3)` : '';
                         pill.style.boxShadow = h != null ? `inset 0 0 0 1px hsla(${h},80%,65%,.6)` : '';
                     }
@@ -2535,6 +2776,8 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                             const d = Store.get(type + 'Done', {});
                             if (d[val]) delete d[val];
                             else d[val] = Date.now();
+                            const keys = Object.keys(d).sort((x, y) => d[y] - d[x]);
+                            keys.slice(500).forEach(k => delete d[k]);
                             Store.set(type + 'Done', d);
                             this.recolor();
                         };
@@ -2545,13 +2788,13 @@ html body :is(#log-table, table) tbody :is(.first-row, tr):hover td { background
                         const what = { ip: 'Этот IP-адрес', nick: 'Этот ник', dev: 'Это устройство (APPMDID)' }[type];
                         const t = `${what} встречается в ${n} ${plural(n, 'строке', 'строках', 'строках')} на этой странице — одинаковые подсвечены одним цветом.\n${isDone ? 'Отмечено как проверенное. Нажми, чтобы снять отметку.' : 'Нажми, чтобы отметить как проверенное (строки зачеркнутся).'}`;
                         if (cnt.title !== t) cnt.title = t;
-                        cnt.style.background = `hsl(${h},68%,45%)`;
+                        if (cnt.dataset.vdlH !== String(h)) {
+                            cnt.dataset.vdlH = String(h);
+                            cnt.style.background = `hsl(${h},68%,45%)`;
+                        }
                     }
-                    if (h == null && pill) {
-                        pill.style.background = '';
-                        pill.style.boxShadow = '';
-                    }
-                    const mark = c[type].on && isDone;
+                    // зачёркиваем, только пока есть ×N — им же отметку и снимают
+                    const mark = c[type].on && isDone && h != null;
                     td.classList.toggle('vdl-done', mark);
                     const tr = td.closest('tr');
                     // строку зачёркиваем, если её отметил хоть один вид (иначе выключенные ники снимали отметку IP)
@@ -2594,9 +2837,15 @@ const TradeView = {
         try {
             // один трейд по его номеру; широкий период, чтобы захватить весь обмен
             rows = await Api.all(
-                { transaction_desc__ilike: `%TradeID: ${id}%`, time__gte: new Date(Date.now() - 180 * 864e5).toISOString(), time__lte: new Date().toISOString() },
-                6
+                { transaction_desc__ilike: `%TradeID:%${id}%`, time__gte: new Date(Date.now() - 180 * 864e5).toISOString(), time__lte: new Date().toISOString() },
+                6,
+                null,
+                null,
+                () => this.scrim === scrim
             );
+            // поиск сайта — по началу текста: «TradeID: 12» находит и 123, 1234 — оставляем точный номер
+            const exact = new RegExp(`TradeID:\\s*${id}(?!\\d)`);
+            rows = rows.filter(r => exact.test(String(r.transaction_desc || '')));
             rows.sort((a, b) => new Date(a.time) - new Date(b.time));
             if (this.scrim !== scrim) return;
             scrim.querySelector('.vdl-prog').textContent = rows.length ? `${rows.length} записей · участники: ${[...new Set(rows.map(r => r.player_name).filter(Boolean))].join(', ')}` : '';
@@ -2674,7 +2923,13 @@ async function main() {
     if (!ON_LOGS && !/^\/members\//.test(location.pathname)) return;
     Layer.accent(info);
     if (!info.lid) return ON_LOGS && notice('Нужен VERDICT', 'Обнови VERDICT до последней версии — эта не умеет работать с «VERDICT Логи».');
-    const logsNick = ON_LOGS ? ((document.body.textContent.match(/Выйти\s*\[([^\]]{2,40})\]/) || [])[1] || '') : '';
+    // шапку сайт может дорисовать позже — ждём ник до 8 секунд
+    const nickNow = () => (document.body.textContent.match(/Выйти\s*\[([^\]]{2,40})\]/) || [])[1] || '';
+    let logsNick = ON_LOGS ? nickNow() : '';
+    for (let i = 0; ON_LOGS && !logsNick && i < 20; i++) {
+        await new Promise(r => setTimeout(r, 400));
+        logsNick = nickNow();
+    }
     if (ON_LOGS && !logsNick) return;
     CTX.info = info;
     CTX.logsNick = logsNick;
@@ -2690,9 +2945,12 @@ async function main() {
     }
     if (ON_LOGS) LogsPage.start(info);
     else Profile.start();
-    setInterval(async () => {
+    const timer = setInterval(async () => {
         const a = await Access.check(info, logsNick);
         if (a.allowed) return;
+        // доступ закрыли (или долго нет связи с разработчиком) — убираем всё и больше не проверяем
+        clearInterval(timer);
+        if (ON_LOGS) LogsPage.teardown();
         document.querySelectorAll('.vdl-mini, .vdl-prof').forEach(x => x.remove());
         const host = document.getElementById('vdl-layer');
         if (host) host.remove();
@@ -2705,14 +2963,28 @@ addEventListener(
     'keydown',
     e => {
         if (e.key === 'Escape' && Layer._root) {
+            // Esc в поле переименования — отмена правки, а не закрытие окна
+            const a = Layer._root.activeElement;
+            if (a && a.matches('[data-ren-inp]')) {
+                a.value = '';
+                a.blur();
+                return;
+            }
             const top = [...Layer._root.querySelectorAll('.scrim')].pop();
             if (!top) return;
             top.remove();
-            if (Panel.scrim === top) Panel.scrim = null;
+            if (Panel.scrim === top) {
+                Panel.scrim = null;
+                Panel._gen = (Panel._gen || 0) + 1;
+            }
             if (TradeView.scrim === top) TradeView.scrim = null;
             if (AdminView.scrim === top) AdminView.scrim = null;
             if (AdminView.cfgScrim === top) AdminView.cfgScrim = null;
-            if (BotView.scrim === top) BotView.scrim = null;
+            if (AdminView.scrim === top) AdminView._gen = (AdminView._gen || 0) + 1;
+            if (BotView.scrim === top) {
+                BotView.scrim = null;
+                BotView._gen = (BotView._gen || 0) + 1;
+            }
             if (BotView.cfgScrim === top) BotView.cfgScrim = null;
         }
     },
