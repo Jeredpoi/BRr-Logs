@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.5
+// @version      1.1.6
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.1.5
+// @version      1.1.6
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.1.5';
+const VERSION = '1.1.6';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2263,16 +2263,9 @@ const BotView = {
                 .join('');
         };
         out.innerHTML = `
-          <div class="vdl-sum">
-            <div class="k"><small>Похожи на ботов</small><b>${bots.length}</b></div>
-            <div class="k"><small>Писали рекламу</small><b>${arr.length}</b></div>
-            <div class="k"><small>Сообщений</small><b>${rows.length}</b></div>
-            <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
-          </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}${d.capped ? ' · сообщений очень много — проверены не все, возьми период короче' : ''}</div>
           ${
               topIps.length
-                  ? `<div class="sec"><h4>Самые частые IP</h4><div class="card">${topIps
+                  ? `<div class="sec" style="margin:0 0 14px"><h4>Самые частые IP</h4><div class="card">${topIps
                         .map(
                             ([ip, set]) => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:${set.size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}</span><b>${set.size} акк.</b><span class="sub" style="margin:0">${msgs.get(ip) || 0} сообщ.</span></div><div class="sub">${[...set]
                                 .slice(0, 8)
@@ -2282,6 +2275,13 @@ const BotView = {
                         .join('')}</div></div>`
                   : ''
           }
+          <div class="vdl-sum">
+            <div class="k"><small>Похожи на ботов</small><b>${bots.length}</b></div>
+            <div class="k"><small>Писали рекламу</small><b>${arr.length}</b></div>
+            <div class="k"><small>Сообщений</small><b>${rows.length}</b></div>
+            <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
+          </div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}${d.capped ? ' · сообщений очень много — проверены не все, возьми период короче' : ''}</div>
           <div class="card" data-l="list">${
               arr.length
                   ? arr
