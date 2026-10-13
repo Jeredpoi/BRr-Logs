@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.20
+// @version      1.2.21
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.20
+// @version      1.2.21
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.20';
+const VERSION = '1.2.21';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -579,7 +579,35 @@ input[type="checkbox"]:checked::after { transform: rotate(45deg) scale(1); }
 @media (max-width: 760px) { .vdl-sum { grid-template-columns: repeat(2, 1fr); } .vdl-row { grid-template-columns: 1fr; } .vdl-btns { justify-content: flex-start; } }
 `;
 
+// время записи → строка с часовым поясом: без пояса — московское, число — секунды или миллисекунды
+function normTime(v) {
+    if (typeof v === 'number') return new Date(v < 1e12 ? v * 1000 : v).toISOString();
+    const t = String(v == null ? '' : v).trim();
+    if (!t) return t;
+    if (/^\d{4}-\d\d-\d\d[ T]\d\d:\d\d(:\d\d(\.\d+)?)?$/.test(t)) return t.replace(' ', 'T') + '+03:00';
+    return t;
+}
 const Api = {
+    // в каком виде сайт сам передаёт время в запросах: с поясом (iso), без пояса (по Москве) или числом
+    tfmt(v) {
+        this.own = this.own || new Set();
+        if (!this._tf) {
+            const u = performance
+                .getEntriesByType('resource')
+                .map(e => e.name)
+                .filter(x => x.includes('/api/list-game-logs/') && !this.own.has(x) && /time__gte=/.test(x))
+                .pop();
+            if (u) {
+                const s0 = new URL(u).searchParams.get('time__gte') || '';
+                this._tf = /^\d{10,13}$/.test(s0) ? (s0.length > 10 ? 'ms' : 's') : /(Z|[+-]\d\d:?\d\d)$/i.test(s0) ? 'iso' : 'msk';
+            }
+        }
+        const ms = Date.parse(v);
+        if (!Number.isFinite(ms) || !this._tf || this._tf === 'iso') return v;
+        if (this._tf === 'ms') return String(ms);
+        if (this._tf === 's') return String(Math.floor(ms / 1000));
+        return new Date(ms + 3 * 3600e3).toISOString().slice(0, 19);
+    },
     last: 0,
     mine: new Set(),
     order: '-time',
@@ -600,11 +628,14 @@ const Api = {
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
         this.last = Date.now();
         const q = new URLSearchParams(params);
+        ['time__gte', 'time__lte'].forEach(k => q.has(k) && q.set(k, this.tfmt(q.get(k))));
         q.set('order_by', this.order);
         q.set('offset', String(offset));
         q.set('auto', 'false');
         const url = new URL(`/gslogs/${this.server()}/api/list-game-logs/?${q}`, location.href).href;
         this.mine.add(url);
+        // свои запросы (в отличие от повторённых запросов сайта) — по ним формат времени сайта не узнать
+        (this.own = this.own || new Set()).add(url);
         // запрос не висит вечно: иначе встанет вся очередь
         const ctl = typeof AbortController === 'function' ? new AbortController() : null;
         const timer = ctl && setTimeout(() => ctl.abort(), 30000);
@@ -655,6 +686,7 @@ const Api = {
             clearTimeout(timer);
         }
         if (!Array.isArray(d)) throw new Error('сайт логов ответил не списком');
+        d.forEach(r => r && (r.time = normTime(r.time)));
         if (this.gap > this.BASE_GAP) this.gap = Math.max(this.BASE_GAP, Math.round(this.gap * 0.95));
         return d;
     },
@@ -2260,7 +2292,7 @@ const AdminView = {
           <div data-at="list" hidden><div class="sec"><h4>Действия</h4>
             <input class="inp vdl-filter" data-a="flt" placeholder="Найти: ник, слово…">
             <div class="card" data-l="list"></div></div></div>
-          <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="csv" title="Все посчитанные записи — открыть в Excel и сверить с сайтом">${icon('download', 14)}Скачать CSV</button><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
+          <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
         // список действий с поиском
         const sorted = own.slice().sort((x, y) => new Date(y.time) - new Date(x.time));
         const listBox = out.querySelector('[data-l="list"]');
@@ -2295,22 +2327,6 @@ const AdminView = {
         );
         const c2 = out.querySelector('[data-a="cfg2"]');
         if (c2) c2.onclick = () => this.settings();
-        // все посчитанные записи файлом: сверка с сайтом построчно
-        out.querySelector('[data-a="csv"]').onclick = () => {
-            const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-            const L = [['Дата (МСК)', 'Категория', 'Номер категории', 'Игрок', 'Текст'].map(q).join(';')];
-            own.slice()
-                .sort((x, y) => new Date(x.time) - new Date(y.time))
-                .forEach(r => L.push([new Date(r.time).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }), nm(r.category_id), r.category_id, r.player_name, r.transaction_desc].map(q).join(';')));
-            const blob = new Blob(['\ufeff' + L.join('\r\n')], { type: 'text/csv;charset=utf-8' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = `admin_${nick}_${a}_${b}.csv`;
-            document.body.appendChild(link);
-            link.click();
-            setTimeout(() => (URL.revokeObjectURL(link.href), link.remove()), 2000);
-            toast(`Скачано: ${own.length} записей`);
-        };
         out.querySelector('[data-a="copy"]').onclick = () => {
             const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
             cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
