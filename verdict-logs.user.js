@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.18
+// @version      1.2.19
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.18
+// @version      1.2.19
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.18';
+const VERSION = '1.2.19';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -507,6 +507,7 @@ const LOGS_UI_CSS = `
 .vdl-tabs { display: flex; width: 100%; margin: 4px 0 2px; }
 .vdl-presets .btn.on { background: color-mix(in srgb, var(--acc) 30%, transparent); border-color: color-mix(in srgb, var(--acc) 50%, transparent); color: #fff; }
 .vdl-filter { width: 100%; margin-bottom: 8px; }
+.btn[hidden], .vdl-ftools [hidden] { display: none !important; }
 /* фильтры античита: чипы-переключатели */
 .vdl-fbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
 .vdl-fbar .lbl { font-size: 11px; color: var(--tx-3, #8b8f9a); margin-right: 2px; }
@@ -687,7 +688,7 @@ const Api = {
             if (size && d.length === size) this._sizeOk = true;
             // страница меньше запомненной: конец списка — или сайт уменьшил страницы (пока полной не видели, проверяем следующую)
             if (size && d.length < size && (this._sizeOk || d.length < 20)) break;
-            if (i === maxPages - 1) out.capped = true;
+            if (i === maxPages - 1 && (!size || d.length >= size)) out.capped = true;
         }
         return out;
     },
@@ -758,6 +759,7 @@ const Geo = {
 const IP_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
 const DEV_RE = /APPMDID:\s*([A-Za-z0-9+/=_-]{6,})/i;
 function fmtDate(t) {
+    if (!t) return '';
     const d = new Date(t);
     return isNaN(d) ? '' : d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
@@ -790,8 +792,8 @@ const numOf = v => {
     if (v == null) return NaN;
     let t = String(v).replace(/[\s ]/g, '').replace(/−/g, '-');
     if (!t) return NaN;
-    // «1,000,000» — разделители тысяч, «1,5» — дробь
-    t = (t.match(/,/g) || []).length > 1 ? t.replace(/,/g, '') : t.replace(',', '.');
+    // «1,000,000» и «12,345» — разделители тысяч, «1,5» — дробь
+    t = /^[-+]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t) ? t.replace(/,/g, '') : t.replace(',', '.');
     const n = Number(t);
     return Number.isFinite(n) ? n : NaN;
 };
@@ -812,7 +814,7 @@ function catName(r) {
         CatLearn.dirty = false;
         // догадки из кода сайта — только подписи; номера для подсчёта берутся из проверенных источников
         const sure = Store.get('cats', {});
-        CATS = Object.assign({}, Store.get('catsSoft', {}), { 38: 'Подключения / Отключения' }, sure);
+        CATS = Object.assign({}, Store.get('catsSoft2', {}), { 38: 'Подключения / Отключения' }, sure);
         CATS_SURE = new Set(['38', ...Object.keys(sure)]);
         document.querySelectorAll('select').forEach(sel => {
             const box = sel.closest('.mb-3, .form-group, .col, div');
@@ -860,7 +862,7 @@ const CatLearn = {
             const add = (id, name) => {
                 id = String(id);
                 name = String(name || '').replace(/\s+/g, ' ').trim();
-                if (!/^\d{1,4}$/.test(id) || !name || name.length > 60 || /^[–—-]*\s*любая/i.test(name)) return;
+                if (!/^\d{1,4}$/.test(id) || !name || name.length > 60 || /^\d+$/.test(name) || /^[–—-]*\s*любая/i.test(name)) return;
                 if (map[id] !== name) {
                     map[id] = name;
                     n++;
@@ -868,20 +870,20 @@ const CatLearn = {
             };
             // 1) элементы списка категорий (у кастомных списков — data-value / value)
             const label = [...document.querySelectorAll('label, .form-label, h5, h6')].find(l => /^категори/i.test(l.textContent.trim()));
-            const box = label && (label.closest('.mb-3, .form-group, .col, div') || label.parentElement);
-            if (box) box.querySelectorAll('[data-value], [value], option').forEach(el => add(el.dataset.value ?? el.getAttribute('value'), el.textContent));
+            const box = label && (label.closest('.mb-3, .form-group') || label.parentElement);
+            if (box) box.querySelectorAll('select option, [data-value], option').forEach(el => add(el.dataset.value ?? el.getAttribute('value'), el.textContent));
             // 1б) ссылки категорий в таблице: …?category_id=70 → «Админ действия»
             document.querySelectorAll('td.td-category a[href]').forEach(a => {
                 const m = a.getAttribute('href').match(/categor[a-z_]*(?:__exact)?[=/](\d{1,4})/i);
                 if (m) add(m[1], a.textContent);
             });
             // 1в) список категорий в коде сайта (подключённые скрипты): {id:70,name:"Админ действия"} или 70:"Админ действия"
-            const softMap = Store.get('catsSoft', {});
+            const softMap = Store.get('catsSoft2', {});
             let ns = 0;
             const soft = (id, name) => {
                 id = String(id);
                 name = String(name || '').replace(/\s+/g, ' ').trim();
-                if (!/^\d{1,4}$/.test(id) || !name || name.length > 60 || map[id] || softMap[id] === name) return;
+                if (!/^\d{1,4}$/.test(id) || !name || name.length > 60 || /^\d+$/.test(name) || map[id] || softMap[id]) return;
                 softMap[id] = name;
                 ns++;
             };
@@ -904,7 +906,7 @@ const CatLearn = {
                     for (const m of t.matchAll(new RegExp(`(?:name|title|label|text)${Q}?\\s*:\\s*${Q}([^"'\`]{2,60})${Q}\\s*,\\s*${Q}?(?<![\\w$])(?:id|value|pk|category_id)${Q}?\\s*:\\s*(\\d{1,4})`, 'g'))) soft(m[2], m[1]);
                     // словарь «номер: название» — только если таких пар много (иначе это не список категорий)
                     const pairs = [...t.matchAll(new RegExp(`[{,]\\s*${Q}?(\\d{1,4})${Q}?\\s*:\\s*${Q}([А-ЯЁ][^"'\`]{1,59})${Q}`, 'g'))];
-                    if (pairs.length >= 8) pairs.forEach(m => soft(m[1], m[2]));
+                    if (pairs.length >= 12 && pairs.some(m => /categor/i.test(t.slice(Math.max(0, m.index - 300), m.index)))) pairs.forEach(m => soft(m[1], m[2]));
                 } catch {
                     /* скрипт не прочитать */
                 }
@@ -937,7 +939,7 @@ const CatLearn = {
                 }
             }
             if (ns) {
-                Store.set('catsSoft', softMap);
+                Store.set('catsSoft2', softMap);
                 this.dirty = true;
             }
             // отметки о разобранных файлах — вместе с найденными названиями
@@ -955,7 +957,23 @@ const CatLearn = {
         })();
         return this._disc;
     },
+    // одно обучение за раз; сбой (обрыв, страница входа вместо данных) — запрос можно повторить
     async learn() {
+        if (this._busy) return;
+        this._busy = true;
+        this._cur = '';
+        try {
+            await this._learn();
+        } catch {
+            if (this._cur) Api.mine.delete(this._cur);
+            this._nres = -1;
+        } finally {
+            this._busy = false;
+        }
+    },
+    async _learn() {
+        const nres = performance.getEntriesByType('resource').length;
+        if (nres === this._nres) return;
         const tds = [...document.querySelectorAll('td.td-category')];
         if (!tds.length) return;
         const map = Store.get('cats', {});
@@ -965,7 +983,7 @@ const CatLearn = {
             .map(e => e.name)
             .filter(u => u.includes('/api/list-game-logs/') && !Api.mine.has(u) && !this.tried.has(u))
             .pop();
-        if (!url) return;
+        if (!url) return void (this._nres = nres);
         // поиск по тексту на сервере долгий — повторять его ради названий категорий нельзя
         {
             const sp = new URL(url).searchParams;
@@ -983,8 +1001,12 @@ const CatLearn = {
         const tset = new Set(tds.map(td => LogsPage.rawOf(td)).filter(Boolean));
         const tnm = tset.size === 1 ? [...tset][0] : '';
         const wrong = urlCat && tnm && (map[urlCat] !== tnm || Object.keys(map).some(k => k !== urlCat && map[k] === tnm));
+        this._nres = nres;
         if (tds.every(td => names.has(LogsPage.rawOf(td))) && !(urlCat && !map[urlCat]) && !wrong) return;
-        this.tried.add(url);
+        this._cur = url;
+        // не вышло — одна повторная попытка при следующем запросе сайта
+        this.fails = this.fails || {};
+        if ((this.fails[url] = (this.fails[url] || 0) + 1) >= 2) this.tried.add(url);
         const rows = await new Promise((res, rej) => {
             const p = (Api._q || Promise.resolve()).then(async () => {
                 Api.mine.add(url);
@@ -995,7 +1017,9 @@ const CatLearn = {
                 const timer = ctl && setTimeout(() => ctl.abort(), 20000);
                 try {
                     const r = await fetch(url, { credentials: 'include', signal: ctl ? ctl.signal : undefined });
-                    return r.ok ? await r.json() : [];
+                    Api.last = Date.now();
+                    if (r.status === 429) Api.gap = Math.min(6000, Math.round(Api.gap * 1.6));
+                    return r.ok ? await r.json() : null;
                 } finally {
                     clearTimeout(timer);
                 }
@@ -1003,7 +1027,12 @@ const CatLearn = {
             Api._q = p.catch(() => {});
             p.then(res, rej);
         });
-        if (!Array.isArray(rows)) return;
+        if (!Array.isArray(rows)) {
+            Api.mine.delete(url);
+            this._nres = -1;
+            return;
+        }
+        this.tried.add(url);
         // ключ строки — ник и текст описания (без пробелов: суммы в таблице с разделителями)
         const key = (nick, desc) => `${String(nick || '').toLowerCase()}|${String(desc || '').replace(/\s+/g, '')}`;
         const tab = new Map();
@@ -1131,10 +1160,11 @@ function sessionsOf(rows) {
 
 const Panel = {
     // stack — поверх текущего окна (Админ-действия, Боты): закрыл — вернулся к нему
-    open(mode = 'nick', value = '', opts = {}) {
-        // без новой проверки — возвращаем прежнее окно с отчётом
+    open(mode, value = '', opts = {}) {
+        // без новой проверки — возвращаем прежнее окно с отчётом (режим поиска — тот, что был)
         if (!value && this.scrim) {
             if (mode && this._setMode && mode !== this.mode) this._setMode(mode);
+            this._stack = !!opts.stack;
             if (opts.stack) {
                 this.scrim.hidden = false;
                 Layer.el().appendChild(this.scrim);
@@ -1188,11 +1218,11 @@ const Panel = {
                 (b.onclick = () => {
                     const was = this.days;
                     setDays(+b.dataset.v);
-                    if (was !== this.days && q.value.trim() && scrim.querySelector('.vdl-out').children.length) go();
+                    if (was !== this.days && q.value.trim() && (this.busy || scrim.querySelector('.vdl-out').children.length)) go();
                 })
         );
         this._setMode = setMode;
-        setMode(mode);
+        setMode(mode || 'nick');
         setDays(this.days);
         q.value = value;
         const go = () => {
@@ -1279,6 +1309,7 @@ const Panel = {
         const v = String(id).trim();
         if (!/^\d+$/.test(v)) {
             if (this.busy) return toast('ID — это число, например 1016171', 'err');
+            this._gen = (this._gen || 0) + 1;
             this.out(`<div class="card" style="padding:14px">${icon('x', 14)} ID — это число, например 1016171</div>`);
             return;
         }
@@ -1292,7 +1323,7 @@ const Panel = {
             const base = Object.assign({}, sel, Api.range(days));
             this.prog('Читаю подключения игрока…');
             let rows = await Api.all(Object.assign({ category_id__exact: 38 }, base), 10, (p, n) => this.prog(`Подключения: страница ${p}, записей ${n}…`), null, this.alive());
-            let note = '';
+            let note = rows.capped ? `Показаны последние ${rows.length} записей о входах — за период их больше, возьми период короче.` : '';
             if (!rows.length) {
                 rows = await Api.all(base, 4, (p, n) => this.prog(`Все записи игрока: страница ${p}, записей ${n}…`), null, this.alive());
                 note = 'Подключений за период нет — IP взяты из остальных записей игрока.';
@@ -1421,7 +1452,7 @@ const Panel = {
         return p;
     },
     capNote(d) {
-        return `<div class="sub" style="padding:8px 2px">${d.rows.length} ${plural(d.rows.length, 'запись', 'записи', 'записей')} игрока${d.capped ? ' — посчитаны последние, за весь период их больше (возьми период короче)' : ''}</div>`;
+        return `<div class="sub" style="padding:8px 2px">${d.rows.length} ${plural(d.rows.length, 'запись', 'записи', 'записей')} игрока${d.capped ? (Api.order === 'time' ? ' — посчитаны первые за период, их больше (возьми период короче)' : ' — посчитаны последние, за весь период их больше (возьми период короче)') : ''}</div>`;
     },
     renderMoney(box, d) {
         if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
@@ -1434,6 +1465,11 @@ const Panel = {
             .filter(x => Number.isFinite(x.b))
             .sort((a, b) => a.t - b.t || (newestFirst ? b.i - a.i : a.i - b.i));
         const b0 = bals[0], b1 = bals[bals.length - 1];
+        // баланс «в начале» — до первой операции периода, если её сумма известна
+        if (b0) {
+            const a0 = amtOf(d.rows[b0.i]);
+            b0.start = Number.isFinite(a0) ? b0.b - a0 : b0.b;
+        }
         const big = ops.slice().sort((a, b) => Math.abs(b.a) - Math.abs(a.a)).slice(0, 10);
         // доходы и расходы по категориям
         const byCat = sign => {
@@ -1457,14 +1493,14 @@ const Panel = {
                 .join('');
         };
         const cIn = byCat(1), cOut = byCat(-1);
-        this.report.money = { inc, exp, b0: b0 && b0.b, b1: b1 && b1.b, n: d.rows.length, capped: d.capped };
+        this.report.money = { inc, exp, b0: b0 && !d.capped ? b0.start : NaN, b1: b1 && b1.b, n: d.rows.length, capped: d.capped };
         const cls = n => (n > 0 ? 'vdl-pos' : n < 0 ? 'vdl-neg' : '');
         box.innerHTML = `
           <div class="vdl-money">
             <div class="k"><small>Пришло</small><b class="vdl-pos">${ops.length ? fmtMoney(inc) : '—'}</b></div>
             <div class="k"><small>Ушло</small><b class="vdl-neg">${ops.length ? fmtMoney(exp) : '—'}</b></div>
             <div class="k"><small>Итог по операциям</small><b class="${cls(inc + exp)}">${ops.length ? fmtMoney(inc + exp) : '—'}</b></div>
-            <div class="k"><small>Баланс сейчас</small><b>${b1 ? fmtNum(b1.b) : '—'}</b>${b0 && b0 !== b1 ? `<small>в начале периода ${fmtNum(b0.b)}</small>` : ''}</div>
+            <div class="k"><small>${d.capped && Api.order === 'time' ? 'Баланс в конце загруженного' : 'Баланс сейчас'}</small><b>${b1 ? fmtNum(b1.b) : '—'}</b>${b0 && b0 !== b1 && !d.capped ? `<small>в начале периода ${fmtNum(b0.start)}</small>` : ''}</div>
           </div>
           ${ops.length ? '' : '<div class="sub" style="padding:0 2px 8px">Денежных операций за период нет (или сайт не отдаёт сумму)</div>'}
           ${cIn.length ? `<div class="sub" style="padding:8px 2px 2px">Откуда приходили деньги</div>${bars(cIn, 'vdl-pos')}` : ''}
@@ -1730,6 +1766,7 @@ const Panel = {
     },
 
     byDev(dev, into, except) {
+        dev = (String(dev).match(DEV_RE) || [, String(dev)])[1].trim();
         return this.run(async () => {
             const days = into && this.report ? this.report.days : this.days;
             const rows = await Api.all(
@@ -1756,7 +1793,13 @@ const Panel = {
         for (const key of ['player_ip__exact', 'player_ip__ilike', 'player_ip']) {
             const params = Object.assign({ category_id__exact: 38, [key]: ip }, Api.range(days || this.days));
             const first = await Api.page(params, 0);
-            if (first.length && first.some(r => r.player_ip && r.player_ip !== ip)) continue;
+            const same = r => !r.player_ip || r.player_ip === ip;
+            // «похоже» (ilike) находит и 11.2.3.45 для 1.2.3.4 — берём только точный IP
+            if (key === 'player_ip__ilike') {
+                if (!first.length || (Api.pageSize() && first.length < Api.pageSize() && (Api._sizeOk || first.length < 20))) return first.filter(same);
+                return (await Api.all(params, 10, onPage, first, this.alive())).filter(same);
+            }
+            if (first.length && !first.every(same)) continue;
             if (!first.length || (Api.pageSize() && first.length < Api.pageSize() && (Api._sizeOk || first.length < 20))) return first;
             return Api.all(params, 10, onPage, first, this.alive());
         }
@@ -1822,7 +1865,7 @@ const Panel = {
             L.push(`IP-адресов: ${r.ips.length}, устройств: ${r.devs.length}`);
             if (r.plats && r.plats.length) L.push('Платформы: ' + r.plats.join('; '));
             if (r.ses && r.ses.n) L.push(`Сессий: ${r.ses.n}, в игре ${durHM(r.ses.total)}, в среднем ${durHM(r.ses.avg)}${r.peak >= 0 ? `, чаще всего в ${String(r.peak).padStart(2, '0')}:00 МСК` : ''}`);
-            if (r.money) L.push(`Деньги: пришло ${fmtMoney(r.money.inc)}, ушло ${fmtMoney(r.money.exp)}${Number.isFinite(r.money.b0) ? `, баланс ${fmtNum(r.money.b0)} → ${fmtNum(r.money.b1)}` : ''}${r.money.capped ? ' (по последним 500 записям)' : ''}`);
+            if (r.money) L.push(`Деньги: пришло ${fmtMoney(r.money.inc)}, ушло ${fmtMoney(r.money.exp)}${Number.isFinite(r.money.b0) ? `, баланс ${fmtNum(r.money.b0)} → ${fmtNum(r.money.b1)}` : ''}${r.money.capped ? ` (по ${r.money.n} ${Api.order === 'time' ? 'первым' : 'последним'} записям)` : ''}`);
             if (r.cats && r.cats.length) L.push('Категории: ' + r.cats.join('; '));
             if (r.trades != null) L.push(`Трейдов: ${r.trades}`);
             if (r.ac != null) L.push(`Античит: ${r.ac ? `${r.ac} ${plural(r.ac, 'срабатывание', 'срабатывания', 'срабатываний')}` : 'не срабатывал'}`);
@@ -1926,14 +1969,13 @@ const Feedback = {
 // ---------- Админ-действия: подсчёт для куратора по нику администратора и периоду ----------
 const NICK_RE = /\b[A-Z][A-Za-z0-9]{1,20}_[A-Z][A-Za-z0-9]{1,20}\b/g;
 // что считается админ-действиями: ровно эти категории сайта
-// desc — в описании таких записей админ может стоять не в поле «игрок», ищем его и по тексту
 const ADMIN_CATS = [
     // на сайте: «Админ-действия», «Админ-общий-чат», «Админ-чат», «Админ-блокировки», «Админ-супердействия»
-    { k: 'act', name: 'Админ действия', re: /^админ[\s-]*действ/i, desc: true },
+    { k: 'act', name: 'Админ действия', re: /^админ[\s-]*действ/i },
     { k: 'gchat', name: 'Админ общий чат', re: /^админ[\s-]*общ\S*[\s-]*чат/i },
     { k: 'chat', name: 'Админ чат', re: /^админ[\s-]*чат/i },
-    { k: 'block', name: 'Админ блокировки', re: /^админ[\s-]*блок/i, desc: true },
-    { k: 'super', name: 'Супер наказания', re: /супер[\s-]*(наказ|действ)/i, desc: true },
+    { k: 'block', name: 'Админ блокировки', re: /^админ[\s-]*блок/i },
+    { k: 'super', name: 'Супер наказания', re: /супер[\s-]*(наказ|действ)/i },
     // такой категории может не быть на сервере — считается, только если номер вписан вручную
     { k: 'report', name: 'Жалобы / обращения', re: null, opt: true }
 ];
@@ -2051,7 +2093,11 @@ const AdminView = {
             if (a > b) [a, b] = [b, a];
             const today = this.mskDay(Date.now());
             if (a > today) return this.msg('Начало периода — в будущем');
-            if (b > today) b = to.value = today;
+            if (b > today) b = today;
+            // в календаре — тот период, который считаем
+            from.value = a;
+            to.value = b;
+            mark();
             if ((this.dayStart(b) - this.dayStart(a)) / 864e5 > 92) return this.msg('Период — не больше 3 месяцев');
             Store.set('adminLast', { nick: nk });
             this._nick = nk;
@@ -2081,7 +2127,7 @@ const AdminView = {
         out.innerHTML = '';
         try {
             // номера категорий ещё не известны — сначала ищем их на сайте
-            if (this.resolve().some(c => !c.id && this.ids()[c.k] !== '-')) {
+            if (this.resolve().some(c => !c.id && !c.opt && this.ids()[c.k] !== '-')) {
                 CatLearn._disc = null;
                 await CatLearn.discover().catch(() => {});
             }
@@ -2113,7 +2159,7 @@ const AdminView = {
                 addRows(r, cat);
             }
             this.prog('', gen);
-            this.render(out, { nick, a, b, all: own, own, cats, capped, tab: 'cat' });
+            this.render(out, { nick, a, b, all: own, own, cats, capped, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -2137,13 +2183,17 @@ const AdminView = {
         const active = [...perDay.values()].filter(Boolean).length;
         const cnt = new Map();
         own.forEach(r => cnt.set(String(r.category_id), (cnt.get(String(r.category_id)) || 0) + 1));
-        const cats = list.filter(c => c.id).map(c => ({ k: c.id, name: c.name, n: cnt.get(String(c.id)) || 0 }));
+        const seenIds = new Set();
+        const cats = list.filter(c => c.id && !seenIds.has(c.id) && seenIds.add(c.id)).map(c => ({ k: c.id, name: c.name, n: cnt.get(String(c.id)) || 0 }));
+        // над кем работал — только по наказаниям и действиям, не по сообщениям в админ-чатах
+        const actIds = new Set(list.filter(c => c.id && !/chat/.test(c.k)).map(c => String(c.id)));
         const catNm = new Map(cats.map(c => [String(c.k), c.name]));
         const dmax = Math.max(1, ...perDay.values());
         const cmax = Math.max(1, ...cats.map(g => g.n));
         // над кем работал: ники из описаний действий (кроме самого админа)
         const tg = new Map();
         own.forEach(r => {
+            if (!actIds.has(String(r.category_id))) return;
             const seen = new Set();
             (String(r.transaction_desc || '').match(NICK_RE) || []).forEach(n => {
                 if (sameNick(n, nick) || seen.has(n)) return;
@@ -2292,7 +2342,7 @@ const AdminView = {
             CatLearn._disc = null;
             const n = await CatLearn.discover().catch(() => 0);
             if (!scrim.isConnected) return;
-            const left = this.resolve().filter(c => !c.id).length;
+            const left = this.resolve().filter(c => !c.id && !c.opt && this.ids()[c.k] !== '-').length;
             toast(left ? `Не нашлось: ${left} — впиши номера вручную` : 'Номера найдены', left ? 'info' : 'ok');
             if (n || !left) this.settings();
             else bt.disabled = false;
@@ -2361,7 +2411,14 @@ const Bots = {
     // где искать: выбранные вручную или игровые чаты; пусто — категории ещё неизвестны, ищем везде
     chats(c = this.cfg()) {
         const all = this.allChats();
-        if (Array.isArray(c.chats)) return all.filter(x => c.chats.includes(String(x.id)));
+        if (Array.isArray(c.chats)) {
+            const got = all.filter(x => c.chats.includes(String(x.id)));
+            // названия выбранных чатов пока не подтверждены — ищем по их номерам
+            if (got.length || !c.chats.length) return got;
+            const fb = c.chats.map(id => ({ id: String(id), name: CATS[id] || 'чат #' + id }));
+            fb.fallback = true;
+            return fb;
+        }
         const game = all.filter(x => this.isGameChat(x.name));
         return game.length ? game : all;
     },
@@ -2424,7 +2481,7 @@ const BotView = {
         if (this.scrim) return Layer.show(this.scrim);
         Layer.closeModals();
         this._gen = (this._gen || 0) + 1;
-        const sel = Store.get('botRange', 3);
+        const sel = Math.min(this.RANGES.length - 1, Math.max(0, +Store.get('botRange', 3) || 0));
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
             <div class="m-head"><span class="vic" style="--c:#f5a524;width:34px;height:34px;border-radius:10px">${icon('bot', 16)}</span>
@@ -2501,11 +2558,15 @@ const BotView = {
                 }
             }
             // 1) точные фразы — поиском сайта
+            // по каждому выбранному чату: иначе частые слова («бесплатно») забивают лимит системными записями
             for (const [i, p] of list.entries()) {
-                const r = await Api.all({ transaction_desc__ilike: `%${p}%`, ...range }, 5, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length}): страница ${pg}, записей ${n}…`, gen), null, alive);
-                if (!alive()) return;
-                capped = capped || r.capped;
-                take(r);
+                // чатов много — одним запросом пошире (лишнее отбросит фильтр чатов)
+                for (const ch of chats.length && chats.length <= 3 ? chats : [null]) {
+                    const r = await Api.all({ transaction_desc__ilike: `%${p}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range }, ch ? 5 : 10, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
+                    if (!alive()) return;
+                    capped = capped || r.capped;
+                    take(r, ch && ch.id);
+                }
             }
             // 2) похожие написания — читаем чаты целиком
             if (c.fuzzy) {
@@ -2521,6 +2582,12 @@ const BotView = {
             const idByNick = new Map();
             const hasId = x => x.player_id != null && x.player_id !== '';
             rows.forEach(x => hasId(x) && x.player_name && idByNick.set(String(x.player_name).trim().toLowerCase(), x.player_id));
+            const knownNicks = new Set(rows.map(x => String(x.player_name || '').trim().toLowerCase()).filter(Boolean));
+            for (let i = rows.length - 1; i >= 0; i--) {
+                const x = rows[i];
+                x._tg = (x._tg || []).filter(h => !knownNicks.has(h.slice(1)));
+                if (!x._hit.length && !x._tg.length) rows.splice(i, 1);
+            }
             rows.forEach(x => {
                 const n = String(x.player_name || '').trim();
                 if (!n) return;
@@ -2532,7 +2599,7 @@ const BotView = {
                 if (g.id == null && hasId(x)) g.id = x.player_id;
                 g.n++;
                 x._hit.forEach(h => g.hits.add(h));
-                (x._tg || []).forEach(h => g.tg.add(h));
+                (x._tg || []).forEach(h => !knownNicks.has(h.slice(1)) && g.tg.add(h));
                 if (x.player_ip) g.ips.add(x.player_ip);
                 g.cats.add(catName(x));
                 const t = new Date(x.time).getTime() || 0;
@@ -2551,11 +2618,43 @@ const BotView = {
             sus.forEach((g, k) => g.tg.forEach(h => byTg.set(h, (byTg.get(h) || new Set()).add(k))));
             sus.forEach(g => (g.tgAcc = Math.max(0, ...[...g.tg].map(h => byTg.get(h).size))));
             const arr = [...sus.values()].sort((x, y) => y.tgAcc - x.tgAcc || y.acc - x.acc || y.n - x.n);
+            // уже заблокированные: записи «Админ-блокировок» и «Админ-супердействий» с начала периода до сейчас,
+            // где ник подозреваемого стоит в тексте блокировки (разбан снимает отметку)
+            const blk = AdminView.resolve().filter(x => (x.k === 'block' || x.k === 'super') && x.id);
+            if (c.hideBanned && blk.length && arr.length) {
+                const byNick = new Map();
+                arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
+                const NICKS = /[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g;
+                for (const [i, cat] of blk.entries()) {
+                    const r = await Api.all({ category_id__exact: cat.id, time__gte: range.time__gte, time__lte: new Date().toISOString() }, 15, (pg, n) => this.prog(`Кто уже заблокирован (${i + 1}/${blk.length}): страница ${pg}, записей ${n}…`, gen), null, alive);
+                    if (!alive()) return;
+                    // от старых к новым: последнее решение (бан или разбан) — главное
+                    r.slice()
+                        .sort((x, y) => new Date(x.time) - new Date(y.time))
+                        .forEach(x => {
+                            const txt = String(x.transaction_desc || '');
+                            const un = /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)/i.test(txt);
+                            if (!un && cat.k === 'super' && !/бан|ban|блок|block/i.test(txt)) return;
+                            const seen = new Set();
+                            // ник в поле «игрок» — обычно тот, кто выдал блокировку
+                            (txt.match(NICKS) || []).forEach(n => {
+                                if (sameNick(n, x.player_name)) return;
+                                const g = n && byNick.get(String(n).toLowerCase());
+                                if (!g || seen.has(g)) return;
+                                seen.add(g);
+                                g.banned = un ? null : { t: x.time, desc: txt };
+                            });
+                        });
+                }
+                this.prog('', gen);
+            }
             // уровни: последний вход/выход с «Уровень: N» — сначала у тех, кто рекламирует @ник или пишет с общего IP
             if (c.levels) {
+                let fails = 0;
                 const top = arr
+                    .filter(g => !g.banned)
                     .filter(g => g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3)
-                    .concat(arr.filter(g => !(g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3)))
+                    .concat(arr.filter(g => !g.banned && !(g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3)))
                     .slice(0, 80);
                 for (const [i, g] of top.entries()) {
                     if (!alive()) return;
@@ -2571,8 +2670,14 @@ const BotView = {
                             .map(x => String(x.transaction_desc || '').match(/ровень\D{0,3}(\d+)/i))
                             .find(Boolean);
                         g.level = m ? +m[1] : null;
-                    } catch {
+                        fails = 0;
+                    } catch (e) {
                         g.level = null;
+                        // сайт не пускает или просит реже — дальше по списку не мучаем его
+                        if (/не пускает|реже/.test(e.message) || ++fails >= 3) {
+                            toast('Уровни проверены не у всех: ' + e.message, 'info');
+                            break;
+                        }
                     }
                 }
             }
@@ -2591,34 +2696,6 @@ const BotView = {
                 g.weak = !g.bot && !g.tg.size && g.hits.size <= 1 && g.n < 3;
             });
             arr.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n);
-            // уже заблокированные: записи «Админ-блокировок» и «Админ-супердействий» с начала периода до сейчас,
-            // где ник подозреваемого стоит в тексте блокировки (разбан снимает отметку)
-            const blk = AdminView.resolve().filter(x => (x.k === 'block' || x.k === 'super') && x.id);
-            if (c.hideBanned && blk.length && arr.length) {
-                const byNick = new Map();
-                arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
-                const NICKS = /[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g;
-                for (const [i, cat] of blk.entries()) {
-                    const r = await Api.all({ category_id__exact: cat.id, time__gte: range.time__gte, time__lte: new Date().toISOString() }, 15, (pg, n) => this.prog(`Кто уже заблокирован (${i + 1}/${blk.length}): страница ${pg}, записей ${n}…`, gen), null, alive);
-                    if (!alive()) return;
-                    // от старых к новым: последнее решение (бан или разбан) — главное
-                    r.slice()
-                        .sort((x, y) => new Date(x.time) - new Date(y.time))
-                        .forEach(x => {
-                            const txt = String(x.transaction_desc || '');
-                            const un = /разбан|разблок|unban|unblock|снял/i.test(txt);
-                            if (!un && cat.k === 'super' && !/бан|ban|блок|block/i.test(txt)) return;
-                            const seen = new Set();
-                            [x.player_name, ...(txt.match(NICKS) || [])].forEach(n => {
-                                const g = n && byNick.get(String(n).toLowerCase());
-                                if (!g || seen.has(g)) return;
-                                seen.add(g);
-                                g.banned = un ? null : { t: x.time, desc: txt };
-                            });
-                        });
-                }
-                this.prog('', gen);
-            }
             const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
             this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, showBanned: false, showWeak: false, blkChecked: blk.length > 0 });
         } catch (e) {
@@ -2788,8 +2865,8 @@ const BotView = {
                 <div class="vdl-mrow"><input type="checkbox" data-k="hideBanned" ${c.hideBanned ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Скрывать заблокированных</span></div>
               </div></div>
               <div class="sec"><h4>Где искать</h4><div class="card">${
-                  Bots.allChats().length
-                      ? Bots.allChats()
+                  Bots.allChats().length || Bots.chats(c).fallback
+                      ? [...Bots.allChats(), ...(Bots.chats(c).fallback ? Bots.chats(c).filter(x => !Bots.allChats().some(y => y.id === x.id)) : [])]
                             .map(x => `<div class="vdl-mrow"><input type="checkbox" data-chat="${U.esc(x.id)}" ${Bots.chats(c).some(y => y.id === x.id) ? 'checked' : ''}><span class="nm">${U.esc(x.name)}</span><span class="muted">#${U.esc(x.id)}</span></div>`)
                             .join('')
                       : '<div class="vdl-mrow"><span class="nm muted">Категории чатов появятся, когда откроешь их в логах</span></div>'
@@ -2814,7 +2891,7 @@ const BotView = {
                 fuzzy: v('fuzzy').checked,
                 marks: v('marks').checked,
                 hideBanned: v('hideBanned').checked,
-                chats: Bots.allChats().length ? [...scrim.querySelectorAll('[data-chat]')].filter(x => x.checked).map(x => x.dataset.chat) : c.chats
+                chats: scrim.querySelectorAll('[data-chat]').length ? [...scrim.querySelectorAll('[data-chat]')].filter(x => x.checked).map(x => x.dataset.chat) : c.chats
             });
             Bots.reset();
             toast('Сохранено');
@@ -2877,13 +2954,13 @@ tr.vdl-done { opacity: .45; }
 .vdl-trade { display: inline-flex; align-items: center; margin-left: 10px; padding: 2px 10px; vertical-align: middle; border-radius: 7px; font-size: 12px; font-weight: 700; color: #fff; cursor: pointer; background: color-mix(in srgb, ${acc} 80%, #1b6cff); box-shadow: 0 2px 8px -3px ${acc}; }
 .vdl-trade:hover { filter: brightness(1.12); }
 /* Bootstrap 5.3 красит ячейки светлой заливкой через inset box-shadow поверх любого фона — убираем, ячейки тёмные */
-html body :is(#log-table, table:has(tr.first-row)) td, html body :is(#log-table, table:has(tr.first-row)) th { box-shadow: none !important; --bs-table-bg-type: transparent; --bs-table-bg-state: transparent; --bs-table-accent-bg: transparent; --bs-table-striped-bg: transparent; --bs-table-hover-bg: transparent; }
-html body :is(#log-table, table:has(tr.first-row)), html body :is(#log-table, table:has(tr.first-row)) > tbody, html body :is(#log-table, table:has(tr.first-row)) > tbody > tr { background: transparent !important; --bs-table-bg: transparent; }
+html body :is(#log-table, table.vdl-logtable) td, html body :is(#log-table, table.vdl-logtable) th { box-shadow: none !important; --bs-table-bg-type: transparent; --bs-table-bg-state: transparent; --bs-table-accent-bg: transparent; --bs-table-striped-bg: transparent; --bs-table-hover-bg: transparent; }
+html body :is(#log-table, table.vdl-logtable), html body :is(#log-table, table.vdl-logtable) > tbody, html body :is(#log-table, table.vdl-logtable) > tbody > tr { background: transparent !important; --bs-table-bg: transparent; }
 /* ячейки — стекло темы VERDICT (как блоки на форуме); без размытия — с длинной таблицей оно тормозит прокрутку */
-html body :is(#log-table, table:has(tr.first-row)) { backdrop-filter: none; -webkit-backdrop-filter: none; }
-html body :is(#log-table, table:has(tr.first-row)) > tbody > tr > td { background: var(--vd-glass, rgba(18,20,27,.42)) !important; color: #e4e6eb; }
-html body :is(#log-table, table:has(tr.first-row)) > tbody > tr > td[colspan] { background: linear-gradient(rgba(0,0,0,.2), rgba(0,0,0,.2)), var(--vd-glass, rgba(18,20,27,.42)) !important; color: #cfd2d8; }
-html body :is(#log-table, table:has(tr.first-row)) > tbody > tr.first-row:hover > td { background: linear-gradient(color-mix(in srgb, ${acc} 16%, transparent), color-mix(in srgb, ${acc} 16%, transparent)), var(--vd-glass, rgba(18,20,27,.42)) !important; }
+html body :is(#log-table, table.vdl-logtable) { backdrop-filter: none; -webkit-backdrop-filter: none; }
+html body :is(#log-table, table.vdl-logtable) > tbody > tr > td { background: var(--vd-glass, rgba(18,20,27,.42)) !important; color: #e4e6eb; }
+html body :is(#log-table, table.vdl-logtable) > tbody > tr > td[colspan] { background: linear-gradient(rgba(0,0,0,.2), rgba(0,0,0,.2)), var(--vd-glass, rgba(18,20,27,.42)) !important; color: #cfd2d8; }
+html body :is(#log-table, table.vdl-logtable) > tbody > tr.first-row:hover > td { background: linear-gradient(color-mix(in srgb, ${acc} 16%, transparent), color-mix(in srgb, ${acc} 16%, transparent)), var(--vd-glass, rgba(18,20,27,.42)) !important; }
 /* выпадающие списки сайта (обычный select, vue-select, multiselect, choices, tom-select, listbox, автодополнение): тёмные вместо белых.
    Классы у этих компонентов свои — красим их везде, где бы фильтр ни стоял */
 html body select { color-scheme: dark; }
@@ -2963,7 +3040,8 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
             const pop = document.createElement('div');
             pop.className = 'vdl-dl';
             pop.hidden = true;
-            document.body.appendChild(pop);
+            // вне body: наблюдатель таблицы не реагирует на перерисовку подсказок
+            document.documentElement.appendChild(pop);
             let items = [],
                 hl = -1;
             const opts = () => {
@@ -2980,7 +3058,8 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
                 const q = inp.value.trim().toLowerCase();
                 const all = opts();
                 // поле уже содержит точное значение — показываем весь список, иначе — подходящие
-                items = all.filter(o => !q || all.some(x => x.v.toLowerCase() === q) || (o.v + ' ' + o.t).toLowerCase().includes(q)).slice(0, 300);
+                const exact = !!q && all.some(x => x.v.toLowerCase() === q);
+                items = all.filter(o => !q || exact || (o.v + ' ' + o.t).toLowerCase().includes(q)).slice(0, 300);
                 hl = -1;
                 pop.innerHTML = '';
                 items.forEach((o, i) => {
@@ -3037,12 +3116,17 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
             addEventListener('resize', () => !pop.hidden && place(), sig);
             inp._vdlPop = pop;
             pop._vdlAbort = inp._vdlAbort;
+            pop._vdlInp = inp;
         });
         // поле убрали со страницы — убираем и его список
         document.querySelectorAll('.vdl-dl').forEach(p => {
             const own = [...document.querySelectorAll('input[data-vdl-list]')].some(i => i._vdlPop === p);
             if (!own) {
                 if (p._vdlAbort) p._vdlAbort();
+                if (p._vdlInp) {
+                    p._vdlInp.setAttribute('list', p._vdlInp.dataset.vdlList);
+                    delete p._vdlInp.dataset.vdlList;
+                }
                 p.remove();
             }
         });
@@ -3185,10 +3269,12 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
         this.unpill(td);
         // ник-ссылка сайта: ник для копирования и подсказку — убрать
         const a = td.querySelector(':scope > a');
-        if (a && a._vdlNick !== undefined) {
-            a._vdlNick = '';
-            a.title = '';
-            a.style.cursor = '';
+        for (const el of [a, td]) {
+            if (el && el._vdlNick !== undefined) {
+                el._vdlNick = '';
+                el.title = '';
+                el.style.cursor = '';
+            }
         }
         if (td._vdlCopyT) {
             td.title = '';
@@ -3226,6 +3312,7 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
     },
     decorate() {
         const c = this.cfg();
+        document.querySelectorAll('table:not(.vdl-logtable)').forEach(t => t.querySelector('tr.first-row') && t.classList.add('vdl-logtable'));
         document.querySelectorAll('td').forEach(td => {
             // сайт подменил текст в ячейке — сначала снимаем своё, потом размечаем заново
             if (td.dataset.vdlSig !== undefined && td.dataset.vdlSig !== this.rawOf(td)) this.reset(td);
@@ -3309,8 +3396,10 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
     botMarks() {
         const c = Bots.cfg();
         if (!c.marks) return;
-        const names = new Set(Bots.chats(c).map(x => x.name));
-        if (Array.isArray(c.chats) && Bots.allChats().length && !names.size) return;
+        const chosen = Bots.chats(c);
+        // названия выбранных чатов неизвестны — по названию не фильтруем
+        const names = new Set(chosen.fallback ? [] : chosen.map(x => x.name));
+        if (Array.isArray(c.chats) && (Bots.allChats().length || chosen.length) && !chosen.length) return;
         document.querySelectorAll('td').forEach(td => {
             if (td.dataset.bot || (td.colSpan < 2 && !(td.closest('tr') && td.closest('tr').classList.contains('second-row')))) return;
             td.dataset.bot = '1';
@@ -3485,14 +3574,11 @@ const TradeView = {
         };
         try {
             // один трейд по его номеру; широкий период, чтобы захватить весь обмен
-            rows = await Api.all(
-                { transaction_desc__ilike: `%TradeID:%${id}%`, time__gte: new Date(Date.now() - 180 * 864e5).toISOString(), time__lte: new Date().toISOString() },
-                6,
-                null,
-                null,
-                () => this.scrim === scrim
-            );
-            // поиск сайта — по началу текста: «TradeID: 12» находит и 123, 1234 — оставляем точный номер
+            const q = like => Api.all({ transaction_desc__ilike: like, time__gte: new Date(Date.now() - 180 * 864e5).toISOString(), time__lte: new Date().toISOString() }, 6, null, null, () => this.scrim === scrim);
+            // в записях «[TradeID: N] …» — ищем точно этот номер, а если сайт пишет иначе — шире
+            rows = await q(`%TradeID: ${id}]%`);
+            if (!rows.length && this.scrim === scrim) rows = await q(`%TradeID:%${id}%`);
+            // широкий поиск находит и чужие номера — оставляем точный
             const exact = new RegExp(`TradeID:\\s*${id}(?!\\d)`);
             rows = rows.filter(r => exact.test(String(r.transaction_desc || '')));
             rows.sort((a, b) => new Date(a.time) - new Date(b.time));
@@ -3558,7 +3644,7 @@ function notice(title, text, code) {
     );
     card.querySelector('[data-a="x"]').onclick = () => card.remove();
     const cp = card.querySelector('[data-a="cp"]');
-    if (cp) cp.onclick = () => navigator.clipboard.writeText(code).then(() => toast('Код скопирован'));
+    if (cp) cp.onclick = () => navigator.clipboard.writeText(code).then(() => toast('Код скопирован'), () => toast('Не удалось скопировать', 'err'));
 }
 
 async function main() {
@@ -3618,9 +3704,16 @@ async function main() {
         const host = document.getElementById('vdl-layer');
         if (host) host.remove();
         Layer._root = null;
-        if (ON_LOGS) a.state === 'error' ? notice('Не проверить доступ', 'Больше суток нет связи с разработчиком — обнови страницу позже.', a.code) : notice('Доступ закрыт', 'Разработчик закрыл тебе «VERDICT Логи».');
+        Layer.accent(info);
+        if (ON_LOGS)
+            a.state === 'error'
+                ? notice('Не проверить доступ', 'Больше суток нет связи с разработчиком — обнови страницу позже.', a.code)
+                : a.state === 'no'
+                  ? notice('Доступ закрыт', 'Разработчик закрыл тебе «VERDICT Логи».')
+                  : notice('Доступ не выдан', 'Отправь этот код разработчику. Как только он откроет доступ, обнови страницу (до пары минут).', a.code);
     };
-    const timer = setInterval(() => recheck(false), 5 * 60e3 + 5000);
+    // на сайте логов сверяемся раз в 30 минут; в профилях форума — только при открытии
+    const timer = ON_LOGS ? setInterval(() => recheck(true), 30 * 60e3) : 0;
     if (quick) setTimeout(() => recheck(true), 4000);
 }
 
@@ -3631,12 +3724,15 @@ addEventListener(
             // Esc в поле переименования — отмена правки, а не закрытие окна
             const a = Layer._root.activeElement;
             if (a && a.matches('[data-ren-inp]')) {
+                e.stopPropagation();
                 a.value = '';
                 a.blur();
                 return;
             }
             const top = [...Layer._root.querySelectorAll('.scrim:not([hidden])')].pop();
             if (!top) return;
+            e.stopPropagation();
+            e.preventDefault();
             // главные окна прячутся вместе с результатами
             if (Layer.mains().includes(top)) return Layer.hide(top);
             top.remove();
