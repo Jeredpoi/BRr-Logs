@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.17
+// @version      1.2.18
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.17
+// @version      1.2.18
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.17';
+const VERSION = '1.2.18';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -1223,17 +1223,23 @@ const Panel = {
     },
     // box — блок вложенной проверки («Кто ещё с этого IP»): ошибка пишется в него, а не поверх отчёта
     async run(fn, box) {
-        const want = this._gen;
+        let want = this._gen;
         while (this.busy) {
-            if (box || !this.stale()) {
-                toast('Подожди, предыдущая проверка ещё идёт', 'info');
-                return false;
+            if (!this.stale()) {
+                // кнопка внутри отчёта, который ещё догружается, — просим подождать
+                if (box) {
+                    toast('Подожди, отчёт ещё загружается', 'info');
+                    return false;
+                }
+                // новая проверка из формы заменяет недоделанную прежнюю: та останавливается на следующей странице
+                want = this._gen = (this._gen || 0) + 1;
             }
-            // проверка из закрытого окна сама прекращает листание — ждём её
+            // проверка из закрытого или заменённого окна сама прекращает листание — ждём её и запускаем эту
+            if (box) box.hidden = false, (box.innerHTML = '<div class="sub" style="margin:4px 0">Загружаю…</div>');
             await this._running;
         }
         // пока ждали, окно сменили или запустили другую проверку — эта уже не нужна
-        if (!box && this._gen !== want) return false;
+        if (this._gen !== want) return false;
         // каждый отчёт — своё поколение: догружающиеся вкладки прошлого отчёта в новый не пишут
         if (!box) this._gen = (this._gen || 0) + 1;
         this.busy = true;
