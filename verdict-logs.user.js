@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.16
+// @version      1.2.17
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.16
+// @version      1.2.17
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.16';
+const VERSION = '1.2.17';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2553,7 +2553,7 @@ const BotView = {
                     .slice(0, 80);
                 for (const [i, g] of top.entries()) {
                     if (!alive()) return;
-                    this.prog(`Уровни: ${i + 1} из ${top.length}…`, gen);
+                    this.prog(`Проверяю уровень аккаунтов: ${i + 1} из ${top.length}…`, gen);
                     try {
                         // свежие входы: при сортировке «сначала старые» первая страница — давние записи, поэтому окно короче
                         const since = new Date(Date.now() - (Api.order === 'time' ? 2 : 30) * 864e5).toISOString();
