@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.11
+// @version      1.2.12
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.11
+// @version      1.2.12
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.11';
+const VERSION = '1.2.12';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2284,7 +2284,7 @@ function botNorm(s, keepLatin) {
     return out;
 }
 const Bots = {
-    DEF: { phrases: BOT_PHRASES.join('\n'), level: 2, minAcc: 3, fuzzy: false, levels: true, marks: true, chats: null },
+    DEF: { phrases: BOT_PHRASES.join('\n'), level: 2, minAcc: 3, fuzzy: false, levels: true, marks: true, chats: null, hideBanned: true },
     cfg() {
         return Object.assign({}, this.DEF, Store.get('botCfg', {}));
     },
@@ -2495,7 +2495,7 @@ const BotView = {
             // уже заблокированные: записи «Админ-блокировок» и «Админ-супердействий» с начала периода до сейчас,
             // где ник подозреваемого стоит в тексте блокировки (разбан снимает отметку)
             const blk = AdminView.resolve().filter(x => (x.k === 'block' || x.k === 'super') && x.id);
-            if (blk.length && arr.length) {
+            if (c.hideBanned && blk.length && arr.length) {
                 const byNick = new Map(arr.map(g => [g.nick.toLowerCase(), g]));
                 const NICKS = /[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g;
                 for (const [i, cat] of blk.entries()) {
@@ -2657,6 +2657,7 @@ const BotView = {
                 <div class="vdl-mrow"><input type="checkbox" data-k="levels" ${c.levels ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Проверять уровень</span></div>
                 <div class="vdl-mrow"><input type="checkbox" data-k="fuzzy" ${c.fuzzy ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Похожие написания <span class="muted">(тeлеграм латиницей, т е л е г р а м — дольше)</span></span></div>
                 <div class="vdl-mrow"><input type="checkbox" data-k="marks" ${c.marks ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Пометки в таблице логов</span></div>
+                <div class="vdl-mrow"><input type="checkbox" data-k="hideBanned" ${c.hideBanned ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Скрывать заблокированных</span></div>
               </div></div>
               <div class="sec"><h4>Где искать</h4><div class="card">${
                   Bots.allChats().length
@@ -2684,6 +2685,7 @@ const BotView = {
                 levels: v('levels').checked,
                 fuzzy: v('fuzzy').checked,
                 marks: v('marks').checked,
+                hideBanned: v('hideBanned').checked,
                 chats: Bots.allChats().length ? [...scrim.querySelectorAll('[data-chat]')].filter(x => x.checked).map(x => x.dataset.chat) : c.chats
             });
             Bots.reset();
