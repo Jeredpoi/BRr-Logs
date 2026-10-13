@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.10
+// @version      1.2.11
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.10
+// @version      1.2.11
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.10';
+const VERSION = '1.2.11';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -520,6 +520,10 @@ const LOGS_UI_CSS = `
 .vdl-ftools select.inp { flex: none; min-width: 0; width: auto; color: #e8eaee; color-scheme: dark; padding: 0 10px; cursor: pointer; }
 .vdl-ftools select.inp option { background: #14161c; color: #e8eaee; }
 .vdl-bar.pick { cursor: pointer; }
+.vdl-pager { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0 0 10px; }
+.vdl-pager .btn { height: 28px; min-width: 32px; padding: 0 9px; font-size: 12.5px; justify-content: center; }
+.vdl-pager .btn[disabled] { opacity: .35; pointer-events: none; }
+.vdl-pager .muted { font-size: 12px; }
 /* выпадающий список с галочками */
 .vdl-dd { position: relative; }
 .vdl-dd > .btn { height: 32px; max-width: 280px; justify-content: space-between; gap: 8px; }
@@ -2488,7 +2492,35 @@ const BotView = {
                 g.bot = g.why.some(w => /уровень|акк/.test(w));
             });
             arr.sort((x, y) => y.bot - x.bot || y.why.length - x.why.length || y.n - x.n);
-            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, capped });
+            // уже заблокированные: записи «Админ-блокировок» и «Админ-супердействий» с начала периода до сейчас,
+            // где ник подозреваемого стоит в тексте блокировки (разбан снимает отметку)
+            const blk = AdminView.resolve().filter(x => (x.k === 'block' || x.k === 'super') && x.id);
+            if (blk.length && arr.length) {
+                const byNick = new Map(arr.map(g => [g.nick.toLowerCase(), g]));
+                const NICKS = /[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g;
+                for (const [i, cat] of blk.entries()) {
+                    const r = await Api.all({ category_id__exact: cat.id, time__gte: range.time__gte, time__lte: new Date().toISOString() }, 15, (pg, n) => this.prog(`Кто уже заблокирован (${i + 1}/${blk.length}): страница ${pg}, записей ${n}…`, gen), null, alive);
+                    if (!alive()) return;
+                    // от старых к новым: последнее решение (бан или разбан) — главное
+                    r.slice()
+                        .sort((x, y) => new Date(x.time) - new Date(y.time))
+                        .forEach(x => {
+                            const txt = String(x.transaction_desc || '');
+                            const un = /разбан|разблок|unban|unblock|снял/i.test(txt);
+                            if (!un && cat.k === 'super' && !/бан|ban|блок|block/i.test(txt)) return;
+                            const seen = new Set();
+                            [x.player_name, ...(txt.match(NICKS) || [])].forEach(n => {
+                                const g = n && byNick.get(String(n).toLowerCase());
+                                if (!g || seen.has(g)) return;
+                                seen.add(g);
+                                g.banned = un ? null : { t: x.time, desc: txt };
+                            });
+                        });
+                }
+                this.prog('', gen);
+            }
+            const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
+            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, capped, page: 0, showBanned: false, blkChecked: blk.length > 0 });
         } catch (e) {
             if (gen !== this._gen) return;
             this.prog('', gen);
@@ -2498,8 +2530,19 @@ const BotView = {
         }
     },
     render(out, d) {
-        const { arr, rows, c, ips } = d;
+        const { rows, c, ips } = d;
+        const nBanned = d.arr.filter(g => g.banned).length;
+        // заблокированных по умолчанию не показываем
+        const arr = d.showBanned ? d.arr : d.arr.filter(g => !g.banned);
         const bots = arr.filter(g => g.bot);
+        const PER = 25;
+        const pages = Math.max(1, Math.ceil(arr.length / PER));
+        d.page = Math.min(Math.max(0, d.page || 0), pages - 1);
+        const pageRows = arr.slice(d.page * PER, d.page * PER + PER);
+        const pager = pages > 1 ? `<div class="vdl-pager"><button class="btn" data-pg="${d.page - 1}" ${d.page ? '' : 'disabled'}>‹</button>${[...Array(pages).keys()]
+            .filter(i => i === 0 || i === pages - 1 || Math.abs(i - d.page) <= 2)
+            .map((i, k, a) => `${k && i - a[k - 1] > 1 ? '<span class="muted">…</span>' : ''}<button class="btn${i === d.page ? ' pri' : ''}" data-pg="${i}">${i + 1}</button>`)
+            .join('')}<button class="btn" data-pg="${d.page + 1}" ${d.page < pages - 1 ? '' : 'disabled'}>›</button><span class="muted" style="margin-left:6px">${d.page * PER + 1}–${Math.min(arr.length, d.page * PER + PER)} из ${arr.length}</span></div>` : '';
         const groups = [...ips.values()].filter(s => s.size >= c.minAcc).length;
         // IP, с которых писало больше всего подозреваемых аккаунтов
         const msgs = new Map();
@@ -2508,6 +2551,8 @@ const BotView = {
         const topIps = [];
         [...ips]
             .sort((x, y) => y[1].size - x[1].size || (msgs.get(y[0]) || 0) - (msgs.get(x[0]) || 0))
+            .map(([ip, set]) => [ip, d.showBanned || !d.bannedKeys ? set : new Set([...set].filter(k => !d.bannedKeys.has(k)))])
+            .filter(([, set]) => set.size)
             .forEach(([ip, set]) => {
                 if (topIps.length >= 5) return;
                 const fresh = [...set].filter(n => !shown.has(n));
@@ -2545,13 +2590,15 @@ const BotView = {
             <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}${d.capped ? ' · сообщений очень много — проверены не все, возьми период короче' : ''}</div>
+          ${nBanned ? `<div class="btns" style="margin:-2px 0 10px"><label class="vdl-chk" style="font-size:12.5px"><input type="checkbox" data-a="ban" ${d.showBanned ? 'checked' : ''}> Показать заблокированных (${nBanned})</label></div>` : ''}
+          ${pager}
           <div class="card" data-l="list">${
               arr.length
-                  ? arr
+                  ? pageRows
                         .map(
                             g => `<div class="vdl-row vdl-botrow ${g.bot ? 'is-bot' : ''}"><div class="main">
                       <div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>
-                        ${g.bot ? '<span class="vdl-tag" style="--c:#e5484d">похож на бота</span>' : ''}
+                        ${g.banned ? `<span class="vdl-tag" style="--c:#8b8f9a" title="${U.esc(fmtDate(g.banned.t) + ' — ' + g.banned.desc.slice(0, 160))}">заблокирован</span>` : g.bot ? '<span class="vdl-tag" style="--c:#e5484d">похож на бота</span>' : ''}
                         ${g.level != null ? `<span class="vdl-tag" style="--c:${g.level <= c.level ? '#e5484d' : '#8b8f9a'}">ур. ${g.level}</span>` : ''}
                         ${[...g.ips].slice(0, 2).map(ip => `<span class="vdl-tag" style="--c:${ips.get(ip).size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}${ips.get(ip).size > 1 ? ` · ${ips.get(ip).size} акк.` : ''}</span>`).join('')}
                         <span class="vdl-tag" style="--c:#8b8f9a">${g.n} сообщ.</span></div>
@@ -2560,9 +2607,26 @@ const BotView = {
                     <div class="vdl-btns"><button class="btn" data-an="${U.esc(g.nick)}">${icon('search', 13)}Игрок</button>${g.ips.size ? `<button class="btn" data-ip="${U.esc([...g.ips][0])}">IP</button>` : ''}</div></div>`
                         )
                         .join('')
-                  : '<div class="vdl-row"><div class="main sub">За этот период рекламных сообщений не найдено</div></div>'
+                  : `<div class="vdl-row"><div class="main sub">${d.arr.length ? 'Все найденные уже заблокированы' : 'За этот период рекламных сообщений не найдено'}</div></div>`
           }</div>
+          ${pager}
           ${arr.length ? `<div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copyb">${icon('download', 14)}Ники ботов</button><button class="btn" data-a="copy">${icon('download', 14)}Весь список</button></div>` : ''}`;
+        out.querySelectorAll('[data-pg]').forEach(
+            b =>
+                (b.onclick = () => {
+                    d.page = +b.dataset.pg;
+                    this.render(out, d);
+                    const l = out.querySelector('[data-l="list"]');
+                    if (l) l.scrollIntoView({ block: 'nearest' });
+                })
+        );
+        const bx = out.querySelector('[data-a="ban"]');
+        if (bx)
+            bx.onchange = () => {
+                d.showBanned = bx.checked;
+                d.page = 0;
+                this.render(out, d);
+            };
         out.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
         out.querySelectorAll('[data-an]').forEach(b => (b.onclick = () => Panel.open('nick', b.dataset.an, { stack: true })));
         out.querySelectorAll('[data-ip]').forEach(b => (b.onclick = () => Panel.open('ip', b.dataset.ip, { stack: true })));
