@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.12
+// @version      1.2.13
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.12
+// @version      1.2.13
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.12';
+const VERSION = '1.2.13';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -594,7 +594,7 @@ const Api = {
     // пауза между запросами: сайт отвечает 429 («слишком часто») — увеличиваем её
     BASE_GAP: 1800,
     gap: 1800,
-    async _page(params, offset, retried, tries = 0) {
+    async _page(params, offset, retried, tries = 0, reordered) {
         const wait = this.gap - (Date.now() - this.last);
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
         this.last = Date.now();
@@ -630,10 +630,10 @@ const Api = {
                 return this._page(params, offset, true, tries);
             }
             // сайт не понял сортировку «сначала новые» — меняем только на первой странице, чтобы не смешать порядок посреди листания
-            if (r.status === 400 && this.order === '-time' && !offset) {
+            if (r.status === 400 && this.order === '-time' && !offset && !reordered) {
                 this.order = 'time';
                 try {
-                    return await this._page(params, offset, true);
+                    return await this._page(params, offset, retried, tries, true);
                 } catch (e) {
                     this.order = '-time';
                     throw e;
@@ -840,10 +840,12 @@ const CatLearn = {
     },
     tried: new Set(),
     // дописываем только изменённое: поиск по странице и обучение по таблице идут одновременно и не затирают друг друга
-    save(map, orig) {
+    // чужую правку того же ключа, сделанную после нашего снимка, не трогаем — кроме ключей, подтверждённых сайтом (force)
+    save(map, orig, force) {
         const cur = Store.get('cats', {});
-        Object.keys(map).forEach(k => map[k] !== orig[k] && (cur[k] = map[k]));
-        Object.keys(orig).forEach(k => !(k in map) && delete cur[k]);
+        const mine = k => (force && force.has(k)) || !(k in cur) || cur[k] === orig[k];
+        Object.keys(map).forEach(k => map[k] !== orig[k] && mine(k) && (cur[k] = map[k]));
+        Object.keys(orig).forEach(k => !(k in map) && ((force && force.has(k)) || cur[k] === orig[k]) && delete cur[k]);
         Store.set('cats', cur);
     },
     // номера → названия со страницы: список «Категория» в фильтрах, данные в скриптах, ответы API про категории
@@ -954,7 +956,10 @@ const CatLearn = {
         // все названия уже известны и сайт не фильтровал по неизвестной категории — учить нечего
         const names = new Set(Object.values(map));
         const urlCat = ([...new URL(url).searchParams].find(([k, v]) => /categor/i.test(k) && /^\d{1,4}$/.test(v)) || [])[1];
-        if (tds.every(td => names.has(LogsPage.rawOf(td))) && !(urlCat && !map[urlCat])) return;
+        const tset = new Set(tds.map(td => LogsPage.rawOf(td)).filter(Boolean));
+        const tnm = tset.size === 1 ? [...tset][0] : '';
+        const wrong = urlCat && tnm && (map[urlCat] !== tnm || Object.keys(map).some(k => k !== urlCat && map[k] === tnm));
+        if (tds.every(td => names.has(LogsPage.rawOf(td))) && !(urlCat && !map[urlCat]) && !wrong) return;
         this.tried.add(url);
         const rows = await new Promise((res, rej) => {
             const p = (Api._q || Promise.resolve()).then(async () => {
@@ -988,6 +993,7 @@ const CatLearn = {
             tab.set(k, tab.has(k) && tab.get(k) !== LogsPage.rawOf(td) ? null : LogsPage.rawOf(td));
         });
         let n = 0;
+        const force = new Set();
         // сайт фильтровал по одной категории, а в ответе номера нет — берём его из адреса запроса,
         // если строки ответа — это та же таблица и в ней одна категория
         const cid = ([...new URL(url).searchParams].find(([k, v]) => /categor/i.test(k) && /^\d{1,4}$/.test(v)) || [])[1];
@@ -999,8 +1005,9 @@ const CatLearn = {
                 map[cid] = nm;
                 n++;
             }
+            force.add(cid);
             // номер подтверждён ответом сайта — то же название под другим номером было ошибкой
-            Object.keys(map).forEach(k => k !== cid && map[k] === nm && (delete map[k], n++));
+            Object.keys(map).forEach(k => k !== cid && map[k] === nm && (delete map[k], force.add(k), n++));
         }
         rows.forEach(r => {
             const name = tab.get(key(r.player_name, moneyText(r.transaction_desc)));
@@ -1011,7 +1018,7 @@ const CatLearn = {
             }
         });
         if (n) {
-            CatLearn.save(map, orig);
+            CatLearn.save(map, orig, force);
             this.dirty = true;
         }
     }
@@ -1593,7 +1600,7 @@ const Panel = {
             box.querySelectorAll('[data-l="bars"] [data-k]').forEach(b => b.classList.toggle('on', F.kinds.has(b.dataset.k)));
             box.querySelectorAll('.vdl-dd-it').forEach(it => (it.querySelector('input').checked = F.kinds.has(it.dataset.k)));
             $('[data-l="kl"]').textContent = !F.kinds.size ? 'Все причины' : F.kinds.size === 1 ? [...F.kinds][0] : `Причин: ${F.kinds.size}`;
-            const any = F.kinds.size || q;
+            const any = F.kinds.size || q || F.sort !== 'new';
             $('[data-a="reset"]').hidden = !any;
             $('[data-l="cnt"]').textContent = any ? `Показано ${list.length} из ${rows.length}` : '';
             $('[data-l="list"]').innerHTML = list.length
@@ -1627,7 +1634,12 @@ const Panel = {
             draw();
         };
         dd.querySelector('[data-a="kclose"]').onclick = shut;
-        box.addEventListener('mousedown', e => !dd.contains(e.target) && shut());
+        const root = box.getRootNode();
+        const outside = e => {
+            if (!box.isConnected) return root.removeEventListener('mousedown', outside, true);
+            if (!dd.contains(e.target)) shut();
+        };
+        root.addEventListener('mousedown', outside, true);
 
         const qi = $('[data-a="q"]');
         qi.value = F.q;
@@ -1715,7 +1727,7 @@ const Panel = {
             const params = Object.assign({ category_id__exact: 38, [key]: ip }, Api.range(days || this.days));
             const first = await Api.page(params, 0);
             if (first.length && first.some(r => r.player_ip && r.player_ip !== ip)) continue;
-            if (!first.length || (Api.pageSize() && first.length < Api.pageSize())) return first;
+            if (!first.length || (Api.pageSize() && first.length < Api.pageSize() && (Api._sizeOk || first.length < 20))) return first;
             return Api.all(params, 10, onPage, first, this.alive());
         }
         throw new Error('сайт логов не дал искать по IP');
@@ -1892,7 +1904,8 @@ const ADMIN_CATS = [
     { k: 'chat', name: 'Админ чат', re: /^админ[\s-]*чат/i },
     { k: 'block', name: 'Админ блокировки', re: /^админ[\s-]*блок/i, desc: true },
     { k: 'super', name: 'Супер наказания', re: /супер[\s-]*(наказ|действ)/i, desc: true },
-    { k: 'report', name: 'Жалобы / обращения', re: /жалоб|обращен|репорт|report/i }
+    // такой категории может не быть на сервере — считается, только если номер вписан вручную
+    { k: 'report', name: 'Жалобы / обращения', re: null, opt: true }
 ];
 const AdminView = {
     // номера категорий, вписанные вручную: { act: '70', … }
@@ -1909,7 +1922,7 @@ const AdminView = {
             // «-» — номер стёрли вручную: эту категорию не ищем и не считаем
             let id = man[c.k] && man[c.k] !== '-' ? String(man[c.k]) : '';
             let auto = false;
-            if (!id && man[c.k] !== '-') {
+            if (!id && c.re && man[c.k] !== '-') {
                 const hit = Object.keys(CATS).find(k => /^\d+$/.test(k) && CATS_SURE.has(k) && !taken.has(k) && c.re.test(String(CATS[k]).trim()));
                 if (hit) (id = hit), (auto = true);
             }
@@ -1950,12 +1963,13 @@ const AdminView = {
 
     open(nick = '') {
         // без нового ника — прежнее окно с подсчётом
-        if (this.scrim && (!nick || nick === this._nick)) return Layer.show(this.scrim);
+        if (this.scrim && (!nick || nick === this._nick) && this._day === this.mskDay(Date.now())) return Layer.show(this.scrim);
         if (this.scrim) this.scrim.remove();
         this.scrim = null;
         Layer.closeModals();
         this._gen = (this._gen || 0) + 1;
         const last = Store.get('adminLast', {});
+        this._day = this.mskDay(Date.now());
         const P = this.presets();
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
@@ -2005,6 +2019,9 @@ const AdminView = {
             let a = from.value,
                 b = to.value;
             if (a > b) [a, b] = [b, a];
+            const today = this.mskDay(Date.now());
+            if (a > today) return this.msg('Начало периода — в будущем');
+            if (b > today) b = to.value = today;
             if ((this.dayStart(b) - this.dayStart(a)) / 864e5 > 92) return this.msg('Период — не больше 3 месяцев');
             Store.set('adminLast', { nick: nk });
             this._nick = nk;
@@ -2040,7 +2057,8 @@ const AdminView = {
             }
             if (!alive()) return;
             const cats = this.resolve();
-            const ready = cats.filter(c => c.id);
+            const ids0 = new Set();
+            const ready = cats.filter(c => c.id && !ids0.has(c.id) && ids0.add(c.id));
             if (!ready.length) throw new Error('не найдены номера категорий — впиши их в «Что считать»');
             // конец периода — не позже «сейчас»: новые записи во время листания не сдвигают страницы
             const t0 = this.dayStart(a),
@@ -2078,7 +2096,7 @@ const AdminView = {
     render(out, d) {
         const { nick, a, b, all, own } = d;
         const list = d.cats || [];
-        const missing = list.filter(c => !c.id);
+        const missing = list.filter(c => !c.id && !c.opt);
         const days = [];
         for (let t = this.dayStart(a); t <= this.dayStart(b); t += 864e5) days.push(this.mskDay(t + 3600e3));
         const perDay = new Map(days.map(x => [x, 0]));
@@ -2226,7 +2244,7 @@ const AdminView = {
             <div class="pane">
               <div class="card">${cats
                   .map(
-                      c => `<div class="vdl-mrow"><span class="vic" style="--c:${c.id ? '#2fbf71' : '#f5a524'};width:22px;height:22px;border-radius:7px">${icon(c.id ? 'check' : 'x', 12)}</span><span class="nm">${U.esc(c.name)}</span><input class="inp" data-k="${c.k}" inputmode="numeric" maxlength="4" placeholder="№" value="${U.esc(c.id)}" title="Номер категории на сайте логов" style="width:74px;height:30px;text-align:center"></div>`
+                      c => `<div class="vdl-mrow"><span class="vic" style="--c:${c.id ? '#2fbf71' : c.opt ? '#8b8f9a' : '#f5a524'};width:22px;height:22px;border-radius:7px">${icon(c.id ? 'check' : 'x', 12)}</span><span class="nm">${U.esc(c.name)}</span><input class="inp" data-k="${c.k}" inputmode="numeric" maxlength="4" placeholder="№" value="${U.esc(c.id)}" title="Номер категории на сайте логов" style="width:74px;height:30px;text-align:center"></div>`
                   )
                   .join('')}</div>
               <div class="btns" style="margin-top:10px"><button class="btn" data-a="find">${icon('search', 14)}Найти номера</button><span style="flex:1"></span><button class="btn pri" data-a="save">Сохранить</button></div>
@@ -2263,6 +2281,8 @@ const AdminView = {
                 else if (!v && old[inp.dataset.k] === '-') man[inp.dataset.k] = '-';
             });
             if (bad) return toast('Номер категории — число, например 70', 'err');
+            const used = [...scrim.querySelectorAll('[data-k]')].map(i => i.value.trim()).filter(Boolean);
+            if (new Set(used).size !== used.length) return toast('Один номер вписан в две категории — у каждой свой номер', 'err');
             Store.set('adminIds', man);
             toast('Сохранено');
             close();
@@ -2282,6 +2302,18 @@ function botNorm(s, keepLatin) {
         else if (/[a-z0-9]/.test(ch)) out += keepLatin ? ch : BOT_LOOK[ch] || ch;
     }
     return out;
+}
+// рекламируемый телеграм: @ник или ссылка t.me/ник (почта вида a@b.ru — не ник)
+function tgHandles(text) {
+    const t = String(text || '');
+    const out = new Set();
+    for (const m of t.matchAll(/(?:^|[^\w@.])@([a-z][a-z0-9_]{3,31})(?![\w@]|\.[a-z0-9])/gi)) {
+        // «@Ivan_Petrov» — упоминание игрока в игре, «@admin» — служебное, это не телеграм
+        if (/^[A-Z][A-Za-z0-9]*_[A-Z][A-Za-z0-9]*$/.test(m[1]) || /^(admin|admins|help|here|everyone|all|support)$/i.test(m[1])) continue;
+        out.add('@' + m[1].toLowerCase());
+    }
+    for (const m of t.matchAll(/(?<![\w.])t\.me\/(?:s\/|joinchat\/|\+)?([a-z0-9_-]{4,40})/gi)) out.add('@' + m[1].toLowerCase());
+    return [...out];
 }
 const Bots = {
     DEF: { phrases: BOT_PHRASES.join('\n'), level: 2, minAcc: 3, fuzzy: false, levels: true, marks: true, chats: null, hideBanned: true },
@@ -2310,25 +2342,34 @@ const Bots = {
             .filter(x => x.length >= 2 && botNorm(x, true).length >= 2);
     },
     // какие фразы есть в тексте: точное совпадение и «похожее» (тeлеграм латиницей, т е л е г р а м)
+    // фразы разбираем один раз на список, а не на каждое сообщение
+    prep(list) {
+        if (this._prepFor === list) return this._prep;
+        const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const wb = '[^а-яёa-z0-9]';
+        this._prepFor = list;
+        return (this._prep = list.map(p => {
+            const pl = p.toLowerCase(),
+                bn = botNorm(p),
+                bl = botNorm(p, true);
+            return bn.length <= 4
+                ? { p, short: true, word: new RegExp(`(^|${wb})${esc(pl)}($|${wb})`, 'i'), norm: new RegExp(`(^|${wb})${esc(bn)}($|${wb})`) }
+                : { p, pl, bn, bl: /[a-z]/.test(pl) ? bl : '' };
+        }));
+    },
     match(text, list) {
         const low = String(text || '').toLowerCase();
         const norm = botNorm(text);
         const latin = botNorm(text, true);
+        let words = null;
         const hit = [];
-        (list || this._list || (this._list = this.phrases())).forEach(p => {
-            const pl = p.toLowerCase();
-            const bn = botNorm(p);
-            // короткие фразы («шок», «тгк») — только целым словом, иначе «шоколад» тоже реклама
-            if (bn.length <= 4) {
-                const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const wb = '[^а-яёa-z0-9]';
-                const word = new RegExp(`(^|${wb})${esc(pl)}($|${wb})`, 'i');
-                // и по словам с латиницей-двойниками: «тгк», «tgк»
-                const words = low.split(/\s+/).map(w => botNorm(w)).join(' ');
-                if (word.test(low) || new RegExp(`(^|${wb})${esc(bn)}($|${wb})`).test(words)) hit.push(p);
+        this.prep(list || this._list || (this._list = this.phrases())).forEach(x => {
+            // короткие фразы («шок», «тгк») — только целым словом, иначе «шоколад» тоже реклама; и по словам с латиницей-двойниками
+            if (x.short) {
+                if (x.word.test(low) || x.norm.test(words || (words = low.split(/\s+/).map(w => botNorm(w)).join(' ')))) hit.push(x.p);
                 return;
             }
-            if (low.includes(pl) || (bn && norm.includes(bn)) || (/[a-z]/.test(pl) && botNorm(p, true) && latin.includes(botNorm(p, true)))) hit.push(p);
+            if (low.includes(x.pl) || (x.bn && norm.includes(x.bn)) || (x.bl && latin.includes(x.bl))) hit.push(x.p);
         });
         return hit;
     },
@@ -2417,8 +2458,18 @@ const BotView = {
                     if (seen.has(k)) return;
                     seen.add(k);
                     const hit = Bots.match(x.transaction_desc, list);
-                    if (hit.length) rows.push(Object.assign({ _hit: hit }, x));
+                    const tg = tgHandles(x.transaction_desc);
+                    if (hit.length || tg.length) rows.push(Object.assign({ _hit: hit, _tg: tg }, x));
                 });
+            // 0) сообщения с @ник — так рекламируют телеграм («пиши @god_om»)
+            {
+                for (const ch of chats.length ? chats : [null]) {
+                    const r = await Api.all({ transaction_desc__ilike: '%@%', ...(ch ? { category_id__exact: ch.id } : {}), ...range }, 10, (pg, n) => this.prog(`Сообщения с @${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
+                    if (!alive()) return;
+                    capped = capped || r.capped;
+                    take(r, ch && ch.id);
+                }
+            }
             // 1) точные фразы — поиском сайта
             for (const [i, p] of list.entries()) {
                 const r = await Api.all({ transaction_desc__ilike: `%${p}%`, ...range }, 5, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length}): страница ${pg}, записей ${n}…`, gen), null, alive);
@@ -2445,9 +2496,13 @@ const BotView = {
                 if (!n) return;
                 const low = n.toLowerCase();
                 const k = hasId(x) ? 'id' + x.player_id : idByNick.has(low) ? 'id' + idByNick.get(low) : 'n' + low;
-                const g = sus.get(k) || { nick: n, id: x.player_id, n: 0, hits: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
+                const g = sus.get(k) || { nick: n, id: x.player_id, n: 0, hits: new Set(), tg: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
+                g.key = k;
+                (g.nicks = g.nicks || new Set()).add(n);
+                if (g.id == null && hasId(x)) g.id = x.player_id;
                 g.n++;
                 x._hit.forEach(h => g.hits.add(h));
+                (x._tg || []).forEach(h => g.tg.add(h));
                 if (x.player_ip) g.ips.add(x.player_ip);
                 g.cats.add(catName(x));
                 const t = new Date(x.time).getTime() || 0;
@@ -2462,15 +2517,23 @@ const BotView = {
             sus.forEach((g, k) => g.ips.forEach(ip => byIp.set(ip, (byIp.get(ip) || new Set()).add(k))));
             const nickOf = new Map([...sus].map(([k, g]) => [k, g.nick]));
             sus.forEach(g => (g.acc = Math.max(1, ...[...g.ips].map(ip => byIp.get(ip).size))));
-            const arr = [...sus.values()].sort((x, y) => y.acc - x.acc || y.n - x.n);
-            // уровни: последний вход/выход с «Уровень: N»
+            const byTg = new Map();
+            sus.forEach((g, k) => g.tg.forEach(h => byTg.set(h, (byTg.get(h) || new Set()).add(k))));
+            sus.forEach(g => (g.tgAcc = Math.max(0, ...[...g.tg].map(h => byTg.get(h).size))));
+            const arr = [...sus.values()].sort((x, y) => y.tgAcc - x.tgAcc || y.acc - x.acc || y.n - x.n);
+            // уровни: последний вход/выход с «Уровень: N» — сначала у тех, кто рекламирует @ник или пишет с общего IP
             if (c.levels) {
-                const top = arr.slice(0, 40);
+                const top = arr
+                    .filter(g => g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3)
+                    .concat(arr.filter(g => !(g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3)))
+                    .slice(0, 80);
                 for (const [i, g] of top.entries()) {
                     if (!alive()) return;
                     this.prog(`Уровни: ${i + 1} из ${top.length}…`, gen);
                     try {
-                        const r = await Api.page({ player_name__exact: g.nick, category_id__exact: 38, transaction_desc__ilike: '%ровень%' }, 0);
+                        // свежие входы: при сортировке «сначала старые» первая страница — давние записи, поэтому окно короче
+                        const since = new Date(Date.now() - (Api.order === 'time' ? 2 : 30) * 864e5).toISOString();
+                        const r = await Api.page({ player_name__exact: g.nick, category_id__exact: 38, transaction_desc__ilike: '%ровень%', time__gte: since }, 0);
                         if (gen !== this._gen) return;
                         const m = r
                             .slice()
@@ -2486,17 +2549,24 @@ const BotView = {
             this.prog('', gen);
             arr.forEach(g => {
                 g.why = [];
+                const topH = [...g.tg].sort((a, b) => byTg.get(b).size - byTg.get(a).size)[0];
+                if (g.tgAcc >= 2) g.why.push(`${topH} рекламируют ${g.tgAcc} акк.`);
+                else if (topH) g.why.push(`реклама ${topH}`);
                 if (g.level != null && g.level <= c.level) g.why.push(`уровень ${g.level}`);
                 if (g.acc >= c.minAcc) g.why.push(`${g.acc} акк. с одного IP`);
                 if (g.n >= 3) g.why.push(`${g.n} сообщ.`);
-                g.bot = g.why.some(w => /уровень|акк/.test(w));
+                // бот: рекламирует @ник / t.me, много аккаунтов с одного IP или низкий уровень
+                g.bot = g.tg.size > 0 || g.acc >= c.minAcc || (g.level != null && g.level <= c.level);
+                // слабое совпадение: одно слово вроде «тг» без @ника, ссылки и других признаков — обычный игрок
+                g.weak = !g.bot && !g.tg.size && g.hits.size <= 1 && g.n < 3;
             });
-            arr.sort((x, y) => y.bot - x.bot || y.why.length - x.why.length || y.n - x.n);
+            arr.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n);
             // уже заблокированные: записи «Админ-блокировок» и «Админ-супердействий» с начала периода до сейчас,
             // где ник подозреваемого стоит в тексте блокировки (разбан снимает отметку)
             const blk = AdminView.resolve().filter(x => (x.k === 'block' || x.k === 'super') && x.id);
             if (c.hideBanned && blk.length && arr.length) {
-                const byNick = new Map(arr.map(g => [g.nick.toLowerCase(), g]));
+                const byNick = new Map();
+                arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
                 const NICKS = /[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g;
                 for (const [i, cat] of blk.entries()) {
                     const r = await Api.all({ category_id__exact: cat.id, time__gte: range.time__gte, time__lte: new Date().toISOString() }, 15, (pg, n) => this.prog(`Кто уже заблокирован (${i + 1}/${blk.length}): страница ${pg}, записей ${n}…`, gen), null, alive);
@@ -2520,7 +2590,7 @@ const BotView = {
                 this.prog('', gen);
             }
             const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
-            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, capped, page: 0, showBanned: false, blkChecked: blk.length > 0 });
+            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, showBanned: false, showWeak: false, blkChecked: blk.length > 0 });
         } catch (e) {
             if (gen !== this._gen) return;
             this.prog('', gen);
@@ -2532,8 +2602,10 @@ const BotView = {
     render(out, d) {
         const { rows, c, ips } = d;
         const nBanned = d.arr.filter(g => g.banned).length;
-        // заблокированных по умолчанию не показываем
-        const arr = d.showBanned ? d.arr : d.arr.filter(g => !g.banned);
+        const nWeak = d.arr.filter(g => g.weak && (d.showBanned || !g.banned)).length;
+        // заблокированных и слабые совпадения по умолчанию не показываем
+        const arr = d.arr.filter(g => (d.showBanned || !g.banned) && (d.showWeak || !g.weak));
+        const shownKeys = new Set(arr.map(g => g.key));
         const bots = arr.filter(g => g.bot);
         const PER = 25;
         const pages = Math.max(1, Math.ceil(arr.length / PER));
@@ -2543,7 +2615,8 @@ const BotView = {
             .filter(i => i === 0 || i === pages - 1 || Math.abs(i - d.page) <= 2)
             .map((i, k, a) => `${k && i - a[k - 1] > 1 ? '<span class="muted">…</span>' : ''}<button class="btn${i === d.page ? ' pri' : ''}" data-pg="${i}">${i + 1}</button>`)
             .join('')}<button class="btn" data-pg="${d.page + 1}" ${d.page < pages - 1 ? '' : 'disabled'}>›</button><span class="muted" style="margin-left:6px">${d.page * PER + 1}–${Math.min(arr.length, d.page * PER + PER)} из ${arr.length}</span></div>` : '';
-        const groups = [...ips.values()].filter(s => s.size >= c.minAcc).length;
+        const groups = [...ips.values()].filter(s => [...s].filter(k => shownKeys.has(k)).length >= c.minAcc).length;
+        const nMsg = arr.reduce((a, g) => a + g.n, 0);
         // IP, с которых писало больше всего подозреваемых аккаунтов
         const msgs = new Map();
         rows.forEach(x => x.player_ip && msgs.set(x.player_ip, (msgs.get(x.player_ip) || 0) + 1));
@@ -2551,7 +2624,7 @@ const BotView = {
         const topIps = [];
         [...ips]
             .sort((x, y) => y[1].size - x[1].size || (msgs.get(y[0]) || 0) - (msgs.get(x[0]) || 0))
-            .map(([ip, set]) => [ip, d.showBanned || !d.bannedKeys ? set : new Set([...set].filter(k => !d.bannedKeys.has(k)))])
+            .map(([ip, set]) => [ip, new Set([...set].filter(k => shownKeys.has(k)))])
             .filter(([, set]) => set.size)
             .forEach(([ip, set]) => {
                 if (topIps.length >= 5) return;
@@ -2570,7 +2643,24 @@ const BotView = {
                 .map((part, i) => (i % 2 ? `<mark>${U.esc(part)}</mark>` : U.esc(part)))
                 .join('');
         };
+        const topTg = [...(d.byTg || new Map())]
+            .map(([h, set]) => [h, [...set].filter(k => shownKeys.has(k))])
+            .filter(([, ks]) => ks.length)
+            .sort((x, y) => y[1].length - x[1].length)
+            .slice(0, 6);
         out.innerHTML = `
+          ${
+              topTg.length
+                  ? `<div class="sec" style="margin:0 0 14px"><h4>Что рекламируют</h4><div class="card">${topTg
+                        .map(
+                            ([h, ks]) => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#a970ff">${U.esc(h)}</span><b>${ks.length} акк.</b></div><div class="sub">${ks
+                                .slice(0, 8)
+                                .map(k => `<span class="vdl-nick" data-nick="${U.esc(d.nickOf.get(k))}">${U.esc(d.nickOf.get(k))}</span>`)
+                                .join(', ')}${ks.length > 8 ? ` и ещё ${ks.length - 8}` : ''}</div></div></div>`
+                        )
+                        .join('')}</div></div>`
+                  : ''
+          }
           ${
               topIps.length
                   ? `<div class="sec" style="margin:0 0 14px"><h4>Самые частые IP</h4><div class="card">${topIps
@@ -2586,11 +2676,11 @@ const BotView = {
           <div class="vdl-sum">
             <div class="k"><small>Похожи на ботов</small><b>${bots.length}</b></div>
             <div class="k"><small>Писали рекламу</small><b>${arr.length}</b></div>
-            <div class="k"><small>Сообщений</small><b>${rows.length}</b></div>
+            <div class="k"><small>Сообщений</small><b>${nMsg}</b></div>
             <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}${d.capped ? ' · сообщений очень много — проверены не все, возьми период короче' : ''}</div>
-          ${nBanned ? `<div class="btns" style="margin:-2px 0 10px"><label class="vdl-chk" style="font-size:12.5px"><input type="checkbox" data-a="ban" ${d.showBanned ? 'checked' : ''}> Показать заблокированных (${nBanned})</label></div>` : ''}
+          ${nBanned || nWeak ? `<div class="btns" style="margin:-2px 0 10px;gap:16px">${nBanned ? `<label class="vdl-chk" style="font-size:12.5px"><input type="checkbox" data-a="ban" ${d.showBanned ? 'checked' : ''}> Показать заблокированных (${nBanned})</label>` : ''}${nWeak ? `<label class="vdl-chk" style="font-size:12.5px" title="Одно слово вроде «тг» без @ника, ссылки и других признаков"><input type="checkbox" data-a="weak" ${d.showWeak ? 'checked' : ''}> Показать слабые совпадения (${nWeak})</label>` : ''}</div>` : ''}
           ${pager}
           <div class="card" data-l="list">${
               arr.length
@@ -2601,13 +2691,14 @@ const BotView = {
                         ${g.banned ? `<span class="vdl-tag" style="--c:#8b8f9a" title="${U.esc(fmtDate(g.banned.t) + ' — ' + g.banned.desc.slice(0, 160))}">заблокирован</span>` : g.bot ? '<span class="vdl-tag" style="--c:#e5484d">похож на бота</span>' : ''}
                         ${g.level != null ? `<span class="vdl-tag" style="--c:${g.level <= c.level ? '#e5484d' : '#8b8f9a'}">ур. ${g.level}</span>` : ''}
                         ${[...g.ips].slice(0, 2).map(ip => `<span class="vdl-tag" style="--c:${ips.get(ip).size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}${ips.get(ip).size > 1 ? ` · ${ips.get(ip).size} акк.` : ''}</span>`).join('')}
+                        ${[...(g.tg || [])].slice(0, 2).map(h => `<span class="vdl-tag" style="--c:#a970ff">${U.esc(h)}${d.byTg && d.byTg.get(h) && d.byTg.get(h).size > 1 ? ` · ${d.byTg.get(h).size} акк.` : ''}</span>`).join('')}
                         <span class="vdl-tag" style="--c:#8b8f9a">${g.n} сообщ.</span></div>
-                      <div class="sub vdl-desc">${hl(g.sample, [...g.hits])}</div>
+                      <div class="sub vdl-desc">${hl(g.sample, [...g.hits, ...[...(g.tg || [])]])}</div>
                       <div class="sub">${fmtDate(g.last)} · ${U.esc([...g.cats].join(', '))}${g.why.length ? ' · ' + U.esc(g.why.join(', ')) : ''}</div></div>
                     <div class="vdl-btns"><button class="btn" data-an="${U.esc(g.nick)}">${icon('search', 13)}Игрок</button>${g.ips.size ? `<button class="btn" data-ip="${U.esc([...g.ips][0])}">IP</button>` : ''}</div></div>`
                         )
                         .join('')
-                  : `<div class="vdl-row"><div class="main sub">${d.arr.length ? 'Все найденные уже заблокированы' : 'За этот период рекламных сообщений не найдено'}</div></div>`
+                  : `<div class="vdl-row"><div class="main sub">${!d.arr.length ? 'За этот период рекламных сообщений не найдено' : nWeak && !d.showWeak ? 'Есть только слабые совпадения — включи «Показать слабые совпадения»' : 'Все найденные уже заблокированы'}</div></div>`
           }</div>
           ${pager}
           ${arr.length ? `<div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copyb">${icon('download', 14)}Ники ботов</button><button class="btn" data-a="copy">${icon('download', 14)}Весь список</button></div>` : ''}`;
@@ -2620,6 +2711,13 @@ const BotView = {
                     if (l) l.scrollIntoView({ block: 'nearest' });
                 })
         );
+        const wx = out.querySelector('[data-a="weak"]');
+        if (wx)
+            wx.onchange = () => {
+                d.showWeak = wx.checked;
+                d.page = 0;
+                this.render(out, d);
+            };
         const bx = out.querySelector('[data-a="ban"]');
         if (bx)
             bx.onchange = () => {
@@ -2769,6 +2867,7 @@ html body .multiselect-dropdown { background: #14161c !important; color: #e8eaee
 html body :is(.multiselect-options, .multiselect-option) { background: transparent !important; color: #e8eaee !important; }
 html body .multiselect-option.is-pointed { background: rgba(255,255,255,.08) !important; color: #fff !important; }
 html body .multiselect-option.is-selected, html body .multiselect-option.is-selected.is-pointed { background: ${acc} !important; color: #fff !important; }
+html body .multiselect-option.is-disabled { color: rgba(232,234,238,.35) !important; }
 html body :is(.multiselect-caret, .multiselect-clear-icon) { background-color: #e8eaee !important; }
 /* свой тёмный список подсказок вместо системного (Edge рисует его белой пеленой) */
 .vdl-dl { position: fixed; z-index: 2147483000; max-width: min(460px, 92vw); max-height: 320px; overflow: auto; background: #14161c; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; box-shadow: 0 20px 44px -14px rgba(0,0,0,.8); padding: 6px; font: 14px/1.3 system-ui, sans-serif; }
@@ -2780,8 +2879,8 @@ html body :is(.multiselect-caret, .multiselect-clear-icon) { background-color: #
 html body select, html body select option, html body select optgroup { background-color: #14161c !important; color: #e8eaee !important; }
 html body select option:checked { background: ${acc} !important; color: #fff !important; }
 html body :is(.vs__dropdown-toggle, .vs__dropdown-menu, .multiselect__tags, .multiselect__content-wrapper, .multiselect__input, .multiselect__single, .choices__inner, .choices__list--dropdown, .choices__list[aria-expanded], .ts-control, .ts-dropdown, .select2-selection, .select2-dropdown, .autoComplete_wrapper > ul, .dropdown-menu, [role="listbox"]):not(#vdl-layer *) { background: #14161c !important; color: #e8eaee !important; border-color: rgba(255,255,255,.12) !important; }
-html body :is(.vs__dropdown-option, .multiselect__option, .choices__item--choice, .ts-dropdown .option, .select2-results__option, .autoComplete_wrapper > ul > li, .dropdown-item, [role="listbox"] [role="option"]) { background: transparent !important; color: #e8eaee !important; }
-html body :is(.vs__dropdown-option--highlight, .vs__dropdown-option--selected, .multiselect__option--highlight, .multiselect__option--selected.multiselect__option--highlight, .choices__item--choice.is-highlighted, .ts-dropdown .active, .select2-results__option--highlighted, .autoComplete_wrapper > ul > li:hover, .autoComplete_wrapper > ul > li[aria-selected="true"], .dropdown-item:hover, .dropdown-item.active, [role="option"][aria-selected="true"], [role="option"]:hover) { background: ${acc} !important; color: #fff !important; }
+html body :is(.vs__dropdown-option, .multiselect__option, .choices__item--choice, .ts-dropdown .option, .select2-results__option, .autoComplete_wrapper > ul > li, .dropdown-item, [role="listbox"] [role="option"]:not(.multiselect-option)) { background: transparent !important; color: #e8eaee !important; }
+html body :is(.vs__dropdown-option--highlight, .vs__dropdown-option--selected, .multiselect__option--highlight, .multiselect__option--selected.multiselect__option--highlight, .choices__item--choice.is-highlighted, .ts-dropdown .active, .select2-results__option--highlighted, .autoComplete_wrapper > ul > li:hover, .autoComplete_wrapper > ul > li[aria-selected="true"], .dropdown-item:hover, .dropdown-item.active, [role="option"][aria-selected="true"]:not(.multiselect-option), [role="option"]:hover:not(.multiselect-option)) { background: ${acc} !important; color: #fff !important; }
 html body :is(.vs__search, .multiselect__input, .choices__input, .ts-control input) { color: #e8eaee !important; background: transparent !important; }
 html body :is(.vs__selected, .multiselect__single, .choices__item--selectable) { color: #e8eaee !important; }
 html body :is(.vs__search, .multiselect__input, .choices__input, .ts-control input)::placeholder { color: rgba(232,234,238,.5) !important; }
@@ -2791,6 +2890,8 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
         this.st = st;
         try {
             performance.setResourceTimingBufferSize(3000);
+            // полный буфер перестаёт записывать запросы сайта — тогда обучение категориям встало бы
+            performance.addEventListener('resourcetimingbufferfull', () => performance.clearResourceTimings());
         } catch {
             /* старый браузер */
         }
@@ -2884,10 +2985,13 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
                     x.classList.toggle('hl', i === hl);
                     if (i === hl) x.scrollIntoView({ block: 'nearest' });
                 });
-            inp.addEventListener('focus', draw);
-            inp.addEventListener('click', () => pop.hidden && draw());
-            inp.addEventListener('input', e => e.isTrusted && draw());
-            inp.addEventListener('blur', () => setTimeout(() => (pop.hidden = true), 120));
+            const ac = new AbortController();
+            const sig = { signal: ac.signal };
+            inp._vdlAbort = () => ac.abort();
+            inp.addEventListener('focus', draw, sig);
+            inp.addEventListener('click', () => pop.hidden && draw(), sig);
+            inp.addEventListener('input', e => e.isTrusted && draw(), sig);
+            inp.addEventListener('blur', () => setTimeout(() => (pop.hidden = true), 120), sig);
             inp.addEventListener('keydown', e => {
                 if (pop.hidden) return;
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -2898,14 +3002,19 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
                     e.preventDefault();
                     pick(hl);
                 } else if (e.key === 'Escape') pop.hidden = true;
-            });
-            addEventListener('scroll', () => !pop.hidden && place(), true);
-            addEventListener('resize', () => !pop.hidden && place());
+            }, sig);
+            addEventListener('scroll', () => !pop.hidden && place(), { capture: true, signal: ac.signal });
+            addEventListener('resize', () => !pop.hidden && place(), sig);
             inp._vdlPop = pop;
+            pop._vdlAbort = inp._vdlAbort;
         });
         // поле убрали со страницы — убираем и его список
         document.querySelectorAll('.vdl-dl').forEach(p => {
-            if (![...document.querySelectorAll('input[data-vdl-list]')].some(i => i._vdlPop === p)) p.remove();
+            const own = [...document.querySelectorAll('input[data-vdl-list]')].some(i => i._vdlPop === p);
+            if (!own) {
+                if (p._vdlAbort) p._vdlAbort();
+                p.remove();
+            }
         });
     },
     teardown() {
@@ -2919,6 +3028,7 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
         if (this.st) this.st.remove();
         document.querySelectorAll('.vdl-dl').forEach(x => x.remove());
         document.querySelectorAll('input[data-vdl-list]').forEach(x => {
+            if (x._vdlAbort) x._vdlAbort();
             x.setAttribute('list', x.dataset.vdlList);
             delete x.dataset.vdlList;
         });
