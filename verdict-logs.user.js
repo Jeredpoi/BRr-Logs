@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.14
+// @version      1.2.15
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.14
+// @version      1.2.15
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.14';
+const VERSION = '1.2.15';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -591,9 +591,9 @@ const Api = {
         this._q = p.catch(() => {});
         return p;
     },
-    // пауза между запросами: сайт отвечает 429 («слишком часто») — увеличиваем её
-    BASE_GAP: 1800,
-    gap: 1800,
+    // пауза между запросами — 1 с; сайт отвечает 429 («слишком часто») — увеличиваем её, потом постепенно возвращаем
+    BASE_GAP: 1000,
+    gap: 1000,
     async _page(params, offset, retried, tries = 0, reordered) {
         const wait = this.gap - (Date.now() - this.last);
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
@@ -652,7 +652,7 @@ const Api = {
             clearTimeout(timer);
         }
         if (!Array.isArray(d)) throw new Error('сайт логов ответил не списком');
-        if (this.gap > this.BASE_GAP) this.gap = Math.max(this.BASE_GAP, this.gap - 100);
+        if (this.gap > this.BASE_GAP) this.gap = Math.max(this.BASE_GAP, Math.round(this.gap * 0.9));
         return d;
     },
     // размер страницы сайта узнаём по ходу (страница, за которой есть ещё, — полная) и запоминаем
