@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.19
+// @version      1.2.20
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.19
+// @version      1.2.20
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.19';
+const VERSION = '1.2.20';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2183,6 +2183,7 @@ const AdminView = {
         const active = [...perDay.values()].filter(Boolean).length;
         const cnt = new Map();
         own.forEach(r => cnt.set(String(r.category_id), (cnt.get(String(r.category_id)) || 0) + 1));
+        const dups = own.length - new Set(own.map(r => `${r.time}|${r.category_id}|${r.player_name}|${r.transaction_desc}`)).size;
         const seenIds = new Set();
         const cats = list.filter(c => c.id && !seenIds.has(c.id) && seenIds.add(c.id)).map(c => ({ k: c.id, name: c.name, n: cnt.get(String(c.id)) || 0 }));
         // над кем работал — только по наказаниям и действиям, не по сообщениям в админ-чатах
@@ -2225,7 +2226,7 @@ const AdminView = {
             <div class="k"><small>В среднем в день</small><b>${days.length ? String(+(own.length / days.length).toFixed(1)) : 0}</b></div>
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ' · записей очень много — посчитаны не все, возьми период короче' : ''}</div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ' · записей очень много — посчитаны не все, возьми период короче' : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}</div>
  ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
@@ -2259,7 +2260,7 @@ const AdminView = {
           <div data-at="list" hidden><div class="sec"><h4>Действия</h4>
             <input class="inp vdl-filter" data-a="flt" placeholder="Найти: ник, слово…">
             <div class="card" data-l="list"></div></div></div>
-          <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
+          <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="csv" title="Все посчитанные записи — открыть в Excel и сверить с сайтом">${icon('download', 14)}Скачать CSV</button><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
         // список действий с поиском
         const sorted = own.slice().sort((x, y) => new Date(y.time) - new Date(x.time));
         const listBox = out.querySelector('[data-l="list"]');
@@ -2294,6 +2295,22 @@ const AdminView = {
         );
         const c2 = out.querySelector('[data-a="cfg2"]');
         if (c2) c2.onclick = () => this.settings();
+        // все посчитанные записи файлом: сверка с сайтом построчно
+        out.querySelector('[data-a="csv"]').onclick = () => {
+            const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+            const L = [['Дата (МСК)', 'Категория', 'Номер категории', 'Игрок', 'Текст'].map(q).join(';')];
+            own.slice()
+                .sort((x, y) => new Date(x.time) - new Date(y.time))
+                .forEach(r => L.push([new Date(r.time).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }), nm(r.category_id), r.category_id, r.player_name, r.transaction_desc].map(q).join(';')));
+            const blob = new Blob(['\ufeff' + L.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `admin_${nick}_${a}_${b}.csv`;
+            document.body.appendChild(link);
+            link.click();
+            setTimeout(() => (URL.revokeObjectURL(link.href), link.remove()), 2000);
+            toast(`Скачано: ${own.length} записей`);
+        };
         out.querySelector('[data-a="copy"]').onclick = () => {
             const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
             cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
