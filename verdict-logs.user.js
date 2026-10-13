@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.13
+// @version      1.2.14
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.13
+// @version      1.2.14
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.13';
+const VERSION = '1.2.14';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -884,11 +884,14 @@ const CatLearn = {
                 ns++;
             };
             const scripts = [...document.querySelectorAll('script[src]')].map(x => x.src).filter(u => u.startsWith(location.origin)).slice(0, 8);
+            const done = new Set(Store.get('jsScanned', []));
             for (const u of scripts) {
-                if (this._seen && this._seen.has(u)) continue;
+                if ((this._seen && this._seen.has(u)) || done.has(u)) continue;
                 try {
                     let t = await (await fetch(u, { credentials: 'include' })).text();
                     (this._seen = this._seen || new Set()).add(u);
+                    done.add(u);
+                    Store.set('jsScanned', [...done].slice(-30));
                     if (t.length > 8e6 || !/категори|админ|\\u04/i.test(t)) continue;
                     t = t.replace(/\\u([0-9a-f]{4})/gi, (m, h) => String.fromCharCode(parseInt(h, 16)));
                     const Q = `["'\`]`;
@@ -953,6 +956,11 @@ const CatLearn = {
             .filter(u => u.includes('/api/list-game-logs/') && !Api.mine.has(u) && !this.tried.has(u))
             .pop();
         if (!url) return;
+        // поиск по тексту на сервере долгий — повторять его ради названий категорий нельзя
+        if (/__ilike=/.test(url)) {
+            this.tried.add(url);
+            return;
+        }
         // все названия уже известны и сайт не фильтровал по неизвестной категории — учить нечего
         const names = new Set(Object.values(map));
         const urlCat = ([...new URL(url).searchParams].find(([k, v]) => /categor/i.test(k) && /^\d{1,4}$/.test(v)) || [])[1];
@@ -2850,7 +2858,7 @@ tr.vdl-done { opacity: .45; }
 html body :is(#log-table, table:has(tr.first-row)) td, html body :is(#log-table, table:has(tr.first-row)) th { box-shadow: none !important; --bs-table-bg-type: transparent; --bs-table-bg-state: transparent; --bs-table-accent-bg: transparent; --bs-table-striped-bg: transparent; --bs-table-hover-bg: transparent; }
 html body :is(#log-table, table:has(tr.first-row)), html body :is(#log-table, table:has(tr.first-row)) > tbody, html body :is(#log-table, table:has(tr.first-row)) > tbody > tr { background: transparent !important; --bs-table-bg: transparent; }
 /* ячейки — стекло темы VERDICT (как блоки на форуме); размытие — общее под таблицей, а не на каждой ячейке */
-html body :is(#log-table, table:has(tr.first-row)) { backdrop-filter: blur(10px) saturate(1.15); -webkit-backdrop-filter: blur(10px) saturate(1.15); }
+html body :is(#log-table, table:has(tr.first-row)) { backdrop-filter: none; -webkit-backdrop-filter: none; }
 html body :is(#log-table, table:has(tr.first-row)) > tbody > tr > td { background: var(--vd-glass, rgba(18,20,27,.42)) !important; color: #e4e6eb; }
 html body :is(#log-table, table:has(tr.first-row)) > tbody > tr > td[colspan] { background: linear-gradient(rgba(0,0,0,.2), rgba(0,0,0,.2)), var(--vd-glass, rgba(18,20,27,.42)) !important; color: #cfd2d8; }
 html body :is(#log-table, table:has(tr.first-row)) > tbody > tr.first-row:hover > td { background: linear-gradient(color-mix(in srgb, ${acc} 16%, transparent), color-mix(in srgb, ${acc} 16%, transparent)), var(--vd-glass, rgba(18,20,27,.42)) !important; }
@@ -3543,7 +3551,7 @@ async function main() {
     Layer.accent(info);
     if (!info.lid) return ON_LOGS && notice('Нужен VERDICT', 'Обнови VERDICT до последней версии — эта не умеет работать с «VERDICT Логи».');
     // шапку сайт может дорисовать позже — ждём ник до 8 секунд
-    const nickNow = () => (document.body.textContent.match(/Выйти\s*\[([^\]]{2,40})\]/) || [])[1] || '';
+    const nickNow = () => (((document.querySelector('nav, .navbar, header') || document.body).textContent || '').match(/Выйти\s*\[([^\]]{2,40})\]/) || [])[1] || '';
     let logsNick = ON_LOGS ? nickNow() : '';
     for (let i = 0; ON_LOGS && !logsNick && i < 20; i++) {
         await new Promise(r => setTimeout(r, 400));
@@ -3552,7 +3560,10 @@ async function main() {
     if (ON_LOGS && !logsNick) return;
     CTX.info = info;
     CTX.logsNick = logsNick;
-    const acc = await Access.check(info, logsNick, true);
+    // доступ уже подтверждён недавно — запускаемся сразу, а у разработчика сверяемся в фоне
+    const cached = Store.get('access', null);
+    const quick = cached && cached.allowed && cached.lid === info.lid && Date.now() - cached.at < 6 * 3600e3 && (!logsNick || cached.logsNick === logsNick);
+    const acc = quick ? cached : await Access.check(info, logsNick, true);
     if (!acc.allowed) {
         if (!ON_LOGS) return;
         if (acc.state === 'no') return notice('Доступ закрыт', 'Разработчик закрыл тебе «VERDICT Логи».');
@@ -3564,8 +3575,8 @@ async function main() {
     }
     if (ON_LOGS) LogsPage.start(info);
     else Profile.start();
-    const timer = setInterval(async () => {
-        const a = await Access.check(info, logsNick);
+    const recheck = async fresh => {
+        const a = await Access.check(info, logsNick, fresh);
         if (a.allowed) return;
         // доступ закрыли (или долго нет связи с разработчиком) — убираем всё и больше не проверяем
         clearInterval(timer);
@@ -3575,7 +3586,9 @@ async function main() {
         if (host) host.remove();
         Layer._root = null;
         if (ON_LOGS && a.state !== 'error') notice('Доступ закрыт', 'Разработчик закрыл тебе «VERDICT Логи».');
-    }, 5 * 60e3 + 5000);
+    };
+    const timer = setInterval(() => recheck(false), 5 * 60e3 + 5000);
+    if (quick) setTimeout(() => recheck(true), 4000);
 }
 
 addEventListener(
