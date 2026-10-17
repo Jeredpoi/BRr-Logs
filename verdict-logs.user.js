@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.30
+// @version      1.2.31
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.30
+// @version      1.2.31
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.30';
+const VERSION = '1.2.31';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2693,91 +2693,11 @@ const BotView = {
             sus.forEach((g, k) => g.tg.forEach(h => byTg.set(h, (byTg.get(h) || new Set()).add(k))));
             sus.forEach(g => (g.tgAcc = Math.max(0, ...[...g.tg].map(h => byTg.get(h).size))));
             const arr = [...sus.values()].sort((x, y) => y.tgAcc - x.tgAcc || y.acc - x.acc || y.n - x.n);
-            // уже заблокированные: записи «Админ-блокировок» и «Админ-супердействий» с начала периода до сейчас,
-            // где ник подозреваемого стоит в тексте блокировки (разбан снимает отметку)
-            // где искать блокировки: «Админ-блокировки», «Супер наказания» и «Админ-действия» (там /ban, /block)
-            const blkOf = () => AdminView.resolve().filter(x => ['block', 'super', 'act'].includes(x.k) && x.id);
-            let blk = blkOf();
+            // кто уже заблокирован — сразу при поиске (можно выключить) и отдельной кнопкой в результатах
             let blkInfo = '';
-            // номера категорий ещё не узнаны — без них заблокированных не отличить: сначала ищем их на сайте
-            if (c.hideBanned && arr.length && !blk.some(x => x.k === 'block') && !CatLearn._blkTried) {
-                CatLearn._blkTried = true;
-                this.prog('Ищу категории блокировок…', gen);
-                CatLearn._disc = null;
-                await CatLearn.discover().catch(() => {});
-                if (!alive()) return;
-                blk = blkOf();
-            }
             if (c.hideBanned && arr.length) {
-                const byNick = new Map();
-                arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
-                const catOf = id => blk.find(x => String(x.id) === String(id));
-                const BAN = /заблок|забан|блокир|бан[аеиу]?\b|\bban|banned|\bblock/i;
-                const UN = /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)|сня(т|ли)\s+(бан|блок)/i;
-                let seenRows = 0;
-                // запись блокировки/разбана: ники в тексте или в поле «игрок» получают отметку
-                const apply = (rows, only) =>
-                    rows
-                        .slice()
-                        .sort((x, y) => new Date(x.time) - new Date(y.time))
-                        .forEach(x => {
-                            const cat = catOf(x.category_id);
-                            const txt = String(x.transaction_desc || '');
-                            const un = UN.test(txt);
-                            // «Админ-блокировки» — любая запись; остальное — только со словами бан/блок
-                            if (!un && !(cat && cat.k === 'block') && !BAN.test(txt)) return;
-                            seenRows++;
-                            const seen = new Set();
-                            const fromText = (txt.match(/[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g) || []);
-                            // запись не из админских категорий (сообщение в чате «Bot_X забанят») — считаем, только если это запись самого бота
-                            const cands = cat ? [...fromText, String(x.player_name || '')] : [String(x.player_name || '')];
-                            cands.forEach(n => {
-                                const g = n && byNick.get(n.toLowerCase());
-                                if (!g || seen.has(g) || (only && g !== only)) return;
-                                seen.add(g);
-                                g.banned = un ? null : banInfo(x.time, txt);
-                            });
-                        });
-                const until = new Date().toISOString();
-                const fix = (r, cat) => r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x));
-                let capped = false;
-                for (const [i, cat] of blk.entries()) {
-                    // в «Админ-действиях» много всего — берём только записи со словами бан/блок
-                    const qs = cat.k === 'act' ? [{ transaction_desc__ilike: '%бан%' }, { transaction_desc__ilike: '%блок%' }, { transaction_desc__ilike: '%ban%' }] : [{}];
-                    for (const f of qs) {
-                        const r = await Api.all({ category_id__exact: cat.id, ...f, time__gte: range.time__gte, time__lte: until }, cat.k === 'act' ? 8 : 15, (pg, n) => this.prog(`Кто уже заблокирован: ${cat.name} (${i + 1}/${blk.length}), страница ${pg}, записей ${n}…`, gen), null, alive);
-                        if (!alive()) return;
-                        capped = capped || r.capped;
-                        apply(fix(r, cat));
-                    }
-                }
-                // самых заметных, кого не нашли, проверяем по нику точечно:
-                // блокировок за период больше, чем пролистали, — в категориях блокировок; и во всех записях (вдруг другая категория)
-                const left = arr.filter(g => !g.banned).slice(0, capped ? 30 : 15);
-                const hard = blk.filter(x => x.k !== 'act');
-                for (const [i, g] of left.entries()) {
-                    if (!alive()) return;
-                    this.prog(`Проверяю блокировки по нику: ${i + 1} из ${left.length}…`, gen);
-                    try {
-                        const qs = [];
-                        if (capped) hard.forEach(cat => qs.push([cat, { transaction_desc__ilike: `%${g.nick}%` }], [cat, { player_name__exact: g.nick }]));
-                        qs.push([null, { transaction_desc__ilike: `%${g.nick}%` }]);
-                        for (const [cat, f] of qs) {
-                            if (g.banned) break;
-                            const r = await Api.page({ ...(cat ? { category_id__exact: cat.id } : {}), ...f, time__gte: range.time__gte }, 0);
-                            if (!alive()) return;
-                            apply(cat ? fix(r, cat) : r, g);
-                        }
-                    } catch (e) {
-                        break;
-                    }
-                }
-                // срок блокировки уже вышел — снова активен, не скрываем
-                arr.forEach(g => g.banned && g.banned.until && g.banned.until < Date.now() && (g.banned = null));
-                blkInfo = blk.length
-                    ? `Блокировки искал в: ${blk.map(x => x.name).join(', ')} · записей о блокировках: ${seenRows}`
-                    : 'Категории блокировок не найдены — проверены только записи по нику. Номера можно вписать в «Админ-действия» → «Что считать».';
-                this.prog('', gen);
+                blkInfo = await this.checkBans(arr, range, gen, alive);
+                if (blkInfo == null) return;
             }
             // уровни: последний вход/выход с «Уровень: N» — сначала у тех, кто рекламирует @ник или пишет с общего IP
             if (c.levels) {
@@ -2828,7 +2748,7 @@ const BotView = {
             });
             arr.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n);
             const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
-            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, showBanned: false, showWeak: false, blkChecked: blk.length > 0, blkInfo });
+            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, hideBan: false, showWeak: false, blkInfo, range });
         } catch (e) {
             if (gen !== this._gen) return;
             this.prog('', gen);
@@ -2837,12 +2757,103 @@ const BotView = {
             if (this._busyGen === gen) this.busy = false;
         }
     },
+    // кто из найденных уже заблокирован (или разбанен): отметка g.banned; вернёт строку «где искал» или null, если поиск устарел
+    async checkBans(arr, range, gen, alive) {
+        let blkInfo = '';
+        arr.forEach(g => (g.banned = null));
+        // уже заблокированные: записи «Админ-блокировок» и «Админ-супердействий» с начала периода до сейчас,
+        // где ник подозреваемого стоит в тексте блокировки (разбан снимает отметку)
+        // где искать блокировки: «Админ-блокировки», «Супер наказания» и «Админ-действия» (там /ban, /block)
+        const blkOf = () => AdminView.resolve().filter(x => ['block', 'super', 'act'].includes(x.k) && x.id);
+        let blk = blkOf();
+        // номера категорий ещё не узнаны — без них заблокированных не отличить: сначала ищем их на сайте
+        if (arr.length && !blk.some(x => x.k === 'block') && !CatLearn._blkTried) {
+            CatLearn._blkTried = true;
+            this.prog('Ищу категории блокировок…', gen);
+            CatLearn._disc = null;
+            await CatLearn.discover().catch(() => {});
+            if (!alive()) return null;
+            blk = blkOf();
+        }
+        if (arr.length) {
+            const byNick = new Map();
+            arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
+            const catOf = id => blk.find(x => String(x.id) === String(id));
+            const BAN = /заблок|забан|блокир|бан[аеиу]?\b|\bban|banned|\bblock/i;
+            const UN = /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)|сня(т|ли)\s+(бан|блок)/i;
+            let seenRows = 0;
+            // запись блокировки/разбана: ники в тексте или в поле «игрок» получают отметку
+            const apply = (rows, only) =>
+                rows
+                    .slice()
+                    .sort((x, y) => new Date(x.time) - new Date(y.time))
+                    .forEach(x => {
+                        const cat = catOf(x.category_id);
+                        const txt = String(x.transaction_desc || '');
+                        const un = UN.test(txt);
+                        // «Админ-блокировки» — любая запись; остальное — только со словами бан/блок
+                        if (!un && !(cat && cat.k === 'block') && !BAN.test(txt)) return;
+                        seenRows++;
+                        const seen = new Set();
+                        const fromText = (txt.match(/[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g) || []);
+                        // запись не из админских категорий (сообщение в чате «Bot_X забанят») — считаем, только если это запись самого бота
+                        const cands = cat ? [...fromText, String(x.player_name || '')] : [String(x.player_name || '')];
+                        cands.forEach(n => {
+                            const g = n && byNick.get(n.toLowerCase());
+                            if (!g || seen.has(g) || (only && g !== only)) return;
+                            seen.add(g);
+                            g.banned = un ? null : banInfo(x.time, txt);
+                        });
+                    });
+            const until = new Date().toISOString();
+            const fix = (r, cat) => r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x));
+            let capped = false;
+            for (const [i, cat] of blk.entries()) {
+                // в «Админ-действиях» много всего — берём только записи со словами бан/блок
+                const qs = cat.k === 'act' ? [{ transaction_desc__ilike: '%бан%' }, { transaction_desc__ilike: '%блок%' }, { transaction_desc__ilike: '%ban%' }] : [{}];
+                for (const f of qs) {
+                    const r = await Api.all({ category_id__exact: cat.id, ...f, time__gte: range.time__gte, time__lte: until }, cat.k === 'act' ? 8 : 15, (pg, n) => this.prog(`Кто уже заблокирован: ${cat.name} (${i + 1}/${blk.length}), страница ${pg}, записей ${n}…`, gen), null, alive);
+                    if (!alive()) return null;
+                    capped = capped || r.capped;
+                    apply(fix(r, cat));
+                }
+            }
+            // самых заметных, кого не нашли, проверяем по нику точечно:
+            // блокировок за период больше, чем пролистали, — в категориях блокировок; и во всех записях (вдруг другая категория)
+            const left = arr.filter(g => !g.banned).slice(0, capped ? 30 : 15);
+            const hard = blk.filter(x => x.k !== 'act');
+            for (const [i, g] of left.entries()) {
+                if (!alive()) return null;
+                this.prog(`Проверяю блокировки по нику: ${i + 1} из ${left.length}…`, gen);
+                try {
+                    const qs = [];
+                    if (capped) hard.forEach(cat => qs.push([cat, { transaction_desc__ilike: `%${g.nick}%` }], [cat, { player_name__exact: g.nick }]));
+                    qs.push([null, { transaction_desc__ilike: `%${g.nick}%` }]);
+                    for (const [cat, f] of qs) {
+                        if (g.banned) break;
+                        const r = await Api.page({ ...(cat ? { category_id__exact: cat.id } : {}), ...f, time__gte: range.time__gte }, 0);
+                        if (!alive()) return null;
+                        apply(cat ? fix(r, cat) : r, g);
+                    }
+                } catch (e) {
+                    break;
+                }
+            }
+            // срок блокировки уже вышел — снова активен, не скрываем
+            arr.forEach(g => g.banned && g.banned.until && g.banned.until < Date.now() && (g.banned = null));
+            blkInfo = blk.length
+                ? `Блокировки искал в: ${blk.map(x => x.name).join(', ')} · записей о блокировках: ${seenRows}`
+                : 'Категории блокировок не найдены — проверены только записи по нику. Номера можно вписать в «Админ-действия» → «Что считать».';
+            this.prog('', gen);
+        }
+        return blkInfo;
+    },
     render(out, d) {
         const { rows, c, ips } = d;
         const nBanned = d.arr.filter(g => g.banned).length;
-        const nWeak = d.arr.filter(g => g.weak && (d.showBanned || !g.banned)).length;
-        // заблокированных и слабые совпадения по умолчанию не показываем
-        const arr = d.arr.filter(g => (d.showBanned || !g.banned) && (d.showWeak || !g.weak));
+        const nWeak = d.arr.filter(g => g.weak && (!d.hideBan || !g.banned)).length;
+        // заблокированные видны (с пометкой), галочка «Скрыть» убирает их сразу; слабые совпадения по умолчанию скрыты
+        const arr = d.arr.filter(g => (!d.hideBan || !g.banned) && (d.showWeak || !g.weak));
         const shownKeys = new Set(arr.map(g => g.key));
         const bots = arr.filter(g => g.bot);
         const PER = 25;
@@ -2919,7 +2930,7 @@ const BotView = {
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}${d.capped ? ' · сообщений очень много — проверены не все, возьми период короче' : ''}</div>
           ${d.blkInfo ? `<div class="sub" style="margin:-4px 2px 8px;font-size:11.5px">${U.esc(d.blkInfo)}</div>` : ''}
-          ${nBanned || nWeak ? `<div class="btns" style="margin:-2px 0 10px;gap:16px">${nBanned ? `<label class="vdl-chk" style="font-size:12.5px"><input type="checkbox" data-a="ban" ${d.showBanned ? 'checked' : ''}> Показать заблокированных (${nBanned})</label>` : ''}${nWeak ? `<label class="vdl-chk" style="font-size:12.5px" title="Одно слово вроде «тг» без @ника, ссылки и других признаков"><input type="checkbox" data-a="weak" ${d.showWeak ? 'checked' : ''}> Показать слабые совпадения (${nWeak})</label>` : ''}</div>` : ''}
+          ${d.arr.length ? `<div class="btns" style="margin:-2px 0 10px;gap:16px;align-items:center"><label class="vdl-chk" style="font-size:12.5px"><input type="checkbox" data-a="ban" ${d.hideBan ? 'checked' : ''}> Скрыть заблокированных (${nBanned})</label><button class="btn" data-a="chkban" title="Ещё раз проверить по логам, кто из найденных уже заблокирован">${icon('refresh', 13)}Проверить заблокированных</button>${nWeak ? `<label class="vdl-chk" style="font-size:12.5px" title="Одно слово вроде «тг» без @ника, ссылки и других признаков"><input type="checkbox" data-a="weak" ${d.showWeak ? 'checked' : ''}> Показать слабые совпадения (${nWeak})</label>` : ''}</div>` : ''}
           ${pager}
           <div class="card" data-l="list">${
               arr.length
@@ -2937,7 +2948,7 @@ const BotView = {
                     <div class="vdl-btns"><button class="btn" data-an="${U.esc(g.nick)}">${icon('search', 13)}Игрок</button>${g.ips.size ? `<button class="btn" data-ip="${U.esc([...g.ips][0])}">IP</button>` : ''}</div></div>`
                         )
                         .join('')
-                  : `<div class="vdl-row"><div class="main sub">${!d.arr.length ? 'За этот период рекламных сообщений не найдено' : nWeak && !d.showWeak ? 'Есть только слабые совпадения — включи «Показать слабые совпадения»' : 'Все найденные уже заблокированы'}</div></div>`
+                  : `<div class="vdl-row"><div class="main sub">${!d.arr.length ? 'За этот период рекламных сообщений не найдено' : nWeak && !d.showWeak ? 'Есть только слабые совпадения — включи «Показать слабые совпадения»' : 'Все найденные заблокированы — сними «Скрыть заблокированных», чтобы увидеть их'}</div></div>`
           }</div>
           ${pager}
           ${arr.length ? `<div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copyb">${icon('download', 14)}Ники ботов</button><button class="btn" data-a="copy">${icon('download', 14)}Весь список</button></div>` : ''}`;
@@ -2960,9 +2971,33 @@ const BotView = {
         const bx = out.querySelector('[data-a="ban"]');
         if (bx)
             bx.onchange = () => {
-                d.showBanned = bx.checked;
+                d.hideBan = bx.checked;
                 d.page = 0;
                 this.render(out, d);
+            };
+        const kb = out.querySelector('[data-a="chkban"]');
+        if (kb)
+            kb.onclick = async () => {
+                if (this.busy && this._busyGen === this._gen) return toast('Подожди, поиск ещё идёт', 'info');
+                this.busy = true;
+                const gen = (this._busyGen = this._gen);
+                const alive = () => gen === this._gen;
+                kb.disabled = true;
+                try {
+                    const info = await this.checkBans(d.arr, d.range, gen, alive);
+                    if (info == null || !alive()) return;
+                    d.blkInfo = info;
+                    this.prog('', gen);
+                    this.render(out, d);
+                    const n = d.arr.filter(g => g.banned).length;
+                    toast(n ? `Заблокированных: ${n}` : 'Заблокированных среди найденных нет');
+                } catch (e) {
+                    this.prog('', gen);
+                    toast('Не получилось проверить: ' + e.message, 'err');
+                } finally {
+                    if (this._busyGen === gen) this.busy = false;
+                    if (kb.isConnected) kb.disabled = false;
+                }
             };
         out.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
         out.querySelectorAll('[data-an]').forEach(b => (b.onclick = () => Panel.open('nick', b.dataset.an, { stack: true })));
@@ -2994,7 +3029,7 @@ const BotView = {
                 <div class="vdl-mrow"><input type="checkbox" data-k="levels" ${c.levels ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Проверять уровень</span></div>
                 <div class="vdl-mrow"><input type="checkbox" data-k="fuzzy" ${c.fuzzy ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Похожие написания <span class="muted">(тeлеграм латиницей, т е л е г р а м — дольше)</span></span></div>
                 <div class="vdl-mrow"><input type="checkbox" data-k="marks" ${c.marks ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Пометки в таблице логов</span></div>
-                <div class="vdl-mrow"><input type="checkbox" data-k="hideBanned" ${c.hideBanned ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Скрывать заблокированных</span></div>
+                <div class="vdl-mrow"><input type="checkbox" data-k="hideBanned" ${c.hideBanned ? 'checked' : ''} style="width:18px;height:18px"><span class="nm">Проверять заблокированных сразу при поиске</span></div>
               </div></div>
               <div class="sec"><h4>Где искать</h4><div class="card">${
                   Bots.allChats().length || Bots.chats(c).fallback
