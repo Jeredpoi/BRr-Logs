@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.29
+// @version      1.2.30
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.29
+// @version      1.2.30
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.29';
+const VERSION = '1.2.30';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2695,9 +2695,11 @@ const BotView = {
             const arr = [...sus.values()].sort((x, y) => y.tgAcc - x.tgAcc || y.acc - x.acc || y.n - x.n);
             // уже заблокированные: записи «Админ-блокировок» и «Админ-супердействий» с начала периода до сейчас,
             // где ник подозреваемого стоит в тексте блокировки (разбан снимает отметку)
-            const blkOf = () => AdminView.resolve().filter(x => (x.k === 'block' || x.k === 'super') && x.id);
+            // где искать блокировки: «Админ-блокировки», «Супер наказания» и «Админ-действия» (там /ban, /block)
+            const blkOf = () => AdminView.resolve().filter(x => ['block', 'super', 'act'].includes(x.k) && x.id);
             let blk = blkOf();
-            // номера «Админ-блокировок» ещё не узнаны — без них заблокированных не отличить: сначала ищем их на сайте
+            let blkInfo = '';
+            // номера категорий ещё не узнаны — без них заблокированных не отличить: сначала ищем их на сайте
             if (c.hideBanned && arr.length && !blk.some(x => x.k === 'block') && !CatLearn._blkTried) {
                 CatLearn._blkTried = true;
                 this.prog('Ищу категории блокировок…', gen);
@@ -2706,59 +2708,75 @@ const BotView = {
                 if (!alive()) return;
                 blk = blkOf();
             }
-            if (c.hideBanned && blk.length && arr.length) {
+            if (c.hideBanned && arr.length) {
                 const byNick = new Map();
                 arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
                 const catOf = id => blk.find(x => String(x.id) === String(id));
-                // одна запись блокировки/разбана: ники в тексте (кроме выдавшего) получают отметку
+                const BAN = /заблок|забан|блокир|бан[аеиу]?\b|\bban|banned|\bblock/i;
+                const UN = /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)|сня(т|ли)\s+(бан|блок)/i;
+                let seenRows = 0;
+                // запись блокировки/разбана: ники в тексте или в поле «игрок» получают отметку
                 const apply = (rows, only) =>
                     rows
                         .slice()
                         .sort((x, y) => new Date(x.time) - new Date(y.time))
                         .forEach(x => {
                             const cat = catOf(x.category_id);
-                            if (!cat) return;
                             const txt = String(x.transaction_desc || '');
-                            const un = /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)/i.test(txt);
-                            if (!un && cat.k === 'super' && !/бан|ban|блок|block/i.test(txt)) return;
+                            const un = UN.test(txt);
+                            // «Админ-блокировки» — любая запись; остальное — только со словами бан/блок
+                            if (!un && !(cat && cat.k === 'block') && !BAN.test(txt)) return;
+                            seenRows++;
                             const seen = new Set();
-                            // ник бота бывает в тексте («Adm заблокировал Bot_Nick») или в поле «игрок» записи
-                            // («Bot_Nick: заблокирован администратором…»); выдавший блокировку — не подозреваемый, его пропустит byNick
-                            [...(txt.match(/[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g) || []), String(x.player_name || '')].forEach(n => {
+                            const fromText = (txt.match(/[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g) || []);
+                            // запись не из админских категорий (сообщение в чате «Bot_X забанят») — считаем, только если это запись самого бота
+                            const cands = cat ? [...fromText, String(x.player_name || '')] : [String(x.player_name || '')];
+                            cands.forEach(n => {
                                 const g = n && byNick.get(n.toLowerCase());
                                 if (!g || seen.has(g) || (only && g !== only)) return;
                                 seen.add(g);
                                 g.banned = un ? null : banInfo(x.time, txt);
                             });
                         });
+                const until = new Date().toISOString();
+                const fix = (r, cat) => r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x));
                 let capped = false;
                 for (const [i, cat] of blk.entries()) {
-                    const r = await Api.all({ category_id__exact: cat.id, time__gte: range.time__gte, time__lte: new Date().toISOString() }, 15, (pg, n) => this.prog(`Кто уже заблокирован (${i + 1}/${blk.length}): страница ${pg}, записей ${n}…`, gen), null, alive);
-                    if (!alive()) return;
-                    capped = capped || r.capped;
-                    apply(r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x)));
-                }
-                // блокировок за период больше, чем пролистали, — самых заметных проверяем по нику точечно
-                if (capped) {
-                    const left = arr.filter(g => !g.banned).slice(0, 40);
-                    for (const [i, g] of left.entries()) {
+                    // в «Админ-действиях» много всего — берём только записи со словами бан/блок
+                    const qs = cat.k === 'act' ? [{ transaction_desc__ilike: '%бан%' }, { transaction_desc__ilike: '%блок%' }, { transaction_desc__ilike: '%ban%' }] : [{}];
+                    for (const f of qs) {
+                        const r = await Api.all({ category_id__exact: cat.id, ...f, time__gte: range.time__gte, time__lte: until }, cat.k === 'act' ? 8 : 15, (pg, n) => this.prog(`Кто уже заблокирован: ${cat.name} (${i + 1}/${blk.length}), страница ${pg}, записей ${n}…`, gen), null, alive);
                         if (!alive()) return;
-                        this.prog(`Проверяю блокировки по нику: ${i + 1} из ${left.length}…`, gen);
-                        try {
-                            for (const cat of blk)
-                                for (const f of [{ transaction_desc__ilike: `%${g.nick}%` }, { player_name__exact: g.nick }]) {
-                                    if (g.banned) break;
-                                    const r = await Api.page({ category_id__exact: cat.id, ...f, time__gte: range.time__gte }, 0);
-                                    if (!alive()) return;
-                                    apply(r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x)), g);
-                                }
-                        } catch (e) {
-                            break;
+                        capped = capped || r.capped;
+                        apply(fix(r, cat));
+                    }
+                }
+                // самых заметных, кого не нашли, проверяем по нику точечно:
+                // блокировок за период больше, чем пролистали, — в категориях блокировок; и во всех записях (вдруг другая категория)
+                const left = arr.filter(g => !g.banned).slice(0, capped ? 30 : 15);
+                const hard = blk.filter(x => x.k !== 'act');
+                for (const [i, g] of left.entries()) {
+                    if (!alive()) return;
+                    this.prog(`Проверяю блокировки по нику: ${i + 1} из ${left.length}…`, gen);
+                    try {
+                        const qs = [];
+                        if (capped) hard.forEach(cat => qs.push([cat, { transaction_desc__ilike: `%${g.nick}%` }], [cat, { player_name__exact: g.nick }]));
+                        qs.push([null, { transaction_desc__ilike: `%${g.nick}%` }]);
+                        for (const [cat, f] of qs) {
+                            if (g.banned) break;
+                            const r = await Api.page({ ...(cat ? { category_id__exact: cat.id } : {}), ...f, time__gte: range.time__gte }, 0);
+                            if (!alive()) return;
+                            apply(cat ? fix(r, cat) : r, g);
                         }
+                    } catch (e) {
+                        break;
                     }
                 }
                 // срок блокировки уже вышел — снова активен, не скрываем
                 arr.forEach(g => g.banned && g.banned.until && g.banned.until < Date.now() && (g.banned = null));
+                blkInfo = blk.length
+                    ? `Блокировки искал в: ${blk.map(x => x.name).join(', ')} · записей о блокировках: ${seenRows}`
+                    : 'Категории блокировок не найдены — проверены только записи по нику. Номера можно вписать в «Админ-действия» → «Что считать».';
                 this.prog('', gen);
             }
             // уровни: последний вход/выход с «Уровень: N» — сначала у тех, кто рекламирует @ник или пишет с общего IP
@@ -2810,7 +2828,7 @@ const BotView = {
             });
             arr.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n);
             const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
-            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, showBanned: false, showWeak: false, blkChecked: blk.length > 0 });
+            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, showBanned: false, showWeak: false, blkChecked: blk.length > 0, blkInfo });
         } catch (e) {
             if (gen !== this._gen) return;
             this.prog('', gen);
@@ -2900,6 +2918,7 @@ const BotView = {
             <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}${d.capped ? ' · сообщений очень много — проверены не все, возьми период короче' : ''}</div>
+          ${d.blkInfo ? `<div class="sub" style="margin:-4px 2px 8px;font-size:11.5px">${U.esc(d.blkInfo)}</div>` : ''}
           ${nBanned || nWeak ? `<div class="btns" style="margin:-2px 0 10px;gap:16px">${nBanned ? `<label class="vdl-chk" style="font-size:12.5px"><input type="checkbox" data-a="ban" ${d.showBanned ? 'checked' : ''}> Показать заблокированных (${nBanned})</label>` : ''}${nWeak ? `<label class="vdl-chk" style="font-size:12.5px" title="Одно слово вроде «тг» без @ника, ссылки и других признаков"><input type="checkbox" data-a="weak" ${d.showWeak ? 'checked' : ''}> Показать слабые совпадения (${nWeak})</label>` : ''}</div>` : ''}
           ${pager}
           <div class="card" data-l="list">${
