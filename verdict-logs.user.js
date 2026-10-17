@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.28
+// @version      1.2.29
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.28
+// @version      1.2.29
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.28';
+const VERSION = '1.2.29';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2722,9 +2722,10 @@ const BotView = {
                             const un = /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)/i.test(txt);
                             if (!un && cat.k === 'super' && !/бан|ban|блок|block/i.test(txt)) return;
                             const seen = new Set();
-                            (txt.match(/[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g) || []).forEach(n => {
-                                if (sameNick(n, x.player_name)) return;
-                                const g = byNick.get(n.toLowerCase());
+                            // ник бота бывает в тексте («Adm заблокировал Bot_Nick») или в поле «игрок» записи
+                            // («Bot_Nick: заблокирован администратором…»); выдавший блокировку — не подозреваемый, его пропустит byNick
+                            [...(txt.match(/[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g) || []), String(x.player_name || '')].forEach(n => {
+                                const g = n && byNick.get(n.toLowerCase());
                                 if (!g || seen.has(g) || (only && g !== only)) return;
                                 seen.add(g);
                                 g.banned = un ? null : banInfo(x.time, txt);
@@ -2744,11 +2745,13 @@ const BotView = {
                         if (!alive()) return;
                         this.prog(`Проверяю блокировки по нику: ${i + 1} из ${left.length}…`, gen);
                         try {
-                            for (const cat of blk) {
-                                const r = await Api.page({ category_id__exact: cat.id, transaction_desc__ilike: `%${g.nick}%`, time__gte: range.time__gte }, 0);
-                                if (!alive()) return;
-                                apply(r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x)), g);
-                            }
+                            for (const cat of blk)
+                                for (const f of [{ transaction_desc__ilike: `%${g.nick}%` }, { player_name__exact: g.nick }]) {
+                                    if (g.banned) break;
+                                    const r = await Api.page({ category_id__exact: cat.id, ...f, time__gte: range.time__gte }, 0);
+                                    if (!alive()) return;
+                                    apply(r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x)), g);
+                                }
                         } catch (e) {
                             break;
                         }
