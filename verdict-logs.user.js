@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.24
+// @version      1.2.25
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.24
+// @version      1.2.25
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.24';
+const VERSION = '1.2.25';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2433,7 +2433,8 @@ const AdminView = {
 };
 
 // ---------- Боты: реклама в чатах, много аккаунтов с одного IP, низкий уровень ----------
-const BOT_PHRASES = ['телеграм', 'телеграмм', 'телега', 'тг канал', 'тгк', 't.me', 'шок', 'подпишись', 'подписывайся', 'переходи по ссылке', 'переходи в', 'халява', 'раздача', 'бесплатно'];
+// ищем только эти телеграмы (свои можно дописать в «Что ловить»)
+const BOT_PHRASES = ['@Arcanum_br', '@gad_om'];
 // латиница и цифры, похожие на русские буквы, — к русским; без пробелов и знаков
 const BOT_LOOK = { a: 'а', b: 'в', c: 'с', e: 'е', g: 'г', h: 'н', k: 'к', m: 'м', n: 'п', o: 'о', p: 'р', r: 'г', t: 'т', u: 'и', x: 'х', y: 'у', 0: 'о', 3: 'з', 6: 'б', ё: 'е' };
 function botNorm(s, keepLatin) {
@@ -2460,7 +2461,14 @@ function tgHandles(text) {
 const Bots = {
     DEF: { phrases: BOT_PHRASES.join('\n'), level: 2, minAcc: 3, fuzzy: false, levels: true, marks: true, chats: null, hideBanned: true },
     cfg() {
-        return Object.assign({}, this.DEF, Store.get('botCfg', {}));
+        const saved = Store.get('botCfg', {});
+        // 1.2.25: старый список слов («телеграм», «шок»…) заменён двумя телеграмами — один раз
+        if (saved.phrases != null && Store.get('botCfgV', 0) < 2) {
+            saved.phrases = this.DEF.phrases;
+            Store.set('botCfg', saved);
+            Store.set('botCfgV', 2);
+        }
+        return Object.assign({}, this.DEF, saved);
     },
     // все известные категории чатов
     allChats() {
@@ -2595,6 +2603,7 @@ const BotView = {
             const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
             const seen = new Set(),
                 rows = [];
+            const wanted = new Set(list.filter(p => /^@[a-z0-9_]{3,}$/i.test(p)).map(p => p.toLowerCase()));
             const chats = Bots.chats(c);
             const chatIds = new Set(chats.map(x => String(x.id)));
             if (!chats.length && Array.isArray(c.chats) && Bots.allChats().length) throw new Error('не выбран ни один чат — отметь их в «Что ловить»');
@@ -2607,24 +2616,20 @@ const BotView = {
                     if (seen.has(k)) return;
                     seen.add(k);
                     const hit = Bots.match(x.transaction_desc, list);
-                    const tg = tgHandles(x.transaction_desc);
+                    // ник телеграма без @ («пиши arcanum_br») — тоже реклама
+                    const low = String(x.transaction_desc || '').toLowerCase();
+                    wanted.forEach(h => !hit.includes(h) && !hit.some(p => p.toLowerCase() === h) && low.includes(h.slice(1)) && hit.push(h));
+                    // телеграмы — только из списка «Что ловить», чужие @ники не считаем
+                    const tg = tgHandles(x.transaction_desc).filter(h => wanted.has(h));
                     if (hit.length || tg.length) rows.push(Object.assign({ _hit: hit, _tg: tg }, x));
                 });
-            // 0) сообщения с @ник — так рекламируют телеграм («пиши @god_om»)
-            {
-                for (const ch of chats.length ? chats : [null]) {
-                    const r = await Api.all({ transaction_desc__ilike: '%@%', ...(ch ? { category_id__exact: ch.id } : {}), ...range }, 10, (pg, n) => this.prog(`Сообщения с @${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
-                    if (!alive()) return;
-                    capped = capped || r.capped;
-                    take(r, ch && ch.id);
-                }
-            }
             // 1) точные фразы — поиском сайта
             // по каждому выбранному чату: иначе частые слова («бесплатно») забивают лимит системными записями
             for (const [i, p] of list.entries()) {
                 // чатов много — одним запросом пошире (лишнее отбросит фильтр чатов)
                 for (const ch of chats.length && chats.length <= 3 ? chats : [null]) {
-                    const r = await Api.all({ transaction_desc__ilike: `%${p}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range }, ch ? 5 : 10, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
+                    // «@ник» ищем без @: так найдутся и «t.me/ник», и ник без собачки
+                    const r = await Api.all({ transaction_desc__ilike: `%${p.replace(/^@/, '')}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range }, ch ? 5 : 10, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
                     if (!alive()) return;
                     capped = capped || r.capped;
                     take(r, ch && ch.id);
