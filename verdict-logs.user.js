@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.26
+// @version      1.2.27
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.26
+// @version      1.2.27
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.26';
+const VERSION = '1.2.27';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -649,6 +649,8 @@ const Api = {
         q.set('auto', 'false');
         const url = new URL(`/gslogs/${this.server()}/api/list-game-logs/?${q}`, location.href).href;
         this.mine.add(url);
+        // свои адреса нужны только чтобы не принять их за запросы сайта — старые выбрасываем
+        if (this.mine.size > 2000) this.mine = new Set([...this.mine].slice(-500));
         // запрос не висит вечно: иначе встанет вся очередь
         const ctl = typeof AbortController === 'function' ? new AbortController() : null;
         const timer = ctl && setTimeout(() => ctl.abort(), 30000);
@@ -1157,14 +1159,16 @@ function platOf(r) {
 
 // час по Москве
 const mskHour = t => new Date(t + 3 * 3600e3).getUTCHours();
-function hoursHtml(times) {
+// local — по часам компьютера (админ-действия), иначе по Москве
+function hoursHtml(times, local) {
+    const hr = local ? t => new Date(t).getHours() : mskHour, tz = local ? '' : ' МСК';
     const hrs = Array(24).fill(0);
-    times.forEach(t => t && hrs[mskHour(t)]++);
+    times.forEach(t => t && hrs[hr(t)]++);
     const max = Math.max(...hrs);
     const peak = max ? hrs.indexOf(max) : -1;
     return {
         peak,
-        html: `<div class="vdl-hours">${hrs.map((n, h) => `<i class="${n ? '' : 'z'}" style="height:${max ? Math.max(6, Math.round((n / max) * 100)) : 6}%" title="${h}:00–${h}:59 МСК — ${n}"></i>`).join('')}</div>
+        html: `<div class="vdl-hours">${hrs.map((n, h) => `<i class="${n ? '' : 'z'}" style="height:${max ? Math.max(6, Math.round((n / max) * 100)) : 6}%" title="${h}:00–${h}:59${tz} — ${n}"></i>`).join('')}</div>
                <div class="vdl-hours-l"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>`
     };
 }
@@ -1798,7 +1802,7 @@ const Panel = {
             const rows = await this.ipRows(ip, (p, n) => this.prog(`IP ${ip}: страница ${p}, записей ${n}…`), days);
             this.prog('');
             const nicks = group(conn(rows), r => r.player_name);
-            if (into) return this.fillMore(into, nicks, except, 'IP', ip);
+            if (into) return this.stale() ? undefined : this.fillMore(into, nicks, except, 'IP', ip);
             const devN = group(rows, devOf).length;
             this.report = { kind: 'ip', ip, days, nicks };
             const rep = this.report;
@@ -1837,7 +1841,7 @@ const Panel = {
             );
             this.prog('');
             const nicks = group(rows.filter(r => devOf(r) === dev), r => r.player_name);
-            if (into) return this.fillMore(into, nicks, except, 'устройство', dev);
+            if (into) return this.stale() ? undefined : this.fillMore(into, nicks, except, 'устройство', dev);
             this.report = { kind: 'dev', dev, days, nicks };
             const o = this.out(`
               <div class="vdl-sum"><div class="k"><small>Записей</small><b>${rows.length}</b></div><div class="k"><small>Аккаунтов</small><b>${nicks.length}</b></div></div>
@@ -2083,7 +2087,11 @@ const AdminView = {
         const today = this.mskDay(Date.now());
         const [y, m] = today.split('-').map(Number);
         const iso = (yy, mm, dd) => new Date(Date.UTC(yy, mm - 1, dd)).toISOString().slice(0, 10);
-        const ago = n => this.mskDay(Date.now() - n * 864e5);
+        const ago = n => {
+            const d = new Date();
+            d.setDate(d.getDate() - n);
+            return this.mskDay(d.getTime());
+        };
         return [
             ['Сегодня', today, today],
             ['Вчера', ago(1), ago(1)],
@@ -2235,7 +2243,8 @@ const AdminView = {
         const list = d.cats || [];
         const missing = list.filter(c => !c.id && !c.opt);
         const days = [];
-        for (let t = this.dayStart(a); t <= this.dayStart(b); t += 864e5) days.push(this.mskDay(t + 3600e3));
+        // по календарным дням (не по 24 ч): переход на летнее время не съедает последний день
+        for (const d = new Date(this.dayStart(a)); d.getTime() <= this.dayStart(b); d.setDate(d.getDate() + 1)) days.push(this.mskDay(d.getTime()));
         const perDay = new Map(days.map(x => [x, 0]));
         own.forEach(r => {
             const k = this.mskDay(new Date(r.time).getTime());
@@ -2273,7 +2282,7 @@ const AdminView = {
             });
         });
         const targets = [...tg.values()].sort((x, y) => y.n - x.n || y.last - x.last);
-        const H = hoursHtml(own.map(r => new Date(r.time).getTime()));
+        const H = hoursHtml(own.map(r => new Date(r.time).getTime()), true);
         const fmtDay = s => s.split('-').reverse().slice(0, 2).join('.');
         const ru = s => s.split('-').reverse().join('.');
         const wd = k => ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(k + 'T12:00:00Z').getUTCDay()];
@@ -2463,9 +2472,11 @@ const Bots = {
     cfg() {
         const saved = Store.get('botCfg', {});
         // 1.2.25: старый список слов («телеграм», «шок»…) заменён двумя телеграмами — один раз
-        if (saved.phrases != null && Store.get('botCfgV', 0) < 2) {
-            saved.phrases = this.DEF.phrases;
-            Store.set('botCfg', saved);
+        if (Store.get('botCfgV', 0) < 2) {
+            if (saved.phrases != null) {
+                saved.phrases = this.DEF.phrases;
+                Store.set('botCfg', saved);
+            }
             Store.set('botCfgV', 2);
         }
         return Object.assign({}, this.DEF, saved);
@@ -2623,7 +2634,8 @@ const BotView = {
                     seen.add(k);
                     const hit = Bots.match(x.transaction_desc, list);
                     // телеграмы — только из списка «Что ловить» и только через @ (ссылки t.me не считаем)
-                    const tg = tgHandles(x.transaction_desc, true).filter(h => wanted.has(h));
+                    // «@Gad_Om» с большими буквами tgHandles принимает за ник игрока — берём и совпадения из списка
+                    const tg = [...new Set([...tgHandles(x.transaction_desc, true), ...hit.map(p => p.toLowerCase())])].filter(h => wanted.has(h));
                     if (hit.length || tg.length) rows.push(Object.assign({ _hit: hit, _tg: tg }, x));
                 });
             // 1) точные фразы — поиском сайта
@@ -2693,7 +2705,8 @@ const BotView = {
             const blkOf = () => AdminView.resolve().filter(x => (x.k === 'block' || x.k === 'super') && x.id);
             let blk = blkOf();
             // номера «Админ-блокировок» ещё не узнаны — без них заблокированных не отличить: сначала ищем их на сайте
-            if (c.hideBanned && arr.length && blk.length < 2) {
+            if (c.hideBanned && arr.length && !blk.some(x => x.k === 'block') && !CatLearn._blkTried) {
+                CatLearn._blkTried = true;
                 this.prog('Ищу категории блокировок…', gen);
                 CatLearn._disc = null;
                 await CatLearn.discover().catch(() => {});
@@ -2703,7 +2716,6 @@ const BotView = {
             if (c.hideBanned && blk.length && arr.length) {
                 const byNick = new Map();
                 arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
-                const blkIds = new Set(blk.map(x => String(x.id)));
                 const catOf = id => blk.find(x => String(x.id) === String(id));
                 // одна запись блокировки/разбана: ники в тексте (кроме выдавшего) получают отметку
                 const apply = (rows, only) =>
@@ -2739,9 +2751,11 @@ const BotView = {
                         if (!alive()) return;
                         this.prog(`Проверяю блокировки по нику: ${i + 1} из ${left.length}…`, gen);
                         try {
-                            const r = await Api.page({ transaction_desc__ilike: `%${g.nick}%`, time__gte: range.time__gte }, 0);
-                            if (!alive()) return;
-                            apply(r.filter(x => blkIds.has(String(x.category_id))), g);
+                            for (const cat of blk) {
+                                const r = await Api.page({ category_id__exact: cat.id, transaction_desc__ilike: `%${g.nick}%`, time__gte: range.time__gte }, 0);
+                                if (!alive()) return;
+                                apply(r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x)), g);
+                            }
                         } catch (e) {
                             break;
                         }
