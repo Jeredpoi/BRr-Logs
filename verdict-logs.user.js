@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.22
+// @version      1.2.23
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.22
+// @version      1.2.23
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.22';
+const VERSION = '1.2.23';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -807,7 +807,8 @@ const DEV_RE = /APPMDID:\s*([A-Za-z0-9+/=_-]{6,})/i;
 function fmtDate(t) {
     if (!t) return '';
     const d = new Date(t);
-    return isNaN(d) ? '' : d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    // время как на сайте — по часам компьютера
+    return isNaN(d) ? '' : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 function group(rows, keyOf) {
     const m = new Map();
@@ -2056,13 +2057,15 @@ const AdminView = {
             .map(id => ({ id, name: CATS[id] }));
     },
 
-    // даты в календаре — московские сутки
+    // сутки — по часам компьютера, как в фильтре сайта (у куратора на МСК+2 полночь — его полночь)
     mskDay(t) {
-        return Number.isFinite(t) ? new Date(t + 3 * 3600e3).toISOString().slice(0, 10) : '';
+        if (!Number.isFinite(t)) return '';
+        const d = new Date(t);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     },
     dayStart(s) {
         const [y, m, d] = s.split('-').map(Number);
-        return Date.UTC(y, m - 1, d) - 3 * 3600e3;
+        return new Date(y, m - 1, d).getTime();
     },
     presets() {
         const today = this.mskDay(Date.now());
@@ -2092,7 +2095,7 @@ const AdminView = {
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
             <div class="m-head"><span class="vic" style="--c:#7a5cff;width:34px;height:34px;border-radius:10px">${icon('lock', 16)}</span>
-              <div><div class="m-title">Админ-действия</div><div class="m-sub">Сервер ${U.esc(Api.server() || '?')} · время МСК</div></div>
+              <div><div class="m-title">Админ-действия</div><div class="m-sub">Сервер ${U.esc(Api.server() || '?')} · время по часам компьютера, как на сайте</div></div>
               <span style="flex:1"></span><button class="btn" data-a="cfg">${icon('spark', 14)}Что считать</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
               <div class="vdl-form">
@@ -2342,7 +2345,7 @@ const AdminView = {
         const c2 = out.querySelector('[data-a="cfg2"]');
         if (c2) c2.onclick = () => this.settings();
         out.querySelector('[data-a="copy"]').onclick = () => {
-            const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
+            const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
             cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
             if (days.length > 1) {
                 L.push('По дням:');
@@ -3218,10 +3221,12 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
             if (!form || form.querySelector('.vdl-dates')) return;
             const bar = document.createElement('div');
             bar.className = 'vdl-dates';
+            // полночь по часам компьютера, как в календаре сайта
             const mskMid = back => {
-                const d = new Date(Date.now() + 3 * 3600e3);
-                d.setUTCHours(0, 0, 0, 0);
-                return d.getTime() - 3 * 3600e3 - back * 864e5;
+                const d = new Date();
+                d.setHours(0, 0, 0, 0);
+                d.setDate(d.getDate() - back);
+                return d.getTime();
             };
             const ranges = [
                 ['Сегодня', () => [mskMid(0), Date.now()]],
