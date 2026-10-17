@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.21
+// @version      1.2.22
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.21
+// @version      1.2.22
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.21';
+const VERSION = '1.2.22';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -579,34 +579,50 @@ input[type="checkbox"]:checked::after { transform: rotate(45deg) scale(1); }
 @media (max-width: 760px) { .vdl-sum { grid-template-columns: repeat(2, 1fr); } .vdl-row { grid-template-columns: 1fr; } .vdl-btns { justify-content: flex-start; } }
 `;
 
-// время записи → строка с часовым поясом: без пояса — московское, число — секунды или миллисекунды
+// время записи → строка с часовым поясом. Время без пояса — в поясе сервера: какой он, видно по ответу
+// (записи должны лечь внутрь запрошенного периода), пока не узнали — московское. Число — секунды или миллисекунды
+const NAIVE_RE = /^\d{4}-\d\d-\d\d[ T]\d\d:\d\d(:\d\d(\.\d+)?)?$/;
 function normTime(v) {
     if (typeof v === 'number') return new Date(v < 1e12 ? v * 1000 : v).toISOString();
     const t = String(v == null ? '' : v).trim();
     if (!t) return t;
-    if (/^\d{4}-\d\d-\d\d[ T]\d\d:\d\d(:\d\d(\.\d+)?)?$/.test(t)) return t.replace(' ', 'T') + '+03:00';
+    if (NAIVE_RE.test(t)) {
+        const off = Api.naiveOff(), h = Math.floor(Math.abs(off) / 60), m = Math.abs(off) % 60;
+        return t.replace(' ', 'T') + (off < 0 ? '-' : '+') + String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+    }
     return t;
 }
 const Api = {
-    // в каком виде сайт сам передаёт время в запросах: с поясом (iso), без пояса (по Москве) или числом
-    tfmt(v) {
-        this.own = this.own || new Set();
-        if (!this._tf) {
-            const u = performance
-                .getEntriesByType('resource')
-                .map(e => e.name)
-                .filter(x => x.includes('/api/list-game-logs/') && !this.own.has(x) && /time__gte=/.test(x))
-                .pop();
-            if (u) {
-                const s0 = new URL(u).searchParams.get('time__gte') || '';
-                this._tf = /^\d{10,13}$/.test(s0) ? (s0.length > 10 ? 'ms' : 's') : /(Z|[+-]\d\d:?\d\d)$/i.test(s0) ? 'iso' : 'msk';
-            }
+    // сдвиг времени без пояса в минутах от UTC (180 — Москва)
+    _off: null,
+    naiveOff() {
+        if (this._off == null) {
+            const v = parseInt(Store.get('naiveOff', ''), 10);
+            this._off = Number.isFinite(v) ? v : 180;
         }
-        const ms = Date.parse(v);
-        if (!Number.isFinite(ms) || !this._tf || this._tf === 'iso') return v;
-        if (this._tf === 'ms') return String(ms);
-        if (this._tf === 's') return String(Math.floor(ms / 1000));
-        return new Date(ms + 3 * 3600e3).toISOString().slice(0, 19);
+        return this._off;
+    },
+    // свой запрос с периодом (время с поясом) и ответ без пояса: какой сдвиг кладёт записи внутрь периода
+    learnOff(q, rows) {
+        const gs = q.get('time__gte') || '', ls = q.get('time__lte') || '';
+        const tz = /(Z|[+-]\d\d:?\d\d)$/i;
+        if (!(tz.test(gs) || tz.test(ls))) return;
+        const g = tz.test(gs) ? Date.parse(gs) : NaN, l = tz.test(ls) ? Date.parse(ls) : NaN;
+        const naive = rows.map(r => r && r.time).filter(t => typeof t === 'string' && NAIVE_RE.test(t.trim()));
+        if (!naive.length) return;
+        const cands = [180, 0, -new Date().getTimezoneOffset()];
+        const fit = c => naive.filter(t => {
+            const ms = Date.parse(t.trim().replace(' ', 'T') + 'Z') - c * 60e3;
+            return (!Number.isFinite(g) || ms >= g - 1000) && (!Number.isFinite(l) || ms <= l + 1000);
+        }).length;
+        const sc = cands.map(fit), best = Math.max(...sc);
+        // все варианты подходят одинаково — по этому ответу не понять
+        if (sc.every(x => x === best)) return;
+        const c = sc[0] === best ? 180 : cands[sc.indexOf(best)];
+        if (c !== this._off) {
+            this._off = c;
+            Store.set('naiveOff', String(c));
+        }
     },
     last: 0,
     mine: new Set(),
@@ -628,14 +644,11 @@ const Api = {
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
         this.last = Date.now();
         const q = new URLSearchParams(params);
-        ['time__gte', 'time__lte'].forEach(k => q.has(k) && q.set(k, this.tfmt(q.get(k))));
         q.set('order_by', this.order);
         q.set('offset', String(offset));
         q.set('auto', 'false');
         const url = new URL(`/gslogs/${this.server()}/api/list-game-logs/?${q}`, location.href).href;
         this.mine.add(url);
-        // свои запросы (в отличие от повторённых запросов сайта) — по ним формат времени сайта не узнать
-        (this.own = this.own || new Set()).add(url);
         // запрос не висит вечно: иначе встанет вся очередь
         const ctl = typeof AbortController === 'function' ? new AbortController() : null;
         const timer = ctl && setTimeout(() => ctl.abort(), 30000);
@@ -686,6 +699,7 @@ const Api = {
             clearTimeout(timer);
         }
         if (!Array.isArray(d)) throw new Error('сайт логов ответил не списком');
+        this.learnOff(q, d);
         d.forEach(r => r && (r.time = normTime(r.time)));
         if (this.gap > this.BASE_GAP) this.gap = Math.max(this.BASE_GAP, Math.round(this.gap * 0.95));
         return d;
