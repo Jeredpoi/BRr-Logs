@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.27
+// @version      1.2.28
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.27
+// @version      1.2.28
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.27';
+const VERSION = '1.2.28';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -809,8 +809,7 @@ const DEV_RE = /APPMDID:\s*([A-Za-z0-9+/=_-]{6,})/i;
 function fmtDate(t) {
     if (!t) return '';
     const d = new Date(t);
-    // время как на сайте — по часам компьютера
-    return isNaN(d) ? '' : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return isNaN(d) ? '' : d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 function group(rows, keyOf) {
     const m = new Map();
@@ -2073,25 +2072,19 @@ const AdminView = {
             .map(id => ({ id, name: CATS[id] }));
     },
 
-    // сутки — по часам компьютера, как в фильтре сайта (у куратора на МСК+2 полночь — его полночь)
+    // сутки — московские (00:00–23:59 МСК), на любом компьютере одинаково
     mskDay(t) {
-        if (!Number.isFinite(t)) return '';
-        const d = new Date(t);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        return Number.isFinite(t) ? new Date(t + 3 * 3600e3).toISOString().slice(0, 10) : '';
     },
     dayStart(s) {
         const [y, m, d] = s.split('-').map(Number);
-        return new Date(y, m - 1, d).getTime();
+        return Date.UTC(y, m - 1, d) - 3 * 3600e3;
     },
     presets() {
         const today = this.mskDay(Date.now());
         const [y, m] = today.split('-').map(Number);
         const iso = (yy, mm, dd) => new Date(Date.UTC(yy, mm - 1, dd)).toISOString().slice(0, 10);
-        const ago = n => {
-            const d = new Date();
-            d.setDate(d.getDate() - n);
-            return this.mskDay(d.getTime());
-        };
+        const ago = n => this.mskDay(Date.now() - n * 864e5);
         return [
             ['Сегодня', today, today],
             ['Вчера', ago(1), ago(1)],
@@ -2115,7 +2108,7 @@ const AdminView = {
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
             <div class="m-head"><span class="vic" style="--c:#7a5cff;width:34px;height:34px;border-radius:10px">${icon('lock', 16)}</span>
-              <div><div class="m-title">Админ-действия</div><div class="m-sub">Сервер ${U.esc(Api.server() || '?')} · время по часам компьютера, как на сайте</div></div>
+              <div><div class="m-title">Админ-действия</div><div class="m-sub">Сервер ${U.esc(Api.server() || '?')} · время МСК</div></div>
               <span style="flex:1"></span><button class="btn" data-a="cfg">${icon('spark', 14)}Что считать</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
               <div class="vdl-form">
@@ -2243,8 +2236,8 @@ const AdminView = {
         const list = d.cats || [];
         const missing = list.filter(c => !c.id && !c.opt);
         const days = [];
-        // по календарным дням (не по 24 ч): переход на летнее время не съедает последний день
-        for (const d = new Date(this.dayStart(a)); d.getTime() <= this.dayStart(b); d.setDate(d.getDate() + 1)) days.push(this.mskDay(d.getTime()));
+        // в Москве нет перевода часов — сутки ровно по 24 ч
+        for (let t = this.dayStart(a); t <= this.dayStart(b); t += 864e5) days.push(this.mskDay(t + 3600e3));
         const perDay = new Map(days.map(x => [x, 0]));
         own.forEach(r => {
             const k = this.mskDay(new Date(r.time).getTime());
@@ -2282,7 +2275,7 @@ const AdminView = {
             });
         });
         const targets = [...tg.values()].sort((x, y) => y.n - x.n || y.last - x.last);
-        const H = hoursHtml(own.map(r => new Date(r.time).getTime()), true);
+        const H = hoursHtml(own.map(r => new Date(r.time).getTime()));
         const fmtDay = s => s.split('-').reverse().slice(0, 2).join('.');
         const ru = s => s.split('-').reverse().join('.');
         const wd = k => ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(k + 'T12:00:00Z').getUTCDay()];
@@ -2307,7 +2300,7 @@ const AdminView = {
             }</div></div>
           </div>
           <div data-at="day" hidden>
-            ${own.length ? `<div class="sec"><h4>Часы активности</h4><div class="card">${H.html}<div class="sub" style="padding:0 2px 8px">Чаще всего — ${String(H.peak).padStart(2, '0')}:00–${String(H.peak).padStart(2, '0')}:59</div></div></div>` : ''}
+            ${own.length ? `<div class="sec"><h4>Часы активности</h4><div class="card">${H.html}<div class="sub" style="padding:0 2px 8px">Чаще всего — ${String(H.peak).padStart(2, '0')}:00–${String(H.peak).padStart(2, '0')}:59 МСК</div></div></div>` : ''}
             <div class="sec"><h4>По дням</h4><div class="card">${days
                 .slice()
                 .reverse()
@@ -2366,7 +2359,7 @@ const AdminView = {
         const c2 = out.querySelector('[data-a="cfg2"]');
         if (c2) c2.onclick = () => this.settings();
         out.querySelector('[data-a="copy"]').onclick = () => {
-            const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
+            const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
             cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
             if (days.length > 1) {
                 L.push('По дням:');
