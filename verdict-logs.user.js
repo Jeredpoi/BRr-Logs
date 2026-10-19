@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.32
+// @version      1.2.33
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.32
+// @version      1.2.33
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.32';
+const VERSION = '1.2.33';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -387,6 +387,51 @@ function guessCat(id, rows) {
     cnt.forEach((v, k) => v > n && ((n = v), (best = k)));
     return best ? best[0].toUpperCase() + best.slice(1) : '';
 }
+// подозрительное в сообщениях игрока (вкладка «Активность»); упоминания админов — по списку из Store('admList')
+const SUS = [
+    { k: 'adm', name: 'упоминал админа', c: '#e5484d' },
+    { k: 'real', name: 'реал / продажа', c: '#e5484d', re: /за\s+реал|реал[а-яёa-z0-9_]*\s+(деньг|руб)|(прода[а-яёa-z0-9_]*|куплю|покупаю|скупаю|скупка|обмен[а-яёa-z0-9_]*)\s+(вирт|акк|аккаунт)\S*|(вирт|акк|аккаунт|донат)\S*\s[^.!?\n]{0,25}(₽|руб|qiwi|киви|сбер|тиньк|юмани|yoomoney|на\s+карт)|(₽|руб\S*|на\s+карт\S*|qiwi|киви|сбер\S*|тиньк\S*|юмани)\s[^.!?\n]{0,30}(вирт\S*|\d+\s*кк(?![а-яё])|акк\S*|аккаунт\S*)|перевод[а-яёa-z0-9_]*\s+на\s+карт/gi },
+    { k: 'cheat', name: 'читы / баги', c: '#f5a524', re: /(^|[^а-яё])(чит|читы|читер[а-яёa-z0-9_]*|читом|читами|софт[а-яёa-z0-9_]*|клео|взлом[а-яёa-z0-9_]*|дюп[а-яёa-z0-9_]*|собейт|аим|вх)(?![а-яё])|\b(cleo|moonloader|sobeit|dupe|aim|wallhack|wh)\b|баг[а-яёa-z0-9_]*\s+на\s+(деньг|вирт)/gi },
+    { k: 'admw', name: 'про администрацию', c: '#f5a524', re: /админ[а-яёa-z0-9_]*|модер[а-яёa-z0-9_]*|куратор[а-яёa-z0-9_]*|разбан[а-яёa-z0-9_]*|(сним|снять|сними)[а-яёa-z0-9_]*(\s+[а-яё]{1,6})?\s+(бан|варн|мут|джайл)|блат[а-яёa-z0-9_]*|взятк[а-яёa-z0-9_]*|подкуп[а-яёa-z0-9_]*|откуп[а-яёa-z0-9_]*|(^|[^а-яё])(згс|гс|зга)(?![а-яё])/gi },
+    { k: 'link', name: 'контакты вне игры', c: '#3e9bff', re: /@[a-z0-9_]{4,}|t\.me\/\S+|vk\.(com|me)\/\S+|discord\S*|дискорд[а-яёa-z0-9_]*|телеграм[а-яёa-z0-9_]*|телег[а-яёa-z0-9_]*|ватсап[а-яёa-z0-9_]*|whatsapp|(^|[^а-яё])(тг|дс|вк)(?![а-яё])|(\+7|8)[\s(-]*9\d{2}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}/gi }
+];
+// сообщения: чаты, СМС, репорты, объявления; категория неизвестна — тоже проверяем
+const MSG_CAT = /чат|chat|смс|sms|сообщ|репорт|report|вопрос|объявл|реклам|рация|радио|(^|[^а-яё])(лс|рп|нрп)(?![а-яё])|\b(pm|rp|nrp)\b|^Категория #/i;
+const escRe = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function admRe(self) {
+    const list = Store.get('admList', []).filter(n => n && !sameNick(n, self));
+    if (!list.length) return null;
+    // Ник_Фамилия, «Ник Фамилия» и «Ник.Фамилия»
+    return new RegExp(`(?<![A-Za-z0-9])(${list.map(n => escRe(n).replace(/_/g, '[_ .]')).join('|')})(?![A-Za-z0-9])`, 'gi');
+}
+// что нашлось в тексте: [{k, a, b}] — тип и границы совпадения
+function susHits(text, adm) {
+    const out = [];
+    const take = (k, re) => {
+        if (!re) return;
+        re.lastIndex = 0;
+        for (const m of text.matchAll(re)) {
+            // ведущий не-буквенный символ из (^|[^а-яё]) в подсветку не берём
+            const lead = /[^а-яёa-z0-9@+]/i.test(m[0][0]) ? 1 : 0;
+            out.push({ k, a: m.index + lead, b: m.index + m[0].length });
+        }
+    };
+    take('adm', adm);
+    SUS.forEach(x => x.re && take(x.k, x.re));
+    return out;
+}
+function susMark(text, hits) {
+    const hs = hits.slice().sort((x, y) => x.a - y.a);
+    let html = '',
+        i = 0;
+    hs.forEach(h => {
+        if (h.a < i) return;
+        const c = (SUS.find(x => x.k === h.k) || {}).c;
+        html += U.esc(text.slice(i, h.a)) + `<mark style="--c:${c}">${U.esc(text.slice(h.a, h.b))}</mark>`;
+        i = h.b;
+    });
+    return html + U.esc(text.slice(i));
+}
 // подпись категории в списках: название или «≈ угаданное (#id)»
 function catLabel(id, rows) {
     if (id === 'none' || id === '' || id == null) return { name: 'Без категории', known: true };
@@ -399,9 +444,23 @@ function catLabel(id, rows) {
 // категория античита на сайте логов
 const AC_RE = /анти\s*-?\s*чит|anti\s*-?\s*cheat/i;
 // насколько опасно срабатывание античита: 3 — аим, 2 — быстрое перемещение, 1 — остальное
-const AC_AIM = /\baim|аим|silent|сайлент|авто\s*-?\s*(прицел|наводк)|wall\s*hack|\bwh\b|вх\b|trigger\s*bot|триггер/i;
-const AC_MOVE = /speed|скорост|телепорт|teleport|tp\b|fly|полёт|полет|air\s*break|аирбрейк|быстр\w*\s+(перемещ|движ|бег)|перемещ|surf|clickwarp|warp|координат/i;
-const acLevel = t => (AC_AIM.test(t) ? 3 : AC_MOVE.test(t) ? 2 : 1);
+// типы срабатываний: берётся первый подошедший; lvl 3 — красный, 2 — оранжевый, 1 — жёлтый, без типа — 0
+const AC_KINDS = [
+    { name: 'аим', lvl: 3, re: /\baim|аим|silent|сайлент|авто\s*-?\s*(прицел|наводк)|trigger\s*bot|триггер/i },
+    { name: 'вх', lvl: 3, re: /wall\s*hack|\bwh\b|(^|[^а-яё])вх([^а-яё]|$)|\besp\b|сквозь\s+стен/i },
+    { name: 'рванка', lvl: 3, re: /рванк|rvanka|fling|флинг|раскид|толка\w*\s+(машин|транспорт)|vehicle\s*push/i },
+    { name: 'телепорт', lvl: 2, re: /телепорт|teleport|\btp\b|(^|[^а-яё])тп([^а-яё]|$)|click\s*-?\s*(warp|tp)|warp|координат/i },
+    { name: 'полёт', lvl: 2, re: /\bfly|пол[её]т|air\s*-?\s*br(ea)?k|аирбрейк|эйрбрейк|левитац|в\s+воздух/i },
+    { name: 'скорость', lvl: 2, re: /speed|скорост|спидхак|быстр\w*\s+(перемещ|движ|бег)|перемещ|surf/i },
+    { name: 'бессмертие', lvl: 2, re: /god\s*mode|годмод|бессмерт|невидим|invis|урон|damage|\bhp\b|(^|[^а-яё])хп([^а-яё]|$)|здоровь|armou?r|брон/i },
+    { name: 'оружие', lvl: 2, re: /weapon|оружи|ammo|патрон|rapid|быстр\w*\s+стрел|no\s*reload|перезаряд/i },
+    { name: 'транспорт', lvl: 1, re: /vehicle|транспорт|машин|\bcar\b|nitro|нитро|repair|починк/i },
+    { name: 'пакеты', lvl: 1, re: /flood|флуд|пакет|packet|\brpc\b|desync|десинх|\bcrash|краш/i }
+];
+const AC_COL = ['#8b8f9a', '#d9b54a', '#f5a524', '#e5484d'];
+const acKind = t => AC_KINDS.find(x => x.re.test(t)) || null;
+const acLevel = t => (acKind(t) || { lvl: 0 }).lvl;
+const acCls = l => (l === 3 ? ' ac-aim' : l === 2 ? ' ac-move' : l === 1 ? ' ac-low' : '');
 // передача другому игроку: в тексте «передал/перевёл/отдал/добавил в трейд …»
 const GIVE_RE = /передал|перев[её]л|отдал|отправил|добавил|положил|выставил|подарил|выдал/i;
 // безымянная категория админ-действий: по тому, что в ней делают («Бан, мут · #36»), иначе по частым словам
@@ -491,6 +550,10 @@ const LOGS_UI_CSS = `
 .vdl-row.ac-move { background: color-mix(in srgb, #f5a524 8%, transparent); box-shadow: inset 3px 0 0 #f5a524; border-radius: 8px; }
 .vdl-bar.ac-aim .nm { color: #ff6b70; font-weight: 700; }
 .vdl-bar.ac-move .nm { color: #f5b647; }
+.vdl-row.ac-low { background: color-mix(in srgb, #d9b54a 6%, transparent); box-shadow: inset 3px 0 0 #d9b54a; border-radius: 8px; }
+.vdl-bar.ac-low .nm { color: #e3c56a; }
+.vdl-ser { margin: 6px 0 2px; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--acc) 35%, transparent); }
+.vdl-ser > div { padding: 3px 0; font-size: 12px; }
 .vdl-row.tr-give, .vdl-row.m-give { box-shadow: inset 2px 0 0 color-mix(in srgb, #f5a524 70%, transparent); background: color-mix(in srgb, #f5a524 5%, transparent); border-radius: 8px; }
 .vdl-tline { font-size: 12px; color: var(--tx-2, #c9ccd4); margin-top: 3px; line-height: 1.35; }
 .vdl-tline b { color: var(--tx); font-weight: 650; }
@@ -499,6 +562,12 @@ const LOGS_UI_CSS = `
 .vdl-row .ttl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 700; color: var(--tx); }
 .vdl-row .sub { font-size: 11.5px; color: var(--tx-3); margin-top: 3px; }
 .vdl-mono { font-family: ui-monospace, Consolas, monospace; }
+.vdl-sus { padding: 4px 2px 12px; margin-bottom: 10px; border-bottom: 1px solid var(--line, rgba(255,255,255,.08)); }
+.vdl-sus mark { background: color-mix(in srgb, var(--c) 28%, transparent); color: inherit; border-radius: 4px; padding: 0 2px; }
+.vdl-sus .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.vdl-sus .chips .vdl-tag { cursor: pointer; }
+.vdl-sus .chips .vdl-tag.off { opacity: .35; }
+.vdl-sus textarea { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.5 ui-monospace, monospace; }
 .vdl-tag { font-size: 10.5px; font-weight: 750; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--c, var(--acc)) 18%, transparent); color: color-mix(in srgb, var(--c, var(--acc)) 75%, #fff); border: 1px solid color-mix(in srgb, var(--c, var(--acc)) 35%, transparent); }
 .vdl-more { margin: 6px 0 4px 14px; padding-left: 12px; border-left: 2px solid color-mix(in srgb, var(--acc) 45%, transparent); }
 .vdl-more .vdl-row { padding: 6px 2px; }
@@ -728,10 +797,11 @@ const Api = {
     },
     // first — уже полученная первая страница (чтобы не качать её второй раз);
     // alive() — окно ещё открыто: иначе листание прекращается и не занимает очередь
-    async all(params, maxPages, onPage, first, alive) {
+    // from — с какой записи продолжить (out.next прошлого вызова): «Загрузить ещё» не качает уже загруженное заново
+    async all(params, maxPages, onPage, first, alive, from = 0) {
         const out = [];
         out.capped = false;
-        let off = 0,
+        let off = from,
             prev = 0;
         for (let i = 0; i < maxPages; i++) {
             if (alive && !alive()) break;
@@ -752,6 +822,7 @@ const Api = {
             if (size && d.length < size && (this._sizeOk || d.length < 20)) break;
             if (i === maxPages - 1 && (!size || d.length >= size)) out.capped = true;
         }
+        out.next = off;
         return out;
     },
     range(days) {
@@ -1393,13 +1464,22 @@ const Panel = {
     },
 
     // общее ядро: собирает сводку по игроку, выбранному либо по нику, либо по ID
-    player(sel, nick, id) {
+    // prev — уже загруженные подключения («Загрузить ещё»): продолжаем с того же места и в том же периоде
+    player(sel, nick, id, prev) {
+        const nick0 = nick;
         return this.run(async () => {
-            const days = this.days;
-            const base = Object.assign({}, sel, Api.range(days));
+            const days = prev ? prev.days : this.days;
+            const base = prev ? prev.base : Object.assign({}, sel, Api.range(days));
             this.prog('Читаю подключения игрока…');
-            let rows = await Api.all(Object.assign({ category_id__exact: 38 }, base), 10, (p, n) => this.prog(`Подключения: страница ${p}, записей ${n}…`), null, this.alive());
-            let note = rows.capped ? `Показаны последние ${rows.length} записей о входах — за период их больше, возьми период короче.` : '';
+            let rows;
+            if (prev) {
+                const r = await Api.all(Object.assign({ category_id__exact: 38 }, base), 10, (p, n) => this.prog(`Ещё подключения: страница ${p}, всего ${prev.rows.length + n}…`), null, this.alive(), prev.rows.next);
+                rows = prev.rows.concat(r);
+                rows.capped = r.capped;
+                rows.next = r.next;
+            } else rows = await Api.all(Object.assign({ category_id__exact: 38 }, base), 10, (p, n) => this.prog(`Подключения: страница ${p}, записей ${n}…`), null, this.alive());
+            const inMore = rows.capped ? { rows, base, days } : null;
+            let note = rows.capped ? `Показаны ${Api.order === 'time' ? 'первые' : 'последние'} ${rows.length} записей о входах — за период есть ещё.` : '';
             if (!rows.length) {
                 rows = await Api.all(base, 4, (p, n) => this.prog(`Все записи игрока: страница ${p}, записей ${n}…`), null, this.alive());
                 note = 'Подключений за период нет — IP взяты из остальных записей игрока.';
@@ -1424,7 +1504,7 @@ const Panel = {
                 <div class="k"><small>Устройств</small><b>${devs.length}</b></div>
                 <div class="k"><small>ID игрока</small><b style="font-size:15px" class="vdl-copyid" data-v="${U.esc(ids.join(', '))}">${U.esc(ids.join(', ') || '—')}</b></div>
               </div>
-              ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}</div>` : ''}
+              ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}${inMore ? `<button class="btn" data-a="inmore" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить ещё</button>` : ''}</div>` : ''}
               <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button><button data-v="ac">${icon('shield', 13)}Античит</button></div>
               <div data-tab="in">
                 <div class="sec"><h4>С чего заходил (платформа)</h4><div class="card" data-l="plat"></div></div>
@@ -1485,12 +1565,50 @@ const Panel = {
             // вкладки: «Доходы», «Активность» и «Трейды» грузятся при первом открытии
             const gen = this._gen;
             const tabs = o.querySelector('[data-g="tab"]');
-            const loaders = {
-                money: box => this.loadAll(base, gen).then(d => gen === this._gen && this.renderMoney(box, d)),
-                act: box => this.loadAll(base, gen).then(d => gen === this._gen && this.renderCats(box, d)),
-                tr: box => this.loadTrades(sel, gen, base).then(list => gen === this._gen && this.renderTrades(box, list)),
-                ac: box => this.loadAc(sel, gen, base).then(d => gen === this._gen && this.renderAc(box, d))
+            // load — первая загрузка, draw — отрисовка, more — следующие страницы (share — вкладка на тех же данных)
+            const T = {
+                money: { load: () => this.loadAll(base, gen), draw: (box, d) => this.renderMoney(box, d), more: d => this.moreAll(base, gen, d), share: 'act' },
+                act: { load: () => this.loadAll(base, gen), draw: (box, d) => this.renderCats(box, d), more: d => this.moreAll(base, gen, d), share: 'money' },
+                tr: { load: () => this.loadTrades(sel, gen, base), draw: (box, l) => this.renderTrades(box, l), more: l => this.moreTrades(l, gen) },
+                ac: { load: () => this.loadAc(sel, gen, base), draw: (box, d) => this.renderAc(box, d), more: d => this.moreAc(d, gen) }
             };
+            const boxOf = t => o.querySelector(`[data-tab="${t}"] .card`);
+            const paint = (t, box, d) => {
+                if (gen !== this._gen || !d) return;
+                T[t].draw(box, d);
+                // кнопка «Загрузить ещё» может перерисовываться внутри вкладки — ловим клик на самом блоке
+                box._more = async b => {
+                    if (this._moreBusy) return toast('Подожди, ещё загружается', 'info');
+                    this._moreBusy = true;
+                    b.disabled = true;
+                    b.lastChild.textContent = 'Загружаю…';
+                    try {
+                        const nd = await T[t].more(d);
+                        if (gen !== this._gen) return;
+                        paint(t, box, nd);
+                        const sh = T[t].share;
+                        if (sh && started[sh]) paint(sh, boxOf(sh), nd);
+                    } catch (e) {
+                        if (gen !== this._gen) return;
+                        this.prog('');
+                        b.disabled = false;
+                        b.lastChild.textContent = 'Загрузить ещё';
+                        toast('Не загрузилось: ' + e.message, 'err');
+                    } finally {
+                        this._moreBusy = false;
+                    }
+                };
+                if (!box._moreOn) {
+                    box._moreOn = true;
+                    box.addEventListener('click', e => {
+                        const b = e.target.closest('[data-a="more"]');
+                        if (b && !b.disabled && box._more) box._more(b);
+                    });
+                }
+            };
+            const loaders = {};
+            Object.keys(T).forEach(t => (loaders[t] = box => T[t].load().then(d => paint(t, box, d))));
+            this._moreBusy = false;
             const started = {};
             const show = t => {
                 this.tab = t;
@@ -1510,6 +1628,8 @@ const Panel = {
             };
             tabs.querySelectorAll('button').forEach(b => (b.onclick = () => show(b.dataset.v)));
             show(loaders[this.tab] || this.tab === 'in' ? this.tab : 'in');
+            const im = o.querySelector('[data-a="inmore"]');
+            if (im) im.onclick = () => this.player(sel, nick0, id, inMore);
             o.querySelector('[data-a="copy"]').onclick = () => this.copy();
         });
     },
@@ -1521,14 +1641,27 @@ const Panel = {
         const LIM = 10;
         const p = Api.all(base, LIM, (pg, n) => gen === this._gen && this.prog(`Все записи игрока: страница ${pg}, записей ${n}…`), null, () => gen === this._gen).then(rows => {
             if (gen === this._gen) this.prog('');
-            return { rows, capped: rows.capped };
+            return { rows, capped: rows.capped, next: rows.next };
         });
         this._all = { key, p };
         p.catch(() => this._all && this._all.p === p && (this._all = null));
         return p;
     },
+    // следующие страницы тех же записей — дописываются в тот же объект (его видят «Доходы» и «Активность»)
+    async moreAll(base, gen, d) {
+        const r = await Api.all(base, 10, (pg, n) => gen === this._gen && this.prog(`Ещё записи игрока: страница ${pg}, всего ${d.rows.length + n}…`), null, () => gen === this._gen, d.next);
+        if (gen !== this._gen) return d;
+        this.prog('');
+        d.rows.push(...r);
+        d.capped = r.capped;
+        d.next = r.next;
+        return d;
+    },
+    moreBtn() {
+        return `<button class="btn" data-a="more" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить ещё</button>`;
+    },
     capNote(d) {
-        return `<div class="sub" style="padding:8px 2px">${d.rows.length} ${plural(d.rows.length, 'запись', 'записи', 'записей')} игрока${d.capped ? (Api.order === 'time' ? ' — посчитаны первые за период, их больше (возьми период короче)' : ' — посчитаны последние, за весь период их больше (возьми период короче)') : ''}</div>`;
+        return `<div class="sub" style="padding:8px 2px">${d.rows.length} ${plural(d.rows.length, 'запись', 'записи', 'записей')} игрока${d.capped ? (Api.order === 'time' ? ' — посчитаны первые за период, есть ещё' : ' — посчитаны последние, за период есть ещё') + this.moreBtn() : ''}</div>`;
     },
     renderMoney(box, d) {
         if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
@@ -1615,6 +1748,62 @@ const Panel = {
                 })
         );
     },
+    // подозрительные сообщения игрока: упоминания админов из списка, реал, читы, разговоры про администрацию, контакты
+    susScan(d) {
+        const self = this.report && this.report.nick;
+        const adm = admRe(self);
+        const key = d.rows.length + '|' + Store.get('admList', []).join(',');
+        if (d._sus && d._sus.key === key) return d._sus;
+        let msgs = 0;
+        const list = [];
+        d.rows.forEach(r => {
+            if (String(r.category_id) === '38') return;
+            const text = String(r.transaction_desc || '');
+            const msg = MSG_CAT.test(catName(r));
+            if (msg) msgs++;
+            // админов ищем во всех записях (передачи, трейды), остальное — только в сообщениях
+            const hits = susHits(text, adm).filter(h => msg || h.k === 'adm');
+            if (hits.length) list.push({ r, text, hits, kinds: [...new Set(hits.map(h => h.k))] });
+        });
+        list.sort((a, b) => new Date(b.r.time) - new Date(a.r.time));
+        return (d._sus = { key, msgs, list, admN: Store.get('admList', []).length, off: (d._sus && d._sus.off) || new Set() });
+    },
+    susHtml(d) {
+        const S = this.susScan(d);
+        const cnt = k => S.list.filter(x => x.kinds.includes(k)).length;
+        const kinds = SUS.filter(x => cnt(x.k));
+        const shown = S.list.filter(x => x.kinds.some(k => !S.off.has(k)));
+        this.report.sus = S.list.length;
+        return `<div class="vdl-sus">
+          <div class="ttl" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b>Подозрительное в сообщениях</b><span class="sub" style="margin:0">${S.list.length ? `${S.list.length} из ${S.msgs}` : `в ${S.msgs} ${plural(S.msgs, 'сообщении', 'сообщениях', 'сообщениях')} ничего не нашлось`}</span><span style="flex:1"></span><button class="btn" data-a="adml" style="height:26px">${icon('shield', 12)}Админы: ${S.admN || 'список пуст'}</button></div>
+          <div data-l="admed" hidden><div class="sub" style="padding:6px 0 4px">Ники администрации — по одному в строке (или через запятую). Ищется «Ник_Фамилия», «Ник Фамилия» и «Ник.Фамилия».</div><textarea class="inp" data-a="admt" placeholder="Ivan_Petrov&#10;Petr_Sidorov"></textarea><div class="vdl-btns" style="margin-top:6px"><button class="btn pri" data-a="adms">Сохранить</button></div></div>
+          ${kinds.length ? `<div class="chips">${kinds.map(x => `<span class="vdl-tag${S.off.has(x.k) ? ' off' : ''}" style="--c:${x.c}" data-sk="${x.k}" title="Показать / скрыть">${x.name}: ${cnt(x.k)}</span>`).join('')}</div>` : ''}
+          ${shown
+              .slice(0, 100)
+              .map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="sub" style="margin:0">${fmtDate(x.r.time)}</span><span class="vdl-tag" style="--c:#8b8f9a">${U.esc(catName(x.r))}</span>${x.kinds.map(k => SUS.find(y => y.k === k)).map(y => `<span class="vdl-tag" style="--c:${y.c}">${y.name}</span>`).join('')}</div><div class="sub vdl-desc">${susMark(x.text, x.hits)}</div></div></div>`)
+              .join('')}${shown.length > 100 ? `<div class="sub" style="padding:6px 2px">Показаны 100 из ${shown.length}</div>` : ''}
+        </div>`;
+    },
+    susWire(box, d) {
+        const S = d._sus;
+        const redraw = () => this.renderCats(box, d);
+        box.querySelectorAll('[data-sk]').forEach(t => (t.onclick = () => (S.off.has(t.dataset.sk) ? S.off.delete(t.dataset.sk) : S.off.add(t.dataset.sk), redraw())));
+        const ed = box.querySelector('[data-l="admed"]');
+        box.querySelector('[data-a="adml"]').onclick = () => {
+            ed.hidden = !ed.hidden;
+            if (!ed.hidden) {
+                const ta = ed.querySelector('textarea');
+                ta.value = Store.get('admList', []).join('\n');
+                ta.focus();
+            }
+        };
+        box.querySelector('[data-a="adms"]').onclick = () => {
+            const list = [...new Set(ed.querySelector('textarea').value.split(/[\s,;]+/).map(x => x.trim()).filter(x => /^[A-Za-z0-9]+_[A-Za-z0-9]+$/.test(x)))];
+            Store.set('admList', list);
+            toast(`Сохранено ников: ${list.length}`);
+            redraw();
+        };
+    },
     renderCats(box, d) {
         if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
         const cats = group(d.rows, r => String(r.category_id ?? 'none')).slice(0, 14);
@@ -1623,6 +1812,7 @@ const Panel = {
         this.report.cats = cats.slice(0, 8).map(g => `${nm(g.k)} — ${g.n}`);
         const unknown = cats.filter(g => !catLabel(g.k, d.rows).known);
         box.innerHTML =
+            this.susHtml(d) +
             cats
                 .map(g => {
                     const name = nm(g.k);
@@ -1636,6 +1826,7 @@ const Panel = {
                 })
                 .join('') +
             this.capNote(d);
+        this.susWire(box, d);
         box.querySelectorAll('.vdl-catex [data-a="name"]').forEach(
             bt =>
                 (bt.onclick = () => {
@@ -1658,8 +1849,25 @@ const Panel = {
     // период — тот же, что у отчёта (base), а не текущие 7/30/90 дней
     async loadTrades(sel, gen, base) {
         const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Api.range(this.days);
-        const tr = await Api.all({ ...sel, transaction_desc__ilike: '%TradeID%', ...range }, 6, (pp, nn) => gen === this._gen && this.prog(`Трейды: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen);
+        const params = { ...sel, transaction_desc__ilike: '%TradeID%', ...range };
+        const tr = await Api.all(params, 6, (pp, nn) => gen === this._gen && this.prog(`Трейды: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen);
         if (gen === this._gen) this.prog('');
+        return this.tradeList(tr, sel, params);
+    },
+    async moreTrades(old, gen) {
+        const r = await Api.all(old.params, 6, (pp, nn) => gen === this._gen && this.prog(`Ещё трейды: страница ${pp}, записей ${old.raw.length + nn}…`), null, () => gen === this._gen, old.next);
+        if (gen !== this._gen) return old;
+        this.prog('');
+        const tr = old.raw.concat(r);
+        tr.capped = r.capped;
+        tr.next = r.next;
+        const list = this.tradeList(tr, old.sel, old.params);
+        // уже подгруженные полные записи трейдов не теряем
+        const full = new Map(old.filter(g => g.full).map(g => [g.id, g.full]));
+        list.forEach(g => full.has(g.id) && (g.full = full.get(g.id)));
+        return list;
+    },
+    tradeList(tr, sel, params) {
         const byT = new Map();
         tr.forEach(r => {
             const m = String(r.transaction_desc || '').match(/TradeID:\s*(\d+)/);
@@ -1673,6 +1881,7 @@ const Panel = {
         const list = [...byT.values()].sort((a, b) => b.last - a.last);
         // чей отчёт: ник из запроса, иначе — чаще всего встречающийся в его записях трейдов
         list.nick = sel.player_name__exact || (group(tr, r => r.player_name).sort((a, b) => b.n - a.n)[0] || {}).k || '';
+        Object.assign(list, { raw: tr, sel, params, capped: tr.capped, next: tr.next });
         return list;
     },
     // все записи одного трейда (обе стороны) — чтобы было видно, что в нём было, не открывая
@@ -1695,22 +1904,27 @@ const Panel = {
         // без категории — по тексту («античит», «анти-чит», «Anti Cheat»), но не сообщения игрока в чатах
         const qs = ids.length ? ids.map(id => ({ category_id__exact: id })) : [{ transaction_desc__ilike: '%анти%чит%' }, { transaction_desc__ilike: '%anti%cheat%' }];
         const keep = x => ids.length || (AC_RE.test(String(x.transaction_desc || '')) && !/чат|chat/i.test(catName(x)));
-        const seen = new Set(),
-            rows = [];
-        let capped = false;
-        for (const q of qs) {
-            const r = await Api.all({ ...sel, ...q, ...range }, 10, (pp, nn) => gen === this._gen && this.prog(`Античит: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen);
+        const d = { rows: [], seen: new Set(), keep, capped: false, more: qs.map(q => ({ params: { ...sel, ...q, ...range }, next: 0 })) };
+        return this.moreAc(d, gen, true);
+    },
+    // first — первая загрузка; дальше продолжаем только запросы, упёршиеся в предел страниц
+    async moreAc(d, gen, first) {
+        const left = [];
+        for (const m of d.more) {
+            const r = await Api.all(m.params, 10, (pp, nn) => gen === this._gen && this.prog(`${first ? 'Античит' : 'Ещё античит'}: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen, m.next);
             if (gen !== this._gen) return null;
-            capped = capped || r.capped;
+            if (r.capped) left.push(Object.assign(m, { next: r.next }));
             r.forEach(x => {
-                if (!keep(x)) return;
+                if (!d.keep(x)) return;
                 const k = `${x.time}|${x.category_id}|${x.transaction_desc}`;
-                if (!seen.has(k)) seen.add(k) && rows.push(x);
+                if (!d.seen.has(k)) d.seen.add(k) && d.rows.push(x);
             });
         }
         if (gen === this._gen) this.prog('');
-        rows.sort((a, b) => new Date(b.time) - new Date(a.time));
-        return { rows, capped };
+        d.more = left;
+        d.capped = left.length > 0;
+        d.rows.sort((a, b) => new Date(b.time) - new Date(a.time));
+        return d;
     },
     renderAc(box, d) {
         if (!d) return;
@@ -1733,26 +1947,29 @@ const Panel = {
                 .slice(0, 70) || 'без описания';
         rows.forEach(r => {
             r._kind = r._kind || kindOf(r);
-            r._lvl = r._lvl || acLevel(String(r.transaction_desc || ''));
+            if (r._ak === undefined) {
+                r._ak = acKind(String(r.transaction_desc || ''));
+                r._lvl = r._ak ? r._ak.lvl : 0;
+            }
         });
         // сверху самое опасное: аим, затем быстрое перемещение, затем остальное (внутри — по числу срабатываний)
         const kinds = group(rows, r => r._kind)
             .map(g => Object.assign(g, { lvl: Math.max(acLevel(g.k), ...rows.filter(r => r._kind === g.k).map(r => r._lvl)) }))
             .sort((a, b) => b.lvl - a.lvl || b.n - a.n);
-        const nAim = rows.filter(r => r._lvl === 3).length,
-            nMove = rows.filter(r => r._lvl === 2).length;
-        const lvlTag = l => (l === 3 ? '<span class="vdl-tag" style="--c:#e5484d">аим</span>' : l === 2 ? '<span class="vdl-tag" style="--c:#f5a524">перемещение</span>' : '');
+        // сколько каких нарушений — в порядке опасности
+        const perKind = AC_KINDS.map(k => ({ k, n: rows.filter(r => r._ak === k).length })).filter(x => x.n);
+        const kTag = (k, extra = '') => (k ? `<span class="vdl-tag" style="--c:${AC_COL[k.lvl]}">${k.name}${extra}</span>` : '');
         const kmax = Math.max(1, ...kinds.map(g => g.n));
         const dayOf = r => AdminView.mskDay(new Date(r.time).getTime());
         const days = new Set(rows.map(dayOf)).size;
         // фильтр: выбранные типы (пусто — все), IP, период, текст, порядок
-        const F = (this._acF = this._acF && this._acF.of === rows ? this._acF : { of: rows, kinds: new Set(), q: '', sort: 'danger' });
+        const F = (this._acF = this._acF && this._acF.of === rows ? this._acF : { of: rows, kinds: new Set(), q: '', sort: 'danger', ser: true });
         box.innerHTML = `
-          <div class="vdl-row"><div class="main"><div class="ttl">${rows.length} ${plural(rows.length, 'срабатывание', 'срабатывания', 'срабатываний')}<span class="vdl-tag" style="--c:#8b8f9a">${days} ${plural(days, 'день', 'дня', 'дней')}</span>${nAim ? `<span class="vdl-tag" style="--c:#e5484d">аим: ${nAim}</span>` : ''}${nMove ? `<span class="vdl-tag" style="--c:#f5a524">перемещение: ${nMove}</span>` : ''}</div><div class="sub">последнее — ${fmtDate(rows[0].time)}${d.capped ? (Api.order === 'time' ? ' · показаны первые за период' : ' · показаны последние') : ''}</div></div></div>
+          <div class="vdl-row"><div class="main"><div class="ttl">${rows.length} ${plural(rows.length, 'срабатывание', 'срабатывания', 'срабатываний')}<span class="vdl-tag" style="--c:#8b8f9a">${days} ${plural(days, 'день', 'дня', 'дней')}</span>${perKind.map(x => kTag(x.k, ': ' + x.n)).join('')}</div><div class="sub">последнее — ${fmtDate(rows[0].time)}${d.capped ? (Api.order === 'time' ? ' · показаны первые за период, есть ещё' : ' · показаны последние, есть ещё') + this.moreBtn() : ''}</div></div></div>
           <div class="sub" style="padding:10px 2px 4px">За что</div>
           <div data-l="bars">${kinds
               .slice(0, 8)
-              .map(g => `<div class="vdl-bar pick${g.lvl === 3 ? ' ac-aim' : g.lvl === 2 ? ' ac-move' : ''}" data-k="${U.esc(g.k)}" title="Показать только это"><span class="nm">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
+              .map(g => `<div class="vdl-bar pick${acCls(g.lvl)}" data-k="${U.esc(g.k)}" title="Показать только это"><span class="nm">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
               .join('')}</div>
           <div class="vdl-ftools" style="margin-top:12px">
             <div class="vdl-dd" data-dd="kind"><button class="btn" data-a="dd"><span data-l="kl">Все причины</span>${icon('down', 13)}</button>
@@ -1761,6 +1978,7 @@ const Panel = {
                   .join('')}</div><div class="vdl-dd-foot"><button class="btn" data-a="kall">Все</button><button class="btn" data-a="kclose">Готово</button></div></div></div>
             <input class="inp" data-a="q" placeholder="Найти в тексте…">
             <select class="inp" data-a="sort"><option value="danger">Сначала опасные</option><option value="new">Сначала новые</option><option value="old">Сначала старые</option></select>
+            <label class="vdl-chk" title="Срабатывания по одной причине с перерывом меньше 5 минут — одной строкой"><input type="checkbox" data-a="ser"> Серии</label>
             <button class="btn" data-a="reset">Сбросить</button></div>
           <div class="sub" data-l="cnt" style="padding:2px 2px 6px"></div>
           <div data-l="list"></div>`;
@@ -1768,20 +1986,59 @@ const Panel = {
         const draw = () => {
             const q = F.q.trim().toLowerCase();
             let list = rows.filter(r => (!F.kinds.size || F.kinds.has(r._kind)) && (!q || String(r.transaction_desc || '').toLowerCase().includes(q)));
-            if (F.sort === 'old') list = list.slice().reverse();
-            else if (F.sort === 'danger') list = list.slice().sort((a, b) => b._lvl - a._lvl || new Date(b.time) - new Date(a.time));
+            // серии: одна причина, между соседними срабатываниями не больше 5 минут (rows — от новых к старым)
+            const GAP = 5 * 60e3,
+                open = new Map();
+            let ser = [];
+            list.forEach(r => {
+                const t = new Date(r.time).getTime() || 0;
+                const s = F.ser && open.get(r._kind);
+                if (s && s.t0 - t <= GAP) {
+                    s.rows.push(r);
+                    s.t0 = t;
+                } else {
+                    const ns = { rows: [r], t1: t, t0: t, lvl: r._lvl };
+                    open.set(r._kind, ns);
+                    ser.push(ns);
+                }
+            });
+            if (F.sort === 'old') ser = ser.slice().sort((a, b) => a.t0 - b.t0);
+            else if (F.sort === 'danger') ser = ser.slice().sort((a, b) => b.lvl - a.lvl || b.t1 - a.t1);
             box.querySelectorAll('[data-l="bars"] [data-k]').forEach(b => b.classList.toggle('on', F.kinds.has(b.dataset.k)));
             box.querySelectorAll('.vdl-dd-it').forEach(it => (it.querySelector('input').checked = F.kinds.has(it.dataset.k)));
             $('[data-l="kl"]').textContent = !F.kinds.size ? 'Все причины' : F.kinds.size === 1 ? [...F.kinds][0] : `Причин: ${F.kinds.size}`;
-            const any = F.kinds.size || q || F.sort !== 'danger';
+            const any = F.kinds.size || q || F.sort !== 'danger' || !F.ser;
             $('[data-a="reset"]').hidden = !any;
             $('[data-l="cnt"]').textContent = any ? `Показано ${list.length} из ${rows.length}` : '';
-            $('[data-l="list"]').innerHTML = list.length
-                ? list
-                      .slice(0, 150)
-                      .map(r => `<div class="vdl-row${r._lvl === 3 ? ' ac-aim' : r._lvl === 2 ? ' ac-move' : ''}"><div class="main"><div class="ttl">${lvlTag(r._lvl)}<span class="sub" style="margin:0">${fmtDate(r.time)}</span>${r.player_ip ? `<span class="vdl-tag">${U.esc(r.player_ip)}</span>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
-                      .join('') + (list.length > 150 ? `<div class="sub" style="padding:8px 2px">Показаны 150 из ${list.length}</div>` : '')
+            const one = (s, i) => {
+                const r = s.rows[0],
+                    n = s.rows.length;
+                const span = n > 1 ? kTag({ lvl: Math.max(1, s.lvl), name: `×${n} за ${s.t1 - s.t0 < 60e3 ? '<1 мин' : durHM(s.t1 - s.t0)}` }) : '';
+                const when = n > 1 ? `${fmtDate(s.rows[n - 1].time)} — ${fmtDate(r.time).split(' ').pop()}` : fmtDate(r.time);
+                const ips = [...new Set(s.rows.map(x => x.player_ip).filter(Boolean))];
+                return `<div class="vdl-row${acCls(s.lvl)}"><div class="main"><div class="ttl">${kTag(r._ak)}${span}<span class="sub" style="margin:0">${when}</span>${ips.slice(0, 2).map(ip => `<span class="vdl-tag">${U.esc(ip)}</span>`).join('')}</div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div>${
+                    n > 1 ? `<button class="vdl-more-btn" data-sx="${i}">все ${n} — показать</button><div class="vdl-ser" hidden></div>` : ''
+                }</div></div>`;
+            };
+            const shown = ser.slice(0, 150);
+            $('[data-l="list"]').innerHTML = ser.length
+                ? shown.map(one).join('') + (ser.length > 150 ? `<div class="sub" style="padding:8px 2px">Показаны 150 строк из ${ser.length}</div>` : '')
                 : '<div class="vdl-row"><div class="main sub">Под фильтр ничего не подходит</div></div>';
+            $('[data-l="list"]').querySelectorAll('[data-sx]').forEach(
+                b =>
+                    (b.onclick = () => {
+                        const s = shown[+b.dataset.sx],
+                            box2 = b.nextElementSibling;
+                        box2.hidden = !box2.hidden;
+                        if (!box2.hidden && !box2.childElementCount)
+                            box2.innerHTML =
+                                s.rows
+                                    .slice(0, 100)
+                                    .map(x => `<div><span class="sub" style="margin:0">${fmtDate(x.time)}</span> ${U.esc(moneyText(x.transaction_desc))}</div>`)
+                                    .join('') + (s.rows.length > 100 ? `<div class="sub">… ещё ${s.rows.length - 100}</div>` : '');
+                        b.textContent = box2.hidden ? `все ${s.rows.length} — показать` : 'скрыть';
+                    })
+            );
         };
         const toggle = k => {
             F.kinds.has(k) ? F.kinds.delete(k) : F.kinds.add(k);
@@ -1820,10 +2077,14 @@ const Panel = {
         const so = $('[data-a="sort"]');
         so.value = F.sort;
         so.onchange = () => ((F.sort = so.value), draw());
+        const sr = $('[data-a="ser"]');
+        sr.checked = F.ser;
+        sr.onchange = () => ((F.ser = sr.checked), draw());
         $('[data-a="reset"]').onclick = () => {
-            Object.assign(F, { kinds: new Set(), q: '', sort: 'danger' });
+            Object.assign(F, { kinds: new Set(), q: '', sort: 'danger', ser: true });
             qi.value = '';
             so.value = 'danger';
+            sr.checked = true;
             draw();
         };
         draw();
@@ -1848,7 +2109,9 @@ const Panel = {
             return `${others.length ? `<div class="sub">с ${others.map(n => U.esc(n)).join(', ')}</div>` : ''}${lines}${rows.length > 8 ? `<div class="sub">… ещё ${rows.length - 8}</div>` : ''}`;
         };
         const row = g => `<div class="vdl-row${g.gave ? ' tr-give' : ''}" data-tr="${g.id}"><div class="main"><div class="ttl">Трейд #${g.id}${g.gave ? '<span class="vdl-tag" style="--c:#f5a524">отдал</span>' : ''}<span class="vdl-tag">${fmtDate(g.last)}</span></div><div data-l="tb">${body(g, g.full || g.rows)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`;
-        box.innerHTML = list.length ? list.map(row).join('') : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>';
+        box.innerHTML =
+            (list.length ? list.map(row).join('') : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>') +
+            (list.capped ? `<div class="sub" style="padding:8px 2px">${list.length} ${plural(list.length, 'трейд', 'трейда', 'трейдов')} — ${Api.order === 'time' ? 'первые' : 'последние'} за период, есть ещё${this.moreBtn()}</div>` : '');
         const bind = () => box.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
         bind();
         // полные записи (и вторая сторона) — для первых 15 трейдов, по одному запросу
@@ -2010,6 +2273,7 @@ const Panel = {
             if (r.money) L.push(`Деньги: пришло ${fmtMoney(r.money.inc)}, ушло ${fmtMoney(r.money.exp)}${Number.isFinite(r.money.b0) ? `, баланс ${fmtNum(r.money.b0)} → ${fmtNum(r.money.b1)}` : ''}${r.money.capped ? ` (по ${r.money.n} ${Api.order === 'time' ? 'первым' : 'последним'} записям)` : ''}`);
             if (r.cats && r.cats.length) L.push('Категории: ' + r.cats.join('; '));
             if (r.trades != null) L.push(`Трейдов: ${r.trades}`);
+            if (r.sus) L.push(`Подозрительных сообщений: ${r.sus}`);
             if (r.ac != null) L.push(`Античит: ${r.ac ? `${r.ac} ${plural(r.ac, 'срабатывание', 'срабатывания', 'срабатываний')}` : 'не срабатывал'}`);
             r.ips.slice(0, 15).forEach(g =>
                 L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}${g.geo ? ` · ${[g.geo.country, g.geo.city, g.geo.isp].filter(Boolean).join(', ')}${g.geo.host ? ' (хостинг/VPN?)' : ''}` : ''}`)
@@ -2284,6 +2548,7 @@ const AdminView = {
             const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
             const own = [];
             let capped = false;
+            const more = [];
             // каждая запись сайта — одно действие, одинаковые не склеиваем (сайт показывает их все)
             const addRows = (rows, cat) =>
                 rows.forEach(r => {
@@ -2298,10 +2563,11 @@ const AdminView = {
                 const r = await Api.all({ player_name__exact: nick, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}: страница ${p}, записей ${n}…`, gen), null, alive);
                 if (!alive()) return;
                 capped = capped || r.capped;
+                if (r.capped) more.push({ cat, params: { player_name__exact: nick, category_id__exact: cat.id, ...range }, next: r.next });
                 addRows(r, cat);
             }
             this.prog('', gen);
-            this.render(out, { nick, a, b, all: own, own, cats, capped, tab: (this.last && this.last.tab) || 'cat' });
+            this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -2369,7 +2635,7 @@ const AdminView = {
             <div class="k"><small>В среднем в день</small><b>${days.length ? String(+(own.length / days.length).toFixed(1)) : 0}</b></div>
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ' · записей очень много — посчитаны не все, возьми период короче' : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}</div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}</div>
  ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
@@ -2438,6 +2704,34 @@ const AdminView = {
         );
         const c2 = out.querySelector('[data-a="cfg2"]');
         if (c2) c2.onclick = () => this.settings();
+        // догрузка категорий, упёршихся в предел страниц: продолжаем с того же места
+        const am = out.querySelector('[data-a="amore"]');
+        if (am && d.more && d.more.length)
+            am.onclick = async () => {
+                if (this.busy && this._busyGen === this._gen) return toast('Подожди, подсчёт ещё идёт', 'info');
+                this.busy = true;
+                const gen = (this._busyGen = this._gen),
+                    alive = () => gen === this._gen;
+                am.disabled = true;
+                try {
+                    const left = [];
+                    for (const m of d.more) {
+                        const r = await Api.all(m.params, 60, (p, n) => this.prog(`${m.cat.name}: ещё страница ${p}, записей ${n}…`, gen), null, alive, m.next);
+                        if (!alive()) return;
+                        d.addRows(r, m.cat);
+                        if (r.capped) left.push(Object.assign(m, { next: r.next }));
+                    }
+                    this.prog('', gen);
+                    this.render(out, Object.assign({}, d, { capped: left.length > 0, more: left, tab: (this.last && this.last.tab) || d.tab }));
+                } catch (e) {
+                    if (!alive()) return;
+                    this.prog('', gen);
+                    am.disabled = false;
+                    toast('Не загрузилось: ' + e.message, 'err');
+                } finally {
+                    if (this._busyGen === gen) this.busy = false;
+                }
+            };
         out.querySelector('[data-a="copy"]').onclick = () => {
             const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
             cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
