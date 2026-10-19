@@ -398,8 +398,11 @@ const SUS = [
 // сообщения: чаты, СМС, репорты, объявления; категория неизвестна — тоже проверяем
 const MSG_CAT = /чат|chat|смс|sms|сообщ|репорт|report|вопрос|объявл|реклам|рация|радио|(^|[^а-яё])(лс|рп|нрп)(?![а-яё])|\b(pm|rp|nrp)\b|^Категория #/i;
 const escRe = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// состав администрации по умолчанию (сервер Хабаровск); свой список — кнопкой «Админы» в «Активности»
+const ADM_DEF = 'Shayne_Rarehood Ackerman_Revenge Tema_Loomis Absolut_Gusev Zafar_Xanov Igor_Akentev Jerry_Stalin Rusya_Rarehood Nslam_Kanatkalu Dima_Melkin Ivan_Salamov Marsel_Winston Muha_Saakadze Serega_Peper Magomed_Buldozer Artem_Zaka Dariya_Saakadze Danil_Matrusevin Timofey_Lee Azam_Richman Don_Moretti Yarik_Sergienko Mina_Monarhia Maxim_Nabokov Vanya_Chernicov Grimm_Abdulla Aleksandr_Kisa Graf_Crimson Amir_Rossl Vasea_Schvashco Kabyl_Sigmetov'.split(' ');
+const admList = () => Store.get('admList', ADM_DEF);
 function admRe(self) {
-    const list = Store.get('admList', []).filter(n => n && !sameNick(n, self));
+    const list = admList().filter(n => n && !sameNick(n, self));
     if (!list.length) return null;
     // Ник_Фамилия, «Ник Фамилия» и «Ник.Фамилия»
     return new RegExp(`(?<![A-Za-z0-9])(${list.map(n => escRe(n).replace(/_/g, '[_ .]')).join('|')})(?![A-Za-z0-9])`, 'gi');
@@ -562,8 +565,12 @@ const LOGS_UI_CSS = `
 .vdl-row .ttl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 700; color: var(--tx); }
 .vdl-row .sub { font-size: 11.5px; color: var(--tx-3); margin-top: 3px; }
 .vdl-mono { font-family: ui-monospace, Consolas, monospace; }
-.vdl-sus { padding: 4px 2px 12px; margin-bottom: 10px; border-bottom: 1px solid var(--line, rgba(255,255,255,.08)); }
-.vdl-sus mark { background: color-mix(in srgb, var(--c) 28%, transparent); color: inherit; border-radius: 4px; padding: 0 2px; }
+.vdl-sus { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.vdl-sus-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.vdl-sus-h h4 { margin: 0; font-size: 13px; }
+.vdl-sus-r { padding: 8px 10px; margin: 6px 0; border-radius: 8px; background: rgba(255,255,255,.025); box-shadow: inset 2px 0 0 var(--c); }
+.vdl-sus-r .m { display: flex; gap: 10px; font-size: 11px; color: var(--tx-3); margin-bottom: 3px; }
+.vdl-sus .vdl-desc mark { background: none; color: color-mix(in srgb, var(--c) 80%, #fff); font-weight: 650; border-bottom: 1px solid color-mix(in srgb, var(--c) 60%, transparent); padding: 0; }
 .vdl-sus .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .vdl-sus .chips .vdl-tag { cursor: pointer; }
 .vdl-sus .chips .vdl-tag.off { opacity: .35; }
@@ -636,6 +643,8 @@ const LOGS_UI_CSS = `
 .vdl-ren { margin-left: 4px; padding: 0 5px; border-radius: 6px; font-size: 11px; color: var(--tx-2); background: rgba(255,255,255,.07); cursor: pointer; }
 .vdl-ren:hover { background: var(--acc); color: #fff; }
 .vdl-catex { display: flex; align-items: center; gap: 8px; margin: -2px 2px 8px; padding-left: 2px; font-size: 11.5px; color: var(--tx-3); }
+.vdl-bar .nm.unk { cursor: pointer; color: var(--tx-2); border-bottom: 1px dashed rgba(255,255,255,.18); }
+.vdl-bar .nm.unk:hover { color: var(--tx); }
 .vdl-catex .ex { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vdl-catex .btn { height: 26px; padding: 0 9px; font-size: 11.5px; }
 .vdl-date { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-3); }
@@ -1752,7 +1761,7 @@ const Panel = {
     susScan(d) {
         const self = this.report && this.report.nick;
         const adm = admRe(self);
-        const key = d.rows.length + '|' + Store.get('admList', []).join(',');
+        const key = d.rows.length + '|' + admList().join(',');
         if (d._sus && d._sus.key === key) return d._sus;
         let msgs = 0;
         const list = [];
@@ -1766,7 +1775,7 @@ const Panel = {
             if (hits.length) list.push({ r, text, hits, kinds: [...new Set(hits.map(h => h.k))] });
         });
         list.sort((a, b) => new Date(b.r.time) - new Date(a.r.time));
-        return (d._sus = { key, msgs, list, admN: Store.get('admList', []).length, off: (d._sus && d._sus.off) || new Set() });
+        return (d._sus = { key, msgs, list, admN: admList().length, off: (d._sus && d._sus.off) || new Set() });
     },
     susHtml(d) {
         const S = this.susScan(d);
@@ -1774,13 +1783,15 @@ const Panel = {
         const kinds = SUS.filter(x => cnt(x.k));
         const shown = S.list.filter(x => x.kinds.some(k => !S.off.has(k)));
         this.report.sus = S.list.length;
+        // цвет строки — по самому серьёзному найденному (порядок в SUS)
+        const top = x => SUS.find(y => x.kinds.includes(y.k));
         return `<div class="vdl-sus">
-          <div class="ttl" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b>Подозрительное в сообщениях</b><span class="sub" style="margin:0">${S.list.length ? `${S.list.length} из ${S.msgs}` : `в ${S.msgs} ${plural(S.msgs, 'сообщении', 'сообщениях', 'сообщениях')} ничего не нашлось`}</span><span style="flex:1"></span><button class="btn" data-a="adml" style="height:26px">${icon('shield', 12)}Админы: ${S.admN || 'список пуст'}</button></div>
-          <div data-l="admed" hidden><div class="sub" style="padding:6px 0 4px">Ники администрации — по одному в строке (или через запятую). Ищется «Ник_Фамилия», «Ник Фамилия» и «Ник.Фамилия».</div><textarea class="inp" data-a="admt" placeholder="Ivan_Petrov&#10;Petr_Sidorov"></textarea><div class="vdl-btns" style="margin-top:6px"><button class="btn pri" data-a="adms">Сохранить</button></div></div>
-          ${kinds.length ? `<div class="chips">${kinds.map(x => `<span class="vdl-tag${S.off.has(x.k) ? ' off' : ''}" style="--c:${x.c}" data-sk="${x.k}" title="Показать / скрыть">${x.name}: ${cnt(x.k)}</span>`).join('')}</div>` : ''}
+          <div class="vdl-sus-h"><h4>Подозрительное в сообщениях</h4><span class="sub">${S.list.length ? `${S.list.length} из ${S.msgs}` : `проверено ${S.msgs}, ничего не нашлось`}</span><span style="flex:1"></span><button class="vdl-more-btn" data-a="adml">админы: ${S.admN}</button></div>
+          <div data-l="admed" hidden><div class="sub" style="padding:6px 0 4px">Ники администрации — по одному в строке. Ищутся «Ник_Фамилия», «Ник Фамилия» и «Ник.Фамилия».</div><textarea class="inp" data-a="admt"></textarea><div class="vdl-btns" style="margin-top:6px"><button class="btn" data-a="admr">По умолчанию</button><button class="btn pri" data-a="adms">Сохранить</button></div></div>
+          ${kinds.length > 1 ? `<div class="chips">${kinds.map(x => `<span class="vdl-tag${S.off.has(x.k) ? ' off' : ''}" style="--c:${x.c}" data-sk="${x.k}" title="Показать / скрыть">${x.name} · ${cnt(x.k)}</span>`).join('')}</div>` : ''}
           ${shown
               .slice(0, 100)
-              .map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="sub" style="margin:0">${fmtDate(x.r.time)}</span><span class="vdl-tag" style="--c:#8b8f9a">${U.esc(catName(x.r))}</span>${x.kinds.map(k => SUS.find(y => y.k === k)).map(y => `<span class="vdl-tag" style="--c:${y.c}">${y.name}</span>`).join('')}</div><div class="sub vdl-desc">${susMark(x.text, x.hits)}</div></div></div>`)
+              .map(x => `<div class="vdl-sus-r" style="--c:${top(x).c}"><div class="m"><span>${fmtDate(x.r.time)}</span><span>${U.esc(catName(x.r))}</span>${kinds.length === 1 ? '' : `<span style="color:${top(x).c}">${top(x).name}</span>`}</div><div class="vdl-desc">${susMark(x.text, x.hits)}</div></div>`)
               .join('')}${shown.length > 100 ? `<div class="sub" style="padding:6px 2px">Показаны 100 из ${shown.length}</div>` : ''}
         </div>`;
     },
@@ -1793,9 +1804,14 @@ const Panel = {
             ed.hidden = !ed.hidden;
             if (!ed.hidden) {
                 const ta = ed.querySelector('textarea');
-                ta.value = Store.get('admList', []).join('\n');
+                ta.value = admList().join('\n');
                 ta.focus();
             }
+        };
+        box.querySelector('[data-a="admr"]').onclick = () => {
+            Store.set('admList', ADM_DEF);
+            toast('Вернул список по умолчанию');
+            redraw();
         };
         box.querySelector('[data-a="adms"]').onclick = () => {
             const list = [...new Set(ed.querySelector('textarea').value.split(/[\s,;]+/).map(x => x.trim()).filter(x => /^[A-Za-z0-9]+_[A-Za-z0-9]+$/.test(x)))];
@@ -1808,40 +1824,37 @@ const Panel = {
         if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
         const cats = group(d.rows, r => String(r.category_id ?? 'none')).slice(0, 14);
         const cmax = cats.length ? cats[0].n : 1;
-        const nm = id => catLabel(id, d.rows).name;
-        this.report.cats = cats.slice(0, 8).map(g => `${nm(g.k)} — ${g.n}`);
-        const unknown = cats.filter(g => !catLabel(g.k, d.rows).known);
+        const lab = id => catLabel(id, d.rows);
+        this.report.cats = cats.slice(0, 8).map(g => `${lab(g.k).name} — ${g.n}`);
+        // неизвестную категорию можно подписать: клик по названию (пример записи — в подсказке)
         box.innerHTML =
-            this.susHtml(d) +
             cats
                 .map(g => {
-                    const name = nm(g.k);
-                    const unk = unknown.includes(g);
-                    const ex = unk ? d.rows.find(r => String(r.category_id) === g.k) : null;
-                    return `<div class="vdl-bar"><span class="nm" title="${U.esc(name)}">${U.esc(name)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>${
-                        unk
-                            ? `<div class="vdl-catex" data-id="${U.esc(g.k)}"><span class="ex">пример: ${U.esc(moneyText(String((ex && ex.transaction_desc) || '—').slice(0, 120)))}</span><button class="btn" data-a="name">✎ подписать</button></div>`
-                            : ''
-                    }`;
+                    const L = lab(g.k);
+                    const ex = L.known ? null : d.rows.find(r => String(r.category_id) === g.k);
+                    const tip = L.known ? L.name : `${L.name}\nпример: ${moneyText(String((ex && ex.transaction_desc) || '—').slice(0, 120))}\nнажми, чтобы подписать`;
+                    return `<div class="vdl-bar"><span class="nm${L.known ? '' : ' unk'}" title="${U.esc(tip)}"${L.known ? '' : ` data-ren="${U.esc(g.k)}"`}>${U.esc(L.name)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / cmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`;
                 })
                 .join('') +
-            this.capNote(d);
+            this.capNote(d) +
+            this.susHtml(d);
         this.susWire(box, d);
-        box.querySelectorAll('.vdl-catex [data-a="name"]').forEach(
-            bt =>
-                (bt.onclick = () => {
-                    const row = bt.closest('.vdl-catex');
-                    const id = row.dataset.id;
-                    row.innerHTML = `<input class="inp" data-ren-inp placeholder="Название для категории #${U.esc(id)}" maxlength="40" style="flex:1;height:30px"><button class="btn" data-a="ok">Сохранить</button>`;
+        box.querySelectorAll('[data-ren]').forEach(
+            el =>
+                (el.onclick = () => {
+                    const id = el.dataset.ren;
+                    const bar = el.closest('.vdl-bar');
+                    bar.outerHTML = `<div class="vdl-catex" data-id="${U.esc(id)}"><input class="inp" placeholder="Название для категории #${U.esc(id)}" maxlength="40" style="flex:1;height:30px"><button class="btn" data-a="ok">Сохранить</button></div>`;
+                    const row = box.querySelector(`.vdl-catex[data-id="${CSS.escape(id)}"]`);
                     const inp = row.querySelector('input');
                     const ok = () => {
                         const v = inp.value.trim();
-                        if (!v) return inp.focus();
+                        if (!v) return this.renderCats(box, d);
                         CatLearn.name(id, v);
                         this.renderCats(box, d);
                     };
                     row.querySelector('[data-a="ok"]').onclick = ok;
-                    inp.addEventListener('keydown', e => e.key === 'Enter' && ok());
+                    inp.addEventListener('keydown', e => (e.key === 'Enter' ? ok() : e.key === 'Escape' && this.renderCats(box, d)));
                     inp.focus();
                 })
         );
