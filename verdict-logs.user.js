@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.31
+// @version      1.2.32
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.31
+// @version      1.2.32
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.31';
+const VERSION = '1.2.32';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -398,6 +398,12 @@ function catLabel(id, rows) {
 
 // категория античита на сайте логов
 const AC_RE = /анти\s*-?\s*чит|anti\s*-?\s*cheat/i;
+// насколько опасно срабатывание античита: 3 — аим, 2 — быстрое перемещение, 1 — остальное
+const AC_AIM = /\baim|аим|silent|сайлент|авто\s*-?\s*(прицел|наводк)|wall\s*hack|\bwh\b|вх\b|trigger\s*bot|триггер/i;
+const AC_MOVE = /speed|скорост|телепорт|teleport|tp\b|fly|полёт|полет|air\s*break|аирбрейк|быстр\w*\s+(перемещ|движ|бег)|перемещ|surf|clickwarp|warp|координат/i;
+const acLevel = t => (AC_AIM.test(t) ? 3 : AC_MOVE.test(t) ? 2 : 1);
+// передача другому игроку: в тексте «передал/перевёл/отдал/добавил в трейд …»
+const GIVE_RE = /передал|перев[её]л|отдал|отправил|добавил|положил|выставил|подарил|выдал/i;
 // безымянная категория админ-действий: по тому, что в ней делают («Бан, мут · #36»), иначе по частым словам
 function catTitle(id, rows) {
     const n = catName({ category_id: id });
@@ -481,6 +487,14 @@ const LOGS_UI_CSS = `
 .vdl-sum .k b { font-size: 20px; color: var(--acc); }
 .vdl-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 9px 4px; border-bottom: 1px solid var(--line); }
 .vdl-row:last-child { border-bottom: 0; }
+.vdl-row.ac-aim { background: color-mix(in srgb, #e5484d 13%, transparent); box-shadow: inset 3px 0 0 #e5484d; border-radius: 8px; }
+.vdl-row.ac-move { background: color-mix(in srgb, #f5a524 8%, transparent); box-shadow: inset 3px 0 0 #f5a524; border-radius: 8px; }
+.vdl-bar.ac-aim .nm { color: #ff6b70; font-weight: 700; }
+.vdl-bar.ac-move .nm { color: #f5b647; }
+.vdl-row.tr-give, .vdl-row.m-give { box-shadow: inset 2px 0 0 color-mix(in srgb, #f5a524 70%, transparent); background: color-mix(in srgb, #f5a524 5%, transparent); border-radius: 8px; }
+.vdl-tline { font-size: 12px; color: var(--tx-2, #c9ccd4); margin-top: 3px; line-height: 1.35; }
+.vdl-tline b { color: var(--tx); font-weight: 650; }
+.vdl-tline.give { color: #f5b647; }
 .vdl-row .main { min-width: 0; }
 .vdl-row .ttl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 700; color: var(--tx); }
 .vdl-row .sub { font-size: 11.5px; color: var(--tx-3); margin-top: 3px; }
@@ -1533,6 +1547,10 @@ const Panel = {
             b0.start = Number.isFinite(a0) ? b0.b - a0 : b0.b;
         }
         const big = ops.slice().sort((a, b) => Math.abs(b.a) - Math.abs(a.a)).slice(0, 10);
+        // отдал деньги другому игроку: расход, где в тексте «передал/перевёл…» и чужой ник
+        const self = new Set(d.rows.map(r => String(r.player_name || '').toLowerCase()).filter(Boolean));
+        const toWhom = r => (String(r.transaction_desc || '').match(NICK_RE) || []).find(n => !self.has(n.toLowerCase()));
+        const gives = ops.filter(x => x.a < 0 && GIVE_RE.test(String(x.r.transaction_desc || '')) && toWhom(x.r)).sort((a, b) => b.t - a.t).slice(0, 15);
         // доходы и расходы по категориям
         const byCat = sign => {
             const m = new Map();
@@ -1567,6 +1585,7 @@ const Panel = {
           ${ops.length ? '' : '<div class="sub" style="padding:0 2px 8px">Денежных операций за период нет (или сайт не отдаёт сумму)</div>'}
           ${cIn.length ? `<div class="sub" style="padding:8px 2px 2px">Откуда приходили деньги</div>${bars(cIn, 'vdl-pos')}` : ''}
           ${cOut.length ? `<div class="sub" style="padding:8px 2px 2px">На что уходили</div>${bars(cOut, 'vdl-neg')}` : ''}
+          ${gives.length ? `<div class="sub" style="padding:10px 2px 2px">Передал другим игрокам</div>${gives.map(x => `<div class="vdl-row m-give"><div class="main"><div class="ttl"><span class="vdl-neg">${fmtMoney(x.a)}</span><span class="vdl-tag" style="--c:#f5a524">→ ${U.esc(toWhom(x.r))}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(moneyText(String(x.r.transaction_desc || '').slice(0, 160)))}</div></div></div>`).join('')}` : ''}
           ${big.length ? `<div class="sub" style="padding:10px 2px 2px">Крупные операции</div>${big.map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="${cls(x.a)}">${fmtMoney(x.a)}</span><span class="vdl-tag">${U.esc(catLabel(x.r.category_id, d.rows).name)}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(moneyText(String(x.r.transaction_desc || '').slice(0, 160)))}</div></div></div>`).join('')}` : ''}
           ${this.capNote(d)}`;
         this.renameButtons(box, () => this.renderMoney(box, d), d.rows);
@@ -1645,12 +1664,28 @@ const Panel = {
         tr.forEach(r => {
             const m = String(r.transaction_desc || '').match(/TradeID:\s*(\d+)/);
             if (!m) return;
-            const g = byT.get(m[1]) || { id: m[1], n: 0, last: 0 };
+            const g = byT.get(m[1]) || { id: m[1], n: 0, last: 0, rows: [] };
             g.n++;
+            g.rows.push(r);
             g.last = Math.max(g.last, new Date(r.time).getTime() || 0);
             byT.set(m[1], g);
         });
-        return [...byT.values()].sort((a, b) => b.last - a.last);
+        const list = [...byT.values()].sort((a, b) => b.last - a.last);
+        // чей отчёт: ник из запроса, иначе — чаще всего встречающийся в его записях трейдов
+        list.nick = sel.player_name__exact || (group(tr, r => r.player_name).sort((a, b) => b.n - a.n)[0] || {}).k || '';
+        return list;
+    },
+    // все записи одного трейда (обе стороны) — чтобы было видно, что в нём было, не открывая
+    async tradeRows(id) {
+        this._tradeCache = this._tradeCache || new Map();
+        if (this._tradeCache.has(id)) return this._tradeCache.get(id);
+        const p = Api.page({ transaction_desc__ilike: `%TradeID: ${id}]%`, time__gte: new Date(Date.now() - 180 * 864e5).toISOString() }, 0).then(r => {
+            const exact = new RegExp(`TradeID:\\s*${id}(?!\\d)`);
+            return r.filter(x => exact.test(String(x.transaction_desc || ''))).sort((a, b) => new Date(a.time) - new Date(b.time));
+        });
+        this._tradeCache.set(id, p);
+        p.catch(() => this._tradeCache.delete(id));
+        return p;
     },
     // античит: категория с «античит» в названии, иначе — записи со словом «античит» / anticheat
     async loadAc(sel, gen, base) {
@@ -1696,19 +1731,28 @@ const Panel = {
                 .trim()
                 .replace(/^(анти\s*-?\s*чит|anti\s*-?\s*cheat)\s*/i, '')
                 .slice(0, 70) || 'без описания';
-        rows.forEach(r => (r._kind = r._kind || kindOf(r)));
-        const kinds = group(rows, r => r._kind);
+        rows.forEach(r => {
+            r._kind = r._kind || kindOf(r);
+            r._lvl = r._lvl || acLevel(String(r.transaction_desc || ''));
+        });
+        // сверху самое опасное: аим, затем быстрое перемещение, затем остальное (внутри — по числу срабатываний)
+        const kinds = group(rows, r => r._kind)
+            .map(g => Object.assign(g, { lvl: Math.max(acLevel(g.k), ...rows.filter(r => r._kind === g.k).map(r => r._lvl)) }))
+            .sort((a, b) => b.lvl - a.lvl || b.n - a.n);
+        const nAim = rows.filter(r => r._lvl === 3).length,
+            nMove = rows.filter(r => r._lvl === 2).length;
+        const lvlTag = l => (l === 3 ? '<span class="vdl-tag" style="--c:#e5484d">аим</span>' : l === 2 ? '<span class="vdl-tag" style="--c:#f5a524">перемещение</span>' : '');
         const kmax = Math.max(1, ...kinds.map(g => g.n));
         const dayOf = r => AdminView.mskDay(new Date(r.time).getTime());
         const days = new Set(rows.map(dayOf)).size;
         // фильтр: выбранные типы (пусто — все), IP, период, текст, порядок
-        const F = (this._acF = this._acF && this._acF.of === rows ? this._acF : { of: rows, kinds: new Set(), q: '', sort: 'new' });
+        const F = (this._acF = this._acF && this._acF.of === rows ? this._acF : { of: rows, kinds: new Set(), q: '', sort: 'danger' });
         box.innerHTML = `
-          <div class="vdl-row"><div class="main"><div class="ttl">${rows.length} ${plural(rows.length, 'срабатывание', 'срабатывания', 'срабатываний')}<span class="vdl-tag" style="--c:#e5484d">${days} ${plural(days, 'день', 'дня', 'дней')}</span></div><div class="sub">последнее — ${fmtDate(rows[0].time)}${d.capped ? (Api.order === 'time' ? ' · показаны первые за период' : ' · показаны последние') : ''}</div></div></div>
+          <div class="vdl-row"><div class="main"><div class="ttl">${rows.length} ${plural(rows.length, 'срабатывание', 'срабатывания', 'срабатываний')}<span class="vdl-tag" style="--c:#8b8f9a">${days} ${plural(days, 'день', 'дня', 'дней')}</span>${nAim ? `<span class="vdl-tag" style="--c:#e5484d">аим: ${nAim}</span>` : ''}${nMove ? `<span class="vdl-tag" style="--c:#f5a524">перемещение: ${nMove}</span>` : ''}</div><div class="sub">последнее — ${fmtDate(rows[0].time)}${d.capped ? (Api.order === 'time' ? ' · показаны первые за период' : ' · показаны последние') : ''}</div></div></div>
           <div class="sub" style="padding:10px 2px 4px">За что</div>
           <div data-l="bars">${kinds
               .slice(0, 8)
-              .map(g => `<div class="vdl-bar pick" data-k="${U.esc(g.k)}" title="Показать только это"><span class="nm">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
+              .map(g => `<div class="vdl-bar pick${g.lvl === 3 ? ' ac-aim' : g.lvl === 2 ? ' ac-move' : ''}" data-k="${U.esc(g.k)}" title="Показать только это"><span class="nm">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
               .join('')}</div>
           <div class="vdl-ftools" style="margin-top:12px">
             <div class="vdl-dd" data-dd="kind"><button class="btn" data-a="dd"><span data-l="kl">Все причины</span>${icon('down', 13)}</button>
@@ -1716,7 +1760,7 @@ const Panel = {
                   .map(g => `<label class="vdl-dd-it" data-k="${U.esc(g.k)}" title="${U.esc(g.k)}"><input type="checkbox"><span>${U.esc(g.k)}</span><b>${g.n}</b></label>`)
                   .join('')}</div><div class="vdl-dd-foot"><button class="btn" data-a="kall">Все</button><button class="btn" data-a="kclose">Готово</button></div></div></div>
             <input class="inp" data-a="q" placeholder="Найти в тексте…">
-            <select class="inp" data-a="sort"><option value="new">Сначала новые</option><option value="old">Сначала старые</option></select>
+            <select class="inp" data-a="sort"><option value="danger">Сначала опасные</option><option value="new">Сначала новые</option><option value="old">Сначала старые</option></select>
             <button class="btn" data-a="reset">Сбросить</button></div>
           <div class="sub" data-l="cnt" style="padding:2px 2px 6px"></div>
           <div data-l="list"></div>`;
@@ -1725,16 +1769,17 @@ const Panel = {
             const q = F.q.trim().toLowerCase();
             let list = rows.filter(r => (!F.kinds.size || F.kinds.has(r._kind)) && (!q || String(r.transaction_desc || '').toLowerCase().includes(q)));
             if (F.sort === 'old') list = list.slice().reverse();
+            else if (F.sort === 'danger') list = list.slice().sort((a, b) => b._lvl - a._lvl || new Date(b.time) - new Date(a.time));
             box.querySelectorAll('[data-l="bars"] [data-k]').forEach(b => b.classList.toggle('on', F.kinds.has(b.dataset.k)));
             box.querySelectorAll('.vdl-dd-it').forEach(it => (it.querySelector('input').checked = F.kinds.has(it.dataset.k)));
             $('[data-l="kl"]').textContent = !F.kinds.size ? 'Все причины' : F.kinds.size === 1 ? [...F.kinds][0] : `Причин: ${F.kinds.size}`;
-            const any = F.kinds.size || q || F.sort !== 'new';
+            const any = F.kinds.size || q || F.sort !== 'danger';
             $('[data-a="reset"]').hidden = !any;
             $('[data-l="cnt"]').textContent = any ? `Показано ${list.length} из ${rows.length}` : '';
             $('[data-l="list"]').innerHTML = list.length
                 ? list
                       .slice(0, 150)
-                      .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${r.player_ip ? `<span class="vdl-tag">${U.esc(r.player_ip)}</span>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
+                      .map(r => `<div class="vdl-row${r._lvl === 3 ? ' ac-aim' : r._lvl === 2 ? ' ac-move' : ''}"><div class="main"><div class="ttl">${lvlTag(r._lvl)}<span class="sub" style="margin:0">${fmtDate(r.time)}</span>${r.player_ip ? `<span class="vdl-tag">${U.esc(r.player_ip)}</span>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
                       .join('') + (list.length > 150 ? `<div class="sub" style="padding:8px 2px">Показаны 150 из ${list.length}</div>` : '')
                 : '<div class="vdl-row"><div class="main sub">Под фильтр ничего не подходит</div></div>';
         };
@@ -1776,21 +1821,56 @@ const Panel = {
         so.value = F.sort;
         so.onchange = () => ((F.sort = so.value), draw());
         $('[data-a="reset"]').onclick = () => {
-            Object.assign(F, { kinds: new Set(), q: '', sort: 'new' });
+            Object.assign(F, { kinds: new Set(), q: '', sort: 'danger' });
             qi.value = '';
-            so.value = 'new';
+            so.value = 'danger';
             draw();
         };
         draw();
     },
     renderTrades(box, list) {
         this.report.trades = list.length;
-        box.innerHTML = list.length
-            ? list
-                  .map(g => `<div class="vdl-row"><div class="main"><div class="ttl">Трейд #${g.id}<span class="vdl-tag">${g.n} зап.</span></div><div class="sub">${fmtDate(g.last)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`)
-                  .join('')
-            : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>';
-        box.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
+        const me = String(list.nick || '').toLowerCase();
+        const clean = r => moneyText(String(r.transaction_desc || '').replace(/^\[TradeID:\s*\d+\]\s*/, ''));
+        // строки трейда: «Ник: что сделал»; свои передачи — подсвечены
+        const body = (g, rows) => {
+            const others = [...new Set(rows.map(r => r.player_name).filter(n => n && n.toLowerCase() !== me))];
+            const gave = rows.some(r => String(r.player_name || '').toLowerCase() === me && GIVE_RE.test(String(r.transaction_desc || '')));
+            g.gave = gave;
+            const lines = rows
+                .slice(0, 8)
+                .map(r => {
+                    const mine = String(r.player_name || '').toLowerCase() === me;
+                    const give = GIVE_RE.test(String(r.transaction_desc || ''));
+                    return `<div class="vdl-tline${mine && give ? ' give' : ''}"><b>${U.esc(r.player_name || '—')}</b> ${U.esc(clean(r))}</div>`;
+                })
+                .join('');
+            return `${others.length ? `<div class="sub">с ${others.map(n => U.esc(n)).join(', ')}</div>` : ''}${lines}${rows.length > 8 ? `<div class="sub">… ещё ${rows.length - 8}</div>` : ''}`;
+        };
+        const row = g => `<div class="vdl-row${g.gave ? ' tr-give' : ''}" data-tr="${g.id}"><div class="main"><div class="ttl">Трейд #${g.id}${g.gave ? '<span class="vdl-tag" style="--c:#f5a524">отдал</span>' : ''}<span class="vdl-tag">${fmtDate(g.last)}</span></div><div data-l="tb">${body(g, g.full || g.rows)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`;
+        box.innerHTML = list.length ? list.map(row).join('') : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>';
+        const bind = () => box.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
+        bind();
+        // полные записи (и вторая сторона) — для первых 15 трейдов, по одному запросу
+        const gen = this._gen;
+        (async () => {
+            for (const g of list.slice(0, 15)) {
+                if (g.full || gen !== this._gen || !box.isConnected) continue;
+                try {
+                    const rows = await this.tradeRows(g.id);
+                    if (gen !== this._gen || !box.isConnected) return;
+                    if (!rows.length) continue;
+                    g.full = rows;
+                    const el = box.querySelector(`[data-tr="${g.id}"]`);
+                    if (el) {
+                        el.outerHTML = row(g);
+                        bind();
+                    }
+                } catch {
+                    return;
+                }
+            }
+        })();
     },
 
     byIp(ip, into, except) {
