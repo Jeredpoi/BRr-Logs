@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.34
+// @version      1.2.35
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.34
+// @version      1.2.35
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.34';
+const VERSION = '1.2.35';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -1769,7 +1769,10 @@ const Panel = {
             if (String(r.category_id) === '38') return;
             const text = String(r.transaction_desc || '');
             // служебные записи («Жалоба от … Тип: закрыта. Причина: администратор закрыл обращение») — не слова игрока
-            const msg = MSG_CAT.test(catName(r)) && !/Тип:\s*[^.]{1,30}\.\s*Причина:/i.test(text);
+            // админ-чаты и прочие админские категории — переписка администрации, не игрока
+            const cn = catName(r);
+            if (/админ|admin/i.test(cn)) return;
+            const msg = MSG_CAT.test(cn) && !/Тип:\s*[^.]{1,30}\.\s*Причина:/i.test(text);
             if (msg) msgs++;
             // админов ищем во всех записях (передачи, трейды), остальное — только в сообщениях
             const hits = susHits(text, adm).filter(h => msg || h.k === 'adm');
