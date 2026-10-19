@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.35
+// @version      1.2.36
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.35
+// @version      1.2.36
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.35';
+const VERSION = '1.2.36';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -390,11 +390,15 @@ function guessCat(id, rows) {
 // подозрительное в сообщениях игрока (вкладка «Активность»); упоминания админов — по списку из Store('admList')
 const SUS = [
     { k: 'adm', name: 'упоминал админа', c: '#e5484d' },
-    { k: 'real', name: 'реал / продажа', c: '#e5484d', re: /за\s+реал|реал[а-яёa-z0-9_]*\s+(деньг|руб)|(прода[а-яёa-z0-9_]*|куплю|покупаю|скупаю|скупка|обмен[а-яёa-z0-9_]*)\s+(вирт|акк|аккаунт)\S*|(вирт|акк|аккаунт|донат)\S*\s[^.!?\n]{0,25}(₽|руб|qiwi|киви|сбер|тиньк|юмани|yoomoney|на\s+карт)|(₽|руб\S*|на\s+карт\S*|qiwi|киви|сбер\S*|тиньк\S*|юмани)\s[^.!?\n]{0,30}(вирт\S*|\d+\s*кк(?![а-яё])|акк\S*|аккаунт\S*)|перевод[а-яёa-z0-9_]*\s+на\s+карт/gi },
+    { k: 'insult', name: 'оскорбления / мат', c: '#e5484d', strict: true, re: /(^|[^а-яё])(ху[йяеёи][а-яё]*|на\s?ху[йя][а-яё]*|по\s?ху[йя][а-яё]*|п[ие]зд[а-яё]*|[её]б[ауеилн][а-яё]*|(за|по|на|от|вы|до|у|про|подъ|отъ|разъ|съ)[её]б(ал|ан|ыв|у|ут|ись|ать|ашь|ёт|ет|нул|нут|ош|ла|ли|ен)[а-яё]*|бл[яэ](дь?|ть|д[а-яё]*)?|бля[а-яё]*|сук[аиуе]|сучк[аиуе]|сучар[а-яё]*|мраз[а-яё]*|урод[а-яё]*|дебил[а-яё]*|долб[ао][её]б[а-яё]*|даун[а-яё]*|чмо[а-яё]*|гандон[а-яё]*|г[оа]ндон[а-яё]*|шлюх[а-яё]*|пид[оа]?р[а-яё]*|педик[а-яё]*|лох[аиуом]?|туп(ой|ая|ые|орыл[а-яё]*)|идиот[а-яё]*|кретин[а-яё]*|ублюд[а-яё]*|выбляд[а-яё]*|дерьм[а-яё]*|говн[а-яё]*|соси|сосать|отсоси[а-яё]*|скотин[а-яё]*|тварь|твари|овощ|ничтожеств[а-яё]*)(?![а-яё])/gi },
+    { k: 'family', name: 'про родных', c: '#e5484d', strict: true, re: /(тво[юяей]|ваш[ауеи])\s+(мат[ьи]|мамк[а-яё]*|мам[ауые]|бат[яюеи]|отц[ауе]|пап[ауые]|сестр[а-яё]*|семь[юяеи]|родн[а-яё]*|родител[а-яё]*)|(мать|мамку|мамаш[а-яё]*)\s+(тво[юяей]|ваш[ау])|(^|[^а-яё])(мамк[а-яё]*|мамаш[а-яё]*)(?![а-яё])/gi },
+    { k: 'threat', name: 'угрозы / деанон', c: '#e5484d', strict: true, re: /(^|[^а-яё])(убью|убьём|урою|зарежу|найду\s+тебя|приеду\s+к\s+тебе|вычислю|вычислим|по\s+айпи|по\s+ip|деанон[а-яё]*|сватн[а-яё]*|свата?|ддос[а-яё]*|ddos|взломаю|снесу\s+акк[а-яё]*|солью\s+(акк|данн|номер|адрес)[а-яё]*)(?![а-яё])/gi },
+    { k: 'real', name: 'реал / продажа', c: '#e5484d', re: /за\s+реал|реал[а-яёa-z0-9_]*\s+(деньг|руб)|(прода[а-яёa-z0-9_]*|куплю|покупаю|скупаю|скупка|обмен[а-яёa-z0-9_]*)\s+(вирт|акк|аккаунт)\S*|(вирт|акк|аккаунт|донат)\S*\s[^.!?\n]{0,25}(₽|руб|qiwi|киви|сбер|тиньк|юмани|yoomoney|на\s+карт)|(₽|руб\S*|на\s+карт\S*|qiwi|киви|сбер\S*|тиньк\S*|юмани)\s[^.!?\n]{0,30}(вирт\S*|\d+\s*кк(?![а-яё])|акк\S*|аккаунт\S*)|перевод[а-яёa-z0-9_]*\s+на\s+карт|(прода[а-яё]*|куплю|покупаю|выда[а-яё]*)\s+админк[а-яё]*|админк[а-яё]*\s+за\s+\S+/gi },
     { k: 'cheat', name: 'читы / баги', c: '#f5a524', re: /(^|[^а-яё])(чит|читы|читер[а-яёa-z0-9_]*|читом|читами|софт[а-яёa-z0-9_]*|клео|взлом[а-яёa-z0-9_]*|дюп[а-яёa-z0-9_]*|собейт|аим|вх)(?![а-яё])|\b(cleo|moonloader|sobeit|dupe|aim|wallhack|wh)\b|баг[а-яёa-z0-9_]*\s+на\s+(деньг|вирт)/gi },
     { k: 'admw', name: 'про администрацию', c: '#f5a524', re: /(знаю|знаком[а-яё]*|друж[а-яё]*|дружит|брат|сестр[а-яё]*|кент|мой|моя|мои|есть)\s+(с\s+)?(админ|модер|куратор|гс|згс)[а-яё]*|(админ|модер|куратор)[а-яё]*\s+(мой|моя|мне\s+(поможет|снимет|разбанит|даст)|знакомый|друг|брат)|разбан[а-яё]*|(сним|снять|сними|снимет|уберут|убрать)[а-яё]*(\s+[а-яё]{1,6})?\s+(бан|варн|мут|джайл|деморган)|блат[а-яё]*|взятк[а-яё]*|подкуп[а-яё]*|откуп[а-яё]*|занес[а-яё]*\s+(админ|модер)[а-яё]*|сли(л|ть|в)[а-яё]*\s+(админ|модер)[а-яё]*/gi },
     { k: 'link', name: 'контакты вне игры', c: '#3e9bff', re: /@[a-z0-9_]{4,}|t\.me\/\S+|vk\.(com|me)\/\S+|discord\S*|дискорд[а-яёa-z0-9_]*|телеграм[а-яёa-z0-9_]*|телег[а-яёa-z0-9_]*|ватсап[а-яёa-z0-9_]*|whatsapp|(^|[^а-яё])(тг|дс|вк)(?![а-яё])|(\+7|8)[\s(-]*9\d{2}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}/gi }
 ];
+const STRICT = new Set(SUS.filter(x => x.strict).map(x => x.k));
 // сообщения: чаты, СМС, репорты, объявления; категория неизвестна — тоже проверяем
 const MSG_CAT = /чат|chat|смс|sms|сообщ|репорт|report|вопрос|объявл|реклам|рация|радио|(^|[^а-яё])(лс|рп|нрп)(?![а-яё])|\b(pm|rp|nrp)\b|^Категория #/i;
 const escRe = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -573,6 +577,7 @@ const LOGS_UI_CSS = `
 .vdl-sus .vdl-desc mark { background: none; color: color-mix(in srgb, var(--c) 80%, #fff); font-weight: 650; border-bottom: 1px solid color-mix(in srgb, var(--c) 60%, transparent); padding: 0; }
 .vdl-sus .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .vdl-sus .chips .vdl-tag { cursor: pointer; }
+.vdl-sus .chips .vdl-talk:hover { filter: brightness(1.25); }
 .vdl-sus .chips .vdl-tag.off { opacity: .35; }
 .vdl-sus textarea { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.5 ui-monospace, monospace; }
 .vdl-tag { font-size: 10.5px; font-weight: 750; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--c, var(--acc)) 18%, transparent); color: color-mix(in srgb, var(--c, var(--acc)) 75%, #fff); border: 1px solid color-mix(in srgb, var(--c, var(--acc)) 35%, transparent); }
@@ -813,7 +818,11 @@ const Api = {
         let off = from,
             prev = 0;
         for (let i = 0; i < maxPages; i++) {
-            if (alive && !alive()) break;
+            // остановили (окно закрыто или «Стоп») — дальше могут быть ещё записи
+            if (alive && !alive()) {
+                if (i > 0 || from) out.capped = true;
+                break;
+            }
             const d = i === 0 && first ? first : await this.page(params, off);
             // за неполной (по запомненному размеру) страницей нашлось ещё — значит, страницы у сайта такого размера
             if (i > 0 && d.length && prev !== this.pageSize()) {
@@ -1487,6 +1496,14 @@ const Panel = {
                 rows.capped = r.capped;
                 rows.next = r.next;
             } else rows = await Api.all(Object.assign({ category_id__exact: 38 }, base), 10, (p, n) => this.prog(`Подключения: страница ${p}, записей ${n}…`), null, this.alive());
+            // «Загрузить всё»: листаем, пока не кончатся (или пока окно не закроют / не начнут другой поиск)
+            while (prev && prev.all && rows.capped && !this.stale()) {
+                const r = await Api.all(Object.assign({ category_id__exact: 38 }, base), 10, (p, n) => this.prog(`Все подключения: загружено ${rows.length + n}…`), null, this.alive(), rows.next);
+                const nx = rows.concat(r);
+                nx.capped = r.capped;
+                nx.next = r.next;
+                rows = nx;
+            }
             const inMore = rows.capped ? { rows, base, days } : null;
             let note = rows.capped ? `Показаны ${Api.order === 'time' ? 'первые' : 'последние'} ${rows.length} записей о входах — за период есть ещё.` : '';
             if (!rows.length) {
@@ -1513,7 +1530,7 @@ const Panel = {
                 <div class="k"><small>Устройств</small><b>${devs.length}</b></div>
                 <div class="k"><small>ID игрока</small><b style="font-size:15px" class="vdl-copyid" data-v="${U.esc(ids.join(', '))}">${U.esc(ids.join(', ') || '—')}</b></div>
               </div>
-              ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}${inMore ? `<button class="btn" data-a="inmore" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить ещё</button>` : ''}</div>` : ''}
+              ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}${inMore ? `<button class="btn" data-a="inmore" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="inmore" data-all="1" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить всё</button>` : ''}</div>` : ''}
               <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button><button data-v="ac">${icon('shield', 13)}Античит</button></div>
               <div data-tab="in">
                 <div class="sec"><h4>С чего заходил (платформа)</h4><div class="card" data-l="plat"></div></div>
@@ -1587,25 +1604,38 @@ const Panel = {
                 T[t].draw(box, d);
                 // кнопка «Загрузить ещё» может перерисовываться внутри вкладки — ловим клик на самом блоке
                 box._more = async b => {
-                    if (this._moreBusy) return toast('Подожди, ещё загружается', 'info');
+                    // «Загрузить всё» идёт — повторный клик по его кнопке останавливает
+                    if (this._moreBusy) {
+                        if (b === this._moreAllBtn) {
+                            this._moreStop = true;
+                            b.lastChild.textContent = 'Останавливаю…';
+                            b.disabled = true;
+                        } else toast('Подожди, ещё загружается', 'info');
+                        return;
+                    }
+                    const all = !!b.dataset.all;
                     this._moreBusy = true;
-                    b.disabled = true;
-                    b.lastChild.textContent = 'Загружаю…';
+                    this._moreStop = false;
+                    this._moreAllBtn = all ? b : null;
+                    box.querySelectorAll('[data-a="more"]').forEach(x => x !== b && (x.disabled = true));
+                    b.lastChild.textContent = all ? 'Стоп' : 'Загружаю…';
+                    b.disabled = !all;
+                    let nd = d;
                     try {
-                        const nd = await T[t].more(d);
-                        if (gen !== this._gen) return;
-                        paint(t, box, nd);
-                        const sh = T[t].share;
-                        if (sh && started[sh]) paint(sh, boxOf(sh), nd);
+                        do nd = await T[t].more(nd);
+                        while (all && nd && nd.capped && !this._moreStop && gen === this._gen);
                     } catch (e) {
-                        if (gen !== this._gen) return;
-                        this.prog('');
-                        b.disabled = false;
-                        b.lastChild.textContent = 'Загрузить ещё';
-                        toast('Не загрузилось: ' + e.message, 'err');
+                        if (gen === this._gen) toast('Не загрузилось: ' + e.message, 'err');
                     } finally {
                         this._moreBusy = false;
+                        this._moreStop = false;
+                        this._moreAllBtn = null;
                     }
+                    if (gen !== this._gen) return;
+                    this.prog('');
+                    paint(t, box, nd);
+                    const sh = T[t].share;
+                    if (sh && started[sh]) paint(sh, boxOf(sh), nd);
                 };
                 if (!box._moreOn) {
                     box._moreOn = true;
@@ -1637,8 +1667,7 @@ const Panel = {
             };
             tabs.querySelectorAll('button').forEach(b => (b.onclick = () => show(b.dataset.v)));
             show(loaders[this.tab] || this.tab === 'in' ? this.tab : 'in');
-            const im = o.querySelector('[data-a="inmore"]');
-            if (im) im.onclick = () => this.player(sel, nick0, id, inMore);
+            o.querySelectorAll('[data-a="inmore"]').forEach(im => (im.onclick = () => this.player(sel, nick0, id, Object.assign({}, inMore, { all: !!im.dataset.all }))));
             o.querySelector('[data-a="copy"]').onclick = () => this.copy();
         });
     },
@@ -1658,7 +1687,7 @@ const Panel = {
     },
     // следующие страницы тех же записей — дописываются в тот же объект (его видят «Доходы» и «Активность»)
     async moreAll(base, gen, d) {
-        const r = await Api.all(base, 10, (pg, n) => gen === this._gen && this.prog(`Ещё записи игрока: страница ${pg}, всего ${d.rows.length + n}…`), null, () => gen === this._gen, d.next);
+        const r = await Api.all(base, 10, (pg, n) => gen === this._gen && this.prog(`Ещё записи игрока: всего ${d.rows.length + n}…`), null, this.moreAlive(gen), d.next);
         if (gen !== this._gen) return d;
         this.prog('');
         d.rows.push(...r);
@@ -1666,8 +1695,13 @@ const Panel = {
         d.next = r.next;
         return d;
     },
+    // «Стоп» во время «Загрузить всё» прерывает листание на следующей странице
+    moreAlive(gen) {
+        return () => gen === this._gen && !this._moreStop;
+    },
     moreBtn() {
-        return `<button class="btn" data-a="more" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить ещё</button>`;
+        const b = (all, t) => `<button class="btn" data-a="more"${all ? ' data-all="1" title="Листать, пока записи не кончатся; можно остановить"' : ''} style="height:24px;margin-left:6px">${icon('download', 12)}${t}</button>`;
+        return b(false, 'Загрузить ещё') + b(true, 'Загрузить всё');
     },
     capNote(d) {
         return `<div class="sub" style="padding:8px 2px">${d.rows.length} ${plural(d.rows.length, 'запись', 'записи', 'записей')} игрока${d.capped ? (Api.order === 'time' ? ' — посчитаны первые за период, есть ещё' : ' — посчитаны последние, за период есть ещё') + this.moreBtn() : ''}</div>`;
@@ -1765,21 +1799,35 @@ const Panel = {
         if (d._sus && d._sus.key === key) return d._sus;
         let msgs = 0;
         const list = [];
+        // свои ники (по ID мог менять) — не собеседники
+        const mine = new Set(d.rows.map(r => String(r.player_name || '').toLowerCase()).filter(Boolean));
+        if (self) mine.add(String(self).toLowerCase());
+        const talk = new Map();
+        const withOf = text => [...new Set(text.match(NICK_RE) || [])].filter(n => !mine.has(n.toLowerCase()));
         d.rows.forEach(r => {
             if (String(r.category_id) === '38') return;
             const text = String(r.transaction_desc || '');
             // служебные записи («Жалоба от … Тип: закрыта. Причина: администратор закрыл обращение») — не слова игрока
             // админ-чаты и прочие админские категории — переписка администрации, не игрока
             const cn = catName(r);
-            if (/админ|admin/i.test(cn)) return;
+            const admCat = /админ|admin/i.test(cn);
             const msg = MSG_CAT.test(cn) && !/Тип:\s*[^.]{1,30}\.\s*Причина:/i.test(text);
-            if (msg) msgs++;
+            if (msg && !admCat) {
+                msgs++;
+                withOf(text).forEach(n => {
+                    const g = talk.get(n) || { k: n, n: 0, last: 0 };
+                    g.n++;
+                    g.last = Math.max(g.last, new Date(r.time).getTime() || 0);
+                    talk.set(n, g);
+                });
+            }
             // админов ищем во всех записях (передачи, трейды), остальное — только в сообщениях
-            const hits = susHits(text, adm).filter(h => msg || h.k === 'adm');
-            if (hits.length) list.push({ r, text, hits, kinds: [...new Set(hits.map(h => h.k))] });
+            // в админ-чатах — только то, что нельзя и администрации: оскорбления, родные, угрозы
+            const hits = susHits(text, adm).filter(h => (admCat ? msg && STRICT.has(h.k) : msg || h.k === 'adm'));
+            if (hits.length) list.push({ r, text, hits, kinds: [...new Set(hits.map(h => h.k))], with: msg ? withOf(text) : [] });
         });
         list.sort((a, b) => new Date(b.r.time) - new Date(a.r.time));
-        return (d._sus = { key, msgs, list, admN: admList().length, off: (d._sus && d._sus.off) || new Set() });
+        return (d._sus = { key, msgs, list, talk: [...talk.values()].sort((a, b) => b.n - a.n || b.last - a.last), admN: admList().length, off: (d._sus && d._sus.off) || new Set() });
     },
     susHtml(d) {
         const S = this.susScan(d);
@@ -1789,19 +1837,31 @@ const Panel = {
         this.report.sus = S.list.length;
         // цвет строки — по самому серьёзному найденному (порядок в SUS)
         const top = x => SUS.find(y => x.kinds.includes(y.k));
-        return `<div class="vdl-sus">
+        const adm = new Set(admList().map(n => n.toLowerCase()));
+        const talkTop = S.talk.slice(0, S.talkAll ? 60 : 12);
+        return `${
+            S.talk.length
+                ? `<div class="vdl-sus"><div class="vdl-sus-h"><h4>С кем общается</h4><span class="sub">${S.talk.length} ${plural(S.talk.length, 'игрок', 'игрока', 'игроков')} в сообщениях · нажми, чтобы разобрать</span></div>
+          <div class="chips">${talkTop
+              .map(g => `<span class="vdl-tag vdl-talk" style="--c:${adm.has(g.k.toLowerCase()) ? '#e5484d' : '#3e9bff'}" data-nick="${U.esc(g.k)}" title="Последний раз ${fmtDate(g.last)}${adm.has(g.k.toLowerCase()) ? ' · администрация' : ''}">${U.esc(g.k)} · ${g.n}</span>`)
+              .join('')}${S.talk.length > talkTop.length ? `<button class="vdl-more-btn" data-a="talkall">ещё ${S.talk.length - talkTop.length}</button>` : ''}</div></div>`
+                : ''
+        }<div class="vdl-sus">
           <div class="vdl-sus-h"><h4>Подозрительное в сообщениях</h4><span class="sub">${S.list.length ? `${S.list.length} из ${S.msgs}` : `проверено ${S.msgs}, ничего не нашлось`}</span><span style="flex:1"></span><button class="vdl-more-btn" data-a="adml">админы: ${S.admN}</button></div>
           <div data-l="admed" hidden><div class="sub" style="padding:6px 0 4px">Ники администрации — по одному в строке. Ищутся «Ник_Фамилия», «Ник Фамилия» и «Ник.Фамилия».</div><textarea class="inp" data-a="admt"></textarea><div class="vdl-btns" style="margin-top:6px"><button class="btn" data-a="admr">По умолчанию</button><button class="btn pri" data-a="adms">Сохранить</button></div></div>
           ${kinds.length > 1 ? `<div class="chips">${kinds.map(x => `<span class="vdl-tag${S.off.has(x.k) ? ' off' : ''}" style="--c:${x.c}" data-sk="${x.k}" title="Показать / скрыть">${x.name} · ${cnt(x.k)}</span>`).join('')}</div>` : ''}
           ${shown
               .slice(0, 100)
-              .map(x => `<div class="vdl-sus-r" style="--c:${top(x).c}"><div class="m"><span>${fmtDate(x.r.time)}</span><span>${U.esc(catName(x.r))}</span>${kinds.length === 1 ? '' : `<span style="color:${top(x).c}">${top(x).name}</span>`}</div><div class="vdl-desc">${susMark(x.text, x.hits)}</div></div>`)
+              .map(x => `<div class="vdl-sus-r" style="--c:${top(x).c}"><div class="m"><span>${fmtDate(x.r.time)}</span><span>${U.esc(catName(x.r))}</span>${x.with.length ? `<span style="color:#6cb6ff">с ${x.with.slice(0, 3).map(n => U.esc(n)).join(', ')}</span>` : ''}${kinds.length === 1 ? '' : `<span style="color:${top(x).c}">${top(x).name}</span>`}</div><div class="vdl-desc">${susMark(x.text, x.hits)}</div></div>`)
               .join('')}${shown.length > 100 ? `<div class="sub" style="padding:6px 2px">Показаны 100 из ${shown.length}</div>` : ''}
         </div>`;
     },
     susWire(box, d) {
         const S = d._sus;
         const redraw = () => this.renderCats(box, d);
+        box.querySelectorAll('[data-nick]').forEach(t => (t.onclick = () => this.open('nick', t.dataset.nick)));
+        const ta = box.querySelector('[data-a="talkall"]');
+        if (ta) ta.onclick = () => ((S.talkAll = true), redraw());
         box.querySelectorAll('[data-sk]').forEach(t => (t.onclick = () => (S.off.has(t.dataset.sk) ? S.off.delete(t.dataset.sk) : S.off.add(t.dataset.sk), redraw())));
         const ed = box.querySelector('[data-l="admed"]');
         box.querySelector('[data-a="adml"]').onclick = () => {
@@ -1872,7 +1932,7 @@ const Panel = {
         return this.tradeList(tr, sel, params);
     },
     async moreTrades(old, gen) {
-        const r = await Api.all(old.params, 6, (pp, nn) => gen === this._gen && this.prog(`Ещё трейды: страница ${pp}, записей ${old.raw.length + nn}…`), null, () => gen === this._gen, old.next);
+        const r = await Api.all(old.params, 10, (pp, nn) => gen === this._gen && this.prog(`Ещё трейды: записей ${old.raw.length + nn}…`), null, this.moreAlive(gen), old.next);
         if (gen !== this._gen) return old;
         this.prog('');
         const tr = old.raw.concat(r);
@@ -1928,9 +1988,9 @@ const Panel = {
     async moreAc(d, gen, first) {
         const left = [];
         for (const m of d.more) {
-            const r = await Api.all(m.params, 10, (pp, nn) => gen === this._gen && this.prog(`${first ? 'Античит' : 'Ещё античит'}: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen, m.next);
+            const r = await Api.all(m.params, 10, (pp, nn) => gen === this._gen && this.prog(`${first ? 'Античит' : 'Ещё античит'}: страница ${pp}, записей ${d.rows.length + nn}…`), null, first ? () => gen === this._gen : this.moreAlive(gen), m.next);
             if (gen !== this._gen) return null;
-            if (r.capped) left.push(Object.assign(m, { next: r.next }));
+            if (r.capped || this._moreStop) left.push(Object.assign(m, { next: r.next, capped: r.capped }));
             r.forEach(x => {
                 if (!d.keep(x)) return;
                 const k = `${x.time}|${x.category_id}|${x.transaction_desc}`;
@@ -2652,7 +2712,7 @@ const AdminView = {
             <div class="k"><small>В среднем в день</small><b>${days.length ? String(+(own.length / days.length).toFixed(1)) : 0}</b></div>
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}</div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="amore" data-all="1" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить всё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}</div>
  ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
@@ -2722,33 +2782,48 @@ const AdminView = {
         const c2 = out.querySelector('[data-a="cfg2"]');
         if (c2) c2.onclick = () => this.settings();
         // догрузка категорий, упёршихся в предел страниц: продолжаем с того же места
-        const am = out.querySelector('[data-a="amore"]');
-        if (am && d.more && d.more.length)
+        out.querySelectorAll('[data-a="amore"]').forEach(am => {
+            if (!d.more || !d.more.length) return;
             am.onclick = async () => {
+                // «Загрузить всё» идёт — второй клик останавливает
+                if (this._aStop === false && am.dataset.all) {
+                    this._aStop = true;
+                    am.lastChild.textContent = 'Останавливаю…';
+                    am.disabled = true;
+                    return;
+                }
                 if (this.busy && this._busyGen === this._gen) return toast('Подожди, подсчёт ещё идёт', 'info');
+                const all = !!am.dataset.all;
                 this.busy = true;
+                this._aStop = false;
                 const gen = (this._busyGen = this._gen),
-                    alive = () => gen === this._gen;
-                am.disabled = true;
+                    alive = () => gen === this._gen && !this._aStop;
+                out.querySelectorAll('[data-a="amore"]').forEach(x => (x.disabled = x !== am || !all));
+                am.lastChild.textContent = all ? 'Стоп' : 'Загружаю…';
+                let left = d.more;
                 try {
-                    const left = [];
-                    for (const m of d.more) {
-                        const r = await Api.all(m.params, 60, (p, n) => this.prog(`${m.cat.name}: ещё страница ${p}, записей ${n}…`, gen), null, alive, m.next);
-                        if (!alive()) return;
-                        d.addRows(r, m.cat);
-                        if (r.capped) left.push(Object.assign(m, { next: r.next }));
-                    }
-                    this.prog('', gen);
-                    this.render(out, Object.assign({}, d, { capped: left.length > 0, more: left, tab: (this.last && this.last.tab) || d.tab }));
+                    do {
+                        const next = [];
+                        for (const m of left) {
+                            const r = await Api.all(m.params, 60, (p, n) => this.prog(`${m.cat.name}: ещё ${n} записей…`, gen), null, alive, m.next);
+                            if (gen !== this._gen) return;
+                            d.addRows(r, m.cat);
+                            m.next = r.next;
+                            if (r.capped) next.push(m);
+                        }
+                        left = next;
+                    } while (all && left.length && !this._aStop);
                 } catch (e) {
-                    if (!alive()) return;
-                    this.prog('', gen);
-                    am.disabled = false;
-                    toast('Не загрузилось: ' + e.message, 'err');
+                    if (gen === this._gen) toast('Не загрузилось: ' + e.message, 'err');
                 } finally {
+                    this._aStop = null;
                     if (this._busyGen === gen) this.busy = false;
                 }
+                if (gen !== this._gen) return;
+                this.prog('', gen);
+                this.render(out, Object.assign({}, d, { capped: left.length > 0, more: left, tab: (this.last && this.last.tab) || d.tab }));
             };
+        });
         out.querySelector('[data-a="copy"]').onclick = () => {
             const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
             cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
