@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.40
+// @version      1.2.41
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.40
+// @version      1.2.41
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.40';
+const VERSION = '1.2.41';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -396,11 +396,15 @@ const SUS = [
     { k: 'real', name: 'реал / продажа', c: '#e5484d', re: /за\s+реал|реал[а-яёa-z0-9_]*\s+(деньг|руб)|(прода[а-яёa-z0-9_]*|куплю|покупаю|скупаю|скупка|обмен[а-яёa-z0-9_]*)\s+(вирт|акк|аккаунт)\S*|(вирт|акк|аккаунт|донат)\S*\s[^.!?\n]{0,25}(₽|руб|qiwi|киви|сбер|тиньк|юмани|yoomoney|на\s+карт)|(₽|руб\S*|на\s+карт\S*|qiwi|киви|сбер\S*|тиньк\S*|юмани)\s[^.!?\n]{0,30}(вирт\S*|\d+\s*кк(?![а-яё])|акк\S*|аккаунт\S*)|перевод[а-яёa-z0-9_]*\s+на\s+карт|(прода[а-яё]*|куплю|покупаю|выда[а-яё]*)\s+админк[а-яё]*|админк[а-яё]*\s+за\s+\S+/gi },
     { k: 'cheat', name: 'читы / баги', c: '#f5a524', re: /(^|[^а-яё])(чит|читы|читер[а-яёa-z0-9_]*|читом|читами|софт[а-яёa-z0-9_]*|клео|взлом[а-яёa-z0-9_]*|дюп[а-яёa-z0-9_]*|собейт|аим|вх)(?![а-яё])|\b(cleo|moonloader|sobeit|dupe|aim|wallhack|wh)\b|баг[а-яёa-z0-9_]*\s+на\s+(деньг|вирт)/gi },
     { k: 'admw', name: 'про администрацию', c: '#f5a524', re: /(знаю|знаком[а-яё]*|друж[а-яё]*|дружит|брат|сестр[а-яё]*|кент|мой|моя|мои|есть)\s+(с\s+)?(админ|модер|куратор|гс|згс)[а-яё]*|(админ|модер|куратор)[а-яё]*\s+(мой|моя|мне\s+(поможет|снимет|разбанит|даст)|знакомый|друг|брат)|разбан[а-яё]*|(сним|снять|сними|снимет|уберут|убрать)[а-яё]*(\s+[а-яё]{1,6})?\s+(бан|варн|мут|джайл|деморган)|блат[а-яё]*|взятк[а-яё]*|подкуп[а-яё]*|откуп[а-яё]*|занес[а-яё]*\s+(админ|модер)[а-яё]*|сли(л|ть|в)[а-яё]*\s+(админ|модер)[а-яё]*/gi },
+    { k: 'bypass', name: 'обход фильтра чата', c: '#f5a524', re: /использовал\s+подмену\s+символов[^.]*/gi },
+    { k: 'devchg', name: 'смена ID устройства', c: '#3e9bff', any: true, re: /(appmetricadeviceid|adjust)\s+изменение/gi },
     { k: 'link', name: 'контакты вне игры', c: '#3e9bff', re: /@[a-z0-9_]{4,}|t\.me\/\S+|vk\.(com|me)\/\S+|discord\S*|дискорд[а-яёa-z0-9_]*|телеграм[а-яёa-z0-9_]*|телег[а-яёa-z0-9_]*|ватсап[а-яёa-z0-9_]*|whatsapp|(^|[^а-яё])(тг|дс|вк)(?![а-яё])|(\+7|8)[\s(-]*9\d{2}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}/gi }
 ];
 // личные сообщения и объявления по тексту записи: «???. A[acc:1] > B[acc:2]: …», «Для B[acc:2]: …», «PM для B [acc_id: 2]: …»
 const MSG_TXT = /^\S*\.?\s*[A-Za-z0-9_]+\[acc:\d+\]\s*>\s*[A-Za-z0-9_]+\[acc:\d+\]:|^Для\s+[A-Za-z0-9_]+\[acc:\d+\]:|^PM\s+для\s+[A-Za-z0-9_]+|^-?\s*Отправил\s+объявление:|Использовал\s+подмену\s+символов/i;
 const STRICT = new Set(SUS.filter(x => x.strict).map(x => x.k));
+// ищутся в любых записях, не только в сообщениях
+const ANY = new Set(SUS.filter(x => x.any).map(x => x.k));
 // сообщения: чаты, СМС, репорты, объявления; категория неизвестна — тоже проверяем
 const MSG_CAT = /чат|chat|смс|sms|сообщ|репорт|report|вопрос|объявл|реклам|рация|радио|телефон|звон|личн|шёпот|шепот|крик|whisper|семь|фракц|организ|банд|мафи|\bvip\b|вип|(^|[^а-яё])(лс|рп|нрп)(?![а-яё])|\b(pm|rp|nrp)\b|^Категория #/i;
 const escRe = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -987,13 +991,22 @@ const catSure = id => {
     catName({ category_id: 0 });
     return CATS_SURE.has(String(id));
 };
+// что лежит в категориях (по выгрузке с сервера 49): подписи, пока сайт не подсказал настоящие названия.
+// это только подписи — для подсчётов номера берутся из проверенных источников (CATS_SURE) или ADMIN_DEF
+const CATS_BUILTIN = {
+    0: 'Инвентарь и предметы', 1: 'Штрафы', 2: 'Бизнесы', 3: 'Казино', 4: 'Работы', 5: 'Семья', 6: 'Кейсы и награды', 7: 'Награды и календарь',
+    8: 'Аренда и штрафы ДТП', 9: 'Лицензии', 10: 'Банк', 12: 'Благотворительность', 14: 'Магазины 24/7', 16: 'Дома и промокоды', 17: 'Транспорт и парковка',
+    19: 'Склад фракций', 20: 'Объявления', 24: 'Фракции', 26: 'Метрики устройства', 27: 'Передача денег', 30: 'Контейнеры', 35: 'Ивенты и квесты',
+    38: 'Подключения / Отключения', 40: 'Жалобы/Вопросы', 41: 'Админ-действия', 42: 'СМС', 45: 'Админ-блокировки', 47: 'Чат: подмена символов, муты',
+    52: 'Семейный чат', 53: 'Чат объявлений', 54: 'Чат', 55: 'Чат', 56: 'Личные сообщения', 57: 'Трейды', 60: 'Blackpass', 65: 'Настройки игры', 71: 'Радио'
+};
 function catName(r) {
     // названия: выученные по таблице сайта + обычный <select>, если он есть
     if (!CATS || CatLearn.dirty) {
         CatLearn.dirty = false;
         // догадки из кода сайта — только подписи; номера для подсчёта берутся из проверенных источников
         const sure = Store.get('cats', {});
-        CATS = Object.assign({}, Store.get('catsSoft2', {}), { 38: 'Подключения / Отключения' }, sure);
+        CATS = Object.assign({}, CATS_BUILTIN, Store.get('catsSoft2', {}), { 38: 'Подключения / Отключения' }, sure);
         CATS_SURE = new Set(['38', ...Object.keys(sure)]);
         document.querySelectorAll('select').forEach(sel => {
             const box = sel.closest('.mb-3, .form-group, .col, div');
@@ -1269,8 +1282,13 @@ function normPlat(v) {
 }
 function platOf(r) {
     const d = String(r.transaction_desc || '');
-    const kv = d.match(/(?:платформа|platform|клиент|client|система|\bos\b)\s*[:=]\s*([^,;)\]\n]+)/i);
-    if (kv && kv[1].trim()) return normPlat(kv[1]);
+    // «Платформа: Android (Play Market). APPMDID: …» — магазин приложения тоже показываем
+    const kv = d.match(/(?:платформа|platform|клиент|client|система|\bos\b)\s*[:=]\s*([^,;\]\n.]+(?:\([^)]*\))?)/i);
+    if (kv && kv[1].trim()) {
+        const store = kv[1].match(/\(([^)]+)\)/);
+        const base = normPlat(kv[1].replace(/\([^)]*\)/, ''));
+        return store ? `${base} (${store[1].trim()})` : base;
+    }
     const m = d.match(/android|\bios\b|iphone|ipad|windows|\bpc\b|лаунчер|launcher|harmony\s?os|mac\s?os/i);
     return m ? normPlat(m[0]) : '';
 }
@@ -1538,12 +1556,18 @@ const Panel = {
             const ips = group(con, r => r.player_ip),
                 devs = group(con, devOf);
             const ids = id ? [id] : [...new Set(rows.map(r => r.player_id).filter(Boolean))];
-            this.report = { kind: 'nick', nick: nick || ('ID ' + id), id: id || null, days, ips, devs, related: new Map(), idSet: new Set(rows.map(r => String(r.player_id || '')).concat(ids.map(String)).filter(Boolean)) };
+            // уровень — из последнего выхода («Пользователь отключился (Уровень: 34)»)
+            const lvRow = rows
+                .filter(r => /уровень:\s*\d+/i.test(r.transaction_desc || ''))
+                .sort((a, b) => new Date(b.time) - new Date(a.time))[0];
+            const level = lvRow ? +String(lvRow.transaction_desc).match(/уровень:\s*(\d+)/i)[1] : null;
+            this.report = { kind: 'nick', nick: nick || ('ID ' + id), id: id || null, days, ips, devs, level, related: new Map(), idSet: new Set(rows.map(r => String(r.player_id || '')).concat(ids.map(String)).filter(Boolean)) };
             const o = this.out(`
               <div class="vdl-sum">
                 <div class="k"><small>Записей</small><b>${rows.length}</b></div>
                 <div class="k"><small>IP-адресов</small><b>${ips.length}</b></div>
                 <div class="k"><small>Устройств</small><b>${devs.length}</b></div>
+                ${level != null ? `<div class="k"><small>Уровень</small><b title="${U.esc(fmtDate(lvRow.time))}">${level}</b></div>` : ''}
                 <div class="k"><small>ID игрока</small><b style="font-size:15px" class="vdl-copyid" data-v="${U.esc(ids.join(', '))}">${U.esc(ids.join(', ') || '—')}</b></div>
               </div>
               ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}${inMore ? `<button class="btn" data-a="inmore" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="inmore" data-all="1" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить всё</button>` : ''}</div>` : ''}
@@ -1845,7 +1869,7 @@ const Panel = {
             // админов ищем во всех записях (передачи, трейды), остальное — только в сообщениях
             // ник админа из списка — в любой записи (спек, наказания, передачи, трейды);
             // в админ-чатах из фраз — только то, что нельзя и администрации: оскорбления, родные, угрозы
-            const hits = susHits(text, adm).filter(h => h.k === 'adm' || (msg && (!admCat || STRICT.has(h.k))));
+            const hits = susHits(text, adm).filter(h => h.k === 'adm' || ANY.has(h.k) || (msg && (!admCat || STRICT.has(h.k))));
             if (hits.length) list.push({ r, text, hits, kinds: [...new Set(hits.map(h => h.k))], with: msg ? withOf(text, r) : [] });
         });
         list.sort((a, b) => new Date(b.r.time) - new Date(a.r.time));
@@ -2207,7 +2231,12 @@ const Panel = {
                 .join('');
             return `${others.length ? `<div class="sub">с ${others.map(n => U.esc(n)).join(', ')}</div>` : ''}${lines}${rows.length > 8 ? `<div class="sub">… ещё ${rows.length - 8}</div>` : ''}`;
         };
-        const row = g => `<div class="vdl-row${g.gave ? ' tr-give' : ''}" data-tr="${g.id}"><div class="main"><div class="ttl">Трейд #${g.id}${g.gave ? '<span class="vdl-tag" style="--c:#f5a524">отдал</span>' : ''}<span class="vdl-tag">${fmtDate(g.last)}</span></div><div data-l="tb">${body(g, g.full || g.rows)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`;
+        // итог трейда: «Обмен успешно закончен» / «Обмен не завершился успешно»
+        const status = rows => {
+            const t = rows.map(r => String(r.transaction_desc || '')).join('\n');
+            return /успешно\s+закончен/i.test(t) ? '<span class="vdl-tag" style="--c:#2fbf71">состоялся</span>' : /не\s+завершился/i.test(t) ? '<span class="vdl-tag" style="--c:#8b8f9a">отменён</span>' : '';
+        };
+        const row = g => `<div class="vdl-row${g.gave ? ' tr-give' : ''}" data-tr="${g.id}"><div class="main"><div class="ttl">Трейд #${g.id}${status(g.full || g.rows)}${g.gave ? '<span class="vdl-tag" style="--c:#f5a524">отдал</span>' : ''}<span class="vdl-tag">${fmtDate(g.last)}</span></div><div data-l="tb">${body(g, g.full || g.rows)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`;
         box.innerHTML =
             (list.length ? list.map(row).join('') : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>') +
             (list.capped ? `<div class="sub" style="padding:8px 2px">${list.length} ${plural(list.length, 'трейд', 'трейда', 'трейдов')} — ${Api.order === 'time' ? 'первые' : 'последние'} за период, есть ещё${this.moreBtn()}</div>` : '');
@@ -2476,18 +2505,20 @@ const NICK_RE = /\b[A-Z][A-Za-z0-9]{1,20}_[A-Z][A-Za-z0-9]{1,20}\b/g;
 // что считается админ-действиями: ровно эти категории сайта
 const ADMIN_CATS = [
     // на сайте: «Админ-действия», «Админ-общий-чат», «Админ-чат», «Админ-блокировки», «Админ-супердействия»
-    { k: 'act', name: 'Админ действия', re: /^админ[\s-]*действ/i },
+    { k: 'act', name: 'Админ действия', re: /^админ[\s-]*действ/i, def: '41' },
     { k: 'gchat', name: 'Админ общий чат', re: /^админ[\s-]*общ\S*[\s-]*чат/i },
     { k: 'chat', name: 'Админ чат', re: /^админ[\s-]*чат/i },
-    { k: 'block', name: 'Админ блокировки', re: /^админ[\s-]*блок/i },
+    { k: 'block', name: 'Админ блокировки', re: /^админ[\s-]*блок/i, def: '45' },
     { k: 'super', name: 'Супер наказания', re: /супер[\s-]*(наказ|действ)/i },
     // такой категории может не быть на сервере — считается, только если номер вписан вручную
     { k: 'report', name: 'Жалобы / обращения', re: null, opt: true }
 ];
 // виды админ-действий по тексту записи (формулировки сайта логов); первое совпадение.
-// main — шесть видов, которые куратор считает всегда; остальные показываются ниже, если были
+// main — виды, которые куратор считает всегда; остальные показываются ниже, если были
 const ACT_TYPES = [
     { k: 'spec', name: 'Слежка', main: 1, re: /начал\s+следить\s+за/i },
+    { k: 'specend', name: 'Выход со слежки', main: 1, re: /закончил\s+следить/i },
+    { k: 'close', name: 'Закрыл обращение', main: 1, re: /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i },
     { k: 'block', name: 'Блокировка', main: 1, re: /заблокировал|забанил/i },
     { k: 'tp', name: 'ТП к себе', main: 1, re: /телепортировал\s+к\s+себе\s+(?!авто)/i },
     { k: 'unfreeze', name: 'Разморозка', main: 1, re: /разморозил/i },
@@ -2505,7 +2536,6 @@ const ACT_TYPES = [
     { k: 'stats', name: 'Смотрел статистику', re: /статистик/i },
     { k: 'hp', name: 'Выдал здоровье', re: /уровень\s+здоровья/i },
     { k: 'event', name: 'Мероприятия', re: /мероприяти|победител/i },
-    { k: 'specend', name: 'Конец слежки', re: /закончил\s+следить/i },
     { k: 'godmode', name: 'Бессмертие', re: /бессмерти/i },
     { k: 'adminlist', name: 'Смотрел список админов', re: /список\s+администрации/i },
     { k: 'auth', name: 'Авторизация', re: /авторизовался/i },
@@ -2531,6 +2561,8 @@ const AdminView = {
                 const hit = Object.keys(CATS).find(k => /^\d+$/.test(k) && CATS_SURE.has(k) && !taken.has(k) && c.re.test(String(CATS[k]).trim()));
                 if (hit) (id = hit), (auto = true);
             }
+            // название не выучено — номер по выгрузке с сервера (одинаков на всех серверах)
+            if (!id && c.def && man[c.k] !== '-' && !taken.has(c.def)) (id = c.def), (auto = true);
             if (id) taken.add(id);
             return Object.assign({}, c, { id, auto });
         });
@@ -2693,14 +2725,19 @@ const AdminView = {
                 if (r.capped) more.push({ cat, params: { player_name__exact: nick, category_id__exact: cat.id, ...range }, next: r.next });
                 addRows(r, cat);
             }
-            // мут репорта пишется в «Жалобы/Вопросы» («Действие: выдача мута репорта») — куратор считает его действием;
+            // мут репорта («Действие: выдача мута репорта») и закрытие обращения пишутся в «Жалобы/Вопросы» — куратор считает их действиями;
             // берём только эти записи, если сама категория жалоб не считается целиком
-            const repCat = this.known().find(x => /жалоб/i.test(x.name));
+            const repCat = this.known().find(x => /жалоб/i.test(x.name)) || { id: '40' };
             if (repCat && !ready.some(c => String(c.id) === String(repCat.id))) {
-                const r = await Api.all({ player_name__exact: nick, category_id__exact: repCat.id, transaction_desc__ilike: '%мута репорта%', ...range }, 20, (p, n) => this.prog(`Мут репорта: страница ${p}, записей ${n}…`, gen), null, alive);
-                if (!alive()) return;
-                const rm = { k: 'rmute', name: 'Мут репорта (из жалоб)', id: repCat.id };
-                addRows(r.filter(x => /действие:\s*выдача\s+мута\s+репорта/i.test(String(x.transaction_desc || ''))), rm);
+                const rm = { k: 'rmute', name: 'Жалобы: закрытия и муты репорта', id: repCat.id };
+                for (const [q, re, what] of [
+                    ['%мута репорта%', /действие:\s*выдача\s+мута\s+репорта/i, 'Мут репорта'],
+                    ['%закрыл обращение%', /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i, 'Закрытые обращения']
+                ]) {
+                    const r = await Api.all({ player_name__exact: nick, category_id__exact: repCat.id, transaction_desc__ilike: q, ...range }, 20, (p, n) => this.prog(`${what}: страница ${p}, записей ${n}…`, gen), null, alive);
+                    if (!alive()) return;
+                    addRows(r.filter(x => re.test(String(x.transaction_desc || ''))), rm);
+                }
                 cats.push(rm);
             }
             this.prog('', gen);
