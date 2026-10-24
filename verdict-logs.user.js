@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.39
+// @version      1.2.40
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.39
+// @version      1.2.40
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.39';
+const VERSION = '1.2.40';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -398,6 +398,8 @@ const SUS = [
     { k: 'admw', name: 'про администрацию', c: '#f5a524', re: /(знаю|знаком[а-яё]*|друж[а-яё]*|дружит|брат|сестр[а-яё]*|кент|мой|моя|мои|есть)\s+(с\s+)?(админ|модер|куратор|гс|згс)[а-яё]*|(админ|модер|куратор)[а-яё]*\s+(мой|моя|мне\s+(поможет|снимет|разбанит|даст)|знакомый|друг|брат)|разбан[а-яё]*|(сним|снять|сними|снимет|уберут|убрать)[а-яё]*(\s+[а-яё]{1,6})?\s+(бан|варн|мут|джайл|деморган)|блат[а-яё]*|взятк[а-яё]*|подкуп[а-яё]*|откуп[а-яё]*|занес[а-яё]*\s+(админ|модер)[а-яё]*|сли(л|ть|в)[а-яё]*\s+(админ|модер)[а-яё]*/gi },
     { k: 'link', name: 'контакты вне игры', c: '#3e9bff', re: /@[a-z0-9_]{4,}|t\.me\/\S+|vk\.(com|me)\/\S+|discord\S*|дискорд[а-яёa-z0-9_]*|телеграм[а-яёa-z0-9_]*|телег[а-яёa-z0-9_]*|ватсап[а-яёa-z0-9_]*|whatsapp|(^|[^а-яё])(тг|дс|вк)(?![а-яё])|(\+7|8)[\s(-]*9\d{2}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}/gi }
 ];
+// личные сообщения и объявления по тексту записи: «???. A[acc:1] > B[acc:2]: …», «Для B[acc:2]: …», «PM для B [acc_id: 2]: …»
+const MSG_TXT = /^\S*\.?\s*[A-Za-z0-9_]+\[acc:\d+\]\s*>\s*[A-Za-z0-9_]+\[acc:\d+\]:|^Для\s+[A-Za-z0-9_]+\[acc:\d+\]:|^PM\s+для\s+[A-Za-z0-9_]+|^-?\s*Отправил\s+объявление:|Использовал\s+подмену\s+символов/i;
 const STRICT = new Set(SUS.filter(x => x.strict).map(x => x.k));
 // сообщения: чаты, СМС, репорты, объявления; категория неизвестна — тоже проверяем
 const MSG_CAT = /чат|chat|смс|sms|сообщ|репорт|report|вопрос|объявл|реклам|рация|радио|телефон|звон|личн|шёпот|шепот|крик|whisper|семь|фракц|организ|банд|мафи|\bvip\b|вип|(^|[^а-яё])(лс|рп|нрп)(?![а-яё])|\b(pm|rp|nrp)\b|^Категория #/i;
@@ -469,7 +471,7 @@ const acKind = t => AC_KINDS.find(x => x.re.test(t)) || null;
 const acLevel = t => (acKind(t) || { lvl: 0 }).lvl;
 const acCls = l => (l === 3 ? ' ac-aim' : l === 2 ? ' ac-move' : l === 1 ? ' ac-low' : '');
 // передача другому игроку: в тексте «передал/перевёл/отдал/добавил в трейд …»
-const GIVE_RE = /передал|перев[её]л|отдал|отправил|добавил|положил|выставил|подарил|выдал/i;
+const GIVE_RE = /передал|передача|перев[её]л|отдал|отправил|добавил|положил|выставил|подарил|выдал/i;
 // безымянная категория админ-действий: по тому, что в ней делают («Бан, мут · #36»), иначе по частым словам
 function catTitle(id, rows) {
     const n = catName({ category_id: id });
@@ -723,7 +725,10 @@ const Api = {
     },
     last: 0,
     mine: new Set(),
-    order: '-time',
+    // сайт принимает только order_by=time (по возрастанию): «-time» отвечает 400
+    order: 'time',
+    // записей за запрос: сайт понимает limit (проверено 500); не принял — дальше без него
+    LIMIT: 500,
     server() {
         const m = location.pathname.match(/\/gslogs\/(\d+)/);
         return m ? m[1] : Store.get('server', '');
@@ -744,6 +749,7 @@ const Api = {
         q.set('order_by', this.order);
         q.set('offset', String(offset));
         q.set('auto', 'false');
+        if (this.LIMIT && !Store.get('noLimit', false)) q.set('limit', String(this.LIMIT));
         const url = new URL(`/gslogs/${this.server()}/api/list-game-logs/?${q}`, location.href).href;
         this.mine.add(url);
         // свои адреса нужны только чтобы не принять их за запросы сайта — старые выбрасываем
@@ -776,6 +782,16 @@ const Api = {
                 return this._page(params, offset, true, tries);
             }
             // сайт не понял сортировку «сначала новые» — меняем только на первой странице, чтобы не смешать порядок посреди листания
+            // сайт не понял limit — повторяем без него; помогло — больше не передаём
+            if (r.status === 400 && q.has('limit')) {
+                Store.set('noLimit', true);
+                try {
+                    return await this._page(params, offset, retried, tries, reordered);
+                } catch (e) {
+                    Store.set('noLimit', false);
+                    throw e;
+                }
+            }
             if (r.status === 400 && this.order === '-time' && !offset && !reordered) {
                 this.order = 'time';
                 try {
@@ -806,7 +822,7 @@ const Api = {
     // размер страницы сайта узнаём по ходу (страница, за которой есть ещё, — полная) и запоминаем
     size: 0,
     pageSize() {
-        if (!this.size) this.size = Store.get('pageSize', 0);
+        if (!this.size) this.size = Store.get('pageSize2', 0);
         return this.size;
     },
     // first — уже полученная первая страница (чтобы не качать её второй раз);
@@ -827,7 +843,7 @@ const Api = {
             // за неполной (по запомненному размеру) страницей нашлось ещё — значит, страницы у сайта такого размера
             if (i > 0 && d.length && prev !== this.pageSize()) {
                 this.size = prev;
-                Store.set('pageSize', prev);
+                Store.set('pageSize2', prev);
             }
             out.push(...d);
             if (onPage) onPage(i + 1, out.length);
@@ -1816,7 +1832,7 @@ const Panel = {
             // админ-чаты и прочие админские категории — переписка администрации, не игрока
             const cn = catName(r);
             const admCat = /админ|admin/i.test(cn);
-            const msg = MSG_CAT.test(cn) && !/Тип:\s*[^.]{1,30}\.\s*Причина:/i.test(text);
+            const msg = (MSG_CAT.test(cn) || MSG_TXT.test(text)) && !/Тип:\s*[^.]{1,30}\.\s*Причина:/i.test(text);
             if (msg && !admCat) {
                 msgs++;
                 withOf(text, r).forEach(n => {
@@ -2468,14 +2484,32 @@ const ADMIN_CATS = [
     // такой категории может не быть на сервере — считается, только если номер вписан вручную
     { k: 'report', name: 'Жалобы / обращения', re: null, opt: true }
 ];
-// виды админ-действий (по тексту записи, порядок важен: первое совпадение)
+// виды админ-действий по тексту записи (формулировки сайта логов); первое совпадение.
+// main — шесть видов, которые куратор считает всегда; остальные показываются ниже, если были
 const ACT_TYPES = [
-    { k: 'rmute', name: 'Мут репорта', re: /(мут|mute|заглуш|запрет)[^.\n]{0,30}(репорт|report|реп\b|жалоб)|(репорт|report)[^.\n]{0,20}(мут|mute)|\brmute\b/i },
-    { k: 'unfreeze', name: 'Разморозка', re: /размороз|разфриз|unfreeze|unfrz/i },
-    { k: 'repair', name: 'Починка машин', re: /почин|отремонт|ремонт|fixcar|fix\s*car|\brepair|восстанов\S*\s+(транспорт|машин|авто)/i },
-    { k: 'tp', name: 'ТП к себе', re: /(телепорт\S*|тп|переместил\S*)[^.\n]{0,40}к\s+себе|gethere|get\s*here|\/gh\b/i },
-    { k: 'spec', name: 'Слежка', re: /слеж|следит|следил|наблюд|спек|spec|recon|\/sp\b|\bsp\s+\d/i },
-    { k: 'block', name: 'Блокировка', re: /блок|бан|\bban|unban|варн|warn|джайл|jail|деморган|кик|\bkick|мут|\bmute/i }
+    { k: 'spec', name: 'Слежка', main: 1, re: /начал\s+следить\s+за/i },
+    { k: 'block', name: 'Блокировка', main: 1, re: /заблокировал|забанил/i },
+    { k: 'tp', name: 'ТП к себе', main: 1, re: /телепортировал\s+к\s+себе\s+(?!авто)/i },
+    { k: 'unfreeze', name: 'Разморозка', main: 1, re: /разморозил/i },
+    { k: 'repair', name: 'Починка машин', main: 1, re: /починил\s+транспорт|починил/i },
+    { k: 'rmute', name: 'Мут репорта', main: 1, re: /действие:\s*выдача\s+мута\s+репорта/i },
+    { k: 'mute', name: 'Мут', re: /выдал\s+мут/i },
+    { k: 'kick', name: 'Кик', re: /кикнул/i },
+    { k: 'jail', name: 'Деморган', re: /деморган/i },
+    { k: 'warn', name: 'Предупреждение', re: /выдал\s+предупреждение/i },
+    { k: 'freeze', name: 'Заморозка', re: /заморозил/i },
+    { k: 'tpcar', name: 'ТП авто к себе', re: /телепортировал\s+к\s+себе\s+авто/i },
+    { k: 'tpto', name: 'ТП к игроку', re: /телепортировался\s+к/i },
+    { k: 'spawn', name: 'Спавн игрока', re: /заспавнил/i },
+    { k: 'slap', name: 'Подбросил', re: /подбросил/i },
+    { k: 'stats', name: 'Смотрел статистику', re: /статистик/i },
+    { k: 'hp', name: 'Выдал здоровье', re: /уровень\s+здоровья/i },
+    { k: 'event', name: 'Мероприятия', re: /мероприяти|победител/i },
+    { k: 'specend', name: 'Конец слежки', re: /закончил\s+следить/i },
+    { k: 'godmode', name: 'Бессмертие', re: /бессмерти/i },
+    { k: 'adminlist', name: 'Смотрел список админов', re: /список\s+администрации/i },
+    { k: 'auth', name: 'Авторизация', re: /авторизовался/i },
+    { k: 'tpmenu', name: 'Меню телепортов', re: /меню\s+телепортов/i }
 ];
 const actType = t => ACT_TYPES.find(x => x.re.test(t)) || null;
 const AdminView = {
@@ -2659,6 +2693,16 @@ const AdminView = {
                 if (r.capped) more.push({ cat, params: { player_name__exact: nick, category_id__exact: cat.id, ...range }, next: r.next });
                 addRows(r, cat);
             }
+            // мут репорта пишется в «Жалобы/Вопросы» («Действие: выдача мута репорта») — куратор считает его действием;
+            // берём только эти записи, если сама категория жалоб не считается целиком
+            const repCat = this.known().find(x => /жалоб/i.test(x.name));
+            if (repCat && !ready.some(c => String(c.id) === String(repCat.id))) {
+                const r = await Api.all({ player_name__exact: nick, category_id__exact: repCat.id, transaction_desc__ilike: '%мута репорта%', ...range }, 20, (p, n) => this.prog(`Мут репорта: страница ${p}, записей ${n}…`, gen), null, alive);
+                if (!alive()) return;
+                const rm = { k: 'rmute', name: 'Мут репорта (из жалоб)', id: repCat.id };
+                addRows(r.filter(x => /действие:\s*выдача\s+мута\s+репорта/i.test(String(x.transaction_desc || ''))), rm);
+                cats.push(rm);
+            }
             this.prog('', gen);
             this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
@@ -2743,7 +2787,7 @@ const AdminView = {
                     if (t) per.find(x => x.t === t).n++;
                     else other++;
                 });
-                const rows = per.map(x => [x.t.name, x.n]).concat(other ? [['Другие действия', other]] : []);
+                const rows = per.filter(x => x.t.main || x.n).map(x => [x.t.name, x.n]).concat(other ? [['Другие действия', other]] : []);
                 const mx = Math.max(1, ...rows.map(x => x[1]));
                 return `<div class="sec"><h4>Действия по видам · ${acts.length} без сообщений в чатах</h4><div class="card">${rows
                     .map(([n, c]) => `<div class="vdl-bar${c ? '' : ' muted'}"><span class="nm">${n}</span><span class="tr"><b style="width:${c ? Math.max(3, Math.round((c / mx) * 100)) : 0}%"></b></span><span class="n">${c}</span></div>`)
