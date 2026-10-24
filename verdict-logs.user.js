@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.41
+// @version      1.2.42
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.41
+// @version      1.2.42
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.41';
+const VERSION = '1.2.42';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -832,7 +832,9 @@ const Api = {
     // first — уже полученная первая страница (чтобы не качать её второй раз);
     // alive() — окно ещё открыто: иначе листание прекращается и не занимает очередь
     // from — с какой записи продолжить (out.next прошлого вызова): «Загрузить ещё» не качает уже загруженное заново
-    async all(params, maxPages, onPage, first, alive, from = 0) {
+    // opt.strict — листать до пустой страницы: короткая страница посреди списка (сайт не всегда отдаёт limit целиком)
+    // не обрывает подсчёт; для админ-действий, где важна каждая запись
+    async all(params, maxPages, onPage, first, alive, from = 0, opt = {}) {
         const out = [];
         out.capped = false;
         let off = from,
@@ -857,8 +859,8 @@ const Api = {
             const size = this.pageSize();
             if (size && d.length === size) this._sizeOk = true;
             // страница меньше запомненной: конец списка — или сайт уменьшил страницы (пока полной не видели, проверяем следующую)
-            if (size && d.length < size && (this._sizeOk || d.length < 20)) break;
-            if (i === maxPages - 1 && (!size || d.length >= size)) out.capped = true;
+            if (!opt.strict && size && d.length < size && (this._sizeOk || d.length < 20)) break;
+            if (i === maxPages - 1 && (opt.strict || !size || d.length >= size)) out.capped = true;
         }
         out.next = off;
         return out;
@@ -2519,7 +2521,9 @@ const ACT_TYPES = [
     { k: 'spec', name: 'Слежка', main: 1, re: /начал\s+следить\s+за/i },
     { k: 'specend', name: 'Выход со слежки', main: 1, re: /закончил\s+следить/i },
     { k: 'close', name: 'Закрыл обращение', main: 1, re: /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i },
+    { k: 'blockform', name: 'Блокировка по чужой форме', re: /заблокировал[^|]*\|\s*by\s/i },
     { k: 'block', name: 'Блокировка', main: 1, re: /заблокировал|забанил/i },
+    { k: 'form', name: 'Создал форму наказания', re: /создал\s+форму\s+для\s+администрации/i },
     { k: 'tp', name: 'ТП к себе', main: 1, re: /телепортировал\s+к\s+себе\s+(?!авто)/i },
     { k: 'unfreeze', name: 'Разморозка', main: 1, re: /разморозил/i },
     { k: 'repair', name: 'Починка машин', main: 1, re: /починил\s+транспорт|починил/i },
@@ -2719,7 +2723,7 @@ const AdminView = {
             for (const [i, cat] of ready.entries()) {
                 const step = `${cat.name} (${i + 1}/${ready.length})`;
                 // как считает куратор: фильтр сайта «ник + категория» за период — число записей
-                const r = await Api.all({ player_name__exact: nick, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}: страница ${p}, записей ${n}…`, gen), null, alive);
+                const r = await Api.all({ player_name__exact: nick, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}: страница ${p}, записей ${n}…`, gen), null, alive, 0, { strict: true });
                 if (!alive()) return;
                 capped = capped || r.capped;
                 if (r.capped) more.push({ cat, params: { player_name__exact: nick, category_id__exact: cat.id, ...range }, next: r.next });
@@ -2727,21 +2731,28 @@ const AdminView = {
             }
             // мут репорта («Действие: выдача мута репорта») и закрытие обращения пишутся в «Жалобы/Вопросы» — куратор считает их действиями;
             // берём только эти записи, если сама категория жалоб не считается целиком
+            let repInfo = null;
             const repCat = this.known().find(x => /жалоб/i.test(x.name)) || { id: '40' };
             if (repCat && !ready.some(c => String(c.id) === String(repCat.id))) {
                 const rm = { k: 'rmute', name: 'Жалобы: закрытия и муты репорта', id: repCat.id };
-                for (const [q, re, what] of [
-                    ['%мута репорта%', /действие:\s*выдача\s+мута\s+репорта/i, 'Мут репорта'],
-                    ['%закрыл обращение%', /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i, 'Закрытые обращения']
-                ]) {
-                    const r = await Api.all({ player_name__exact: nick, category_id__exact: repCat.id, transaction_desc__ilike: q, ...range }, 20, (p, n) => this.prog(`${what}: страница ${p}, записей ${n}…`, gen), null, alive);
-                    if (!alive()) return;
-                    addRows(r.filter(x => re.test(String(x.transaction_desc || ''))), rm);
-                }
+                // все записи админа в жалобах за период: считаются закрытия и муты репорта, остальное — для справки
+                const r = await Api.all({ player_name__exact: nick, category_id__exact: repCat.id, ...range }, 60, (p, n) => this.prog(`Жалобы/вопросы: страница ${p}, записей ${n}…`, gen), null, alive, 0, { strict: true });
+                if (!alive()) return;
+                const RM = /действие:\s*выдача\s+мута\s+репорта/i,
+                    CL = /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i;
+                addRows(r.filter(x => RM.test(String(x.transaction_desc || '')) || CL.test(String(x.transaction_desc || ''))), rm);
+                const T = x => String(x.transaction_desc || '');
+                repInfo = {
+                    all: r.length,
+                    replies: r.filter(x => /тип:\s*сообщение/i.test(T(x))).length,
+                    pm: r.filter(x => /^PM\s+для/i.test(T(x))).length,
+                    work: r.filter(x => /тип:\s*в\s+работе/i.test(T(x))).length
+                };
+                capped = capped || r.capped;
                 cats.push(rm);
             }
             this.prog('', gen);
-            this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, tab: (this.last && this.last.tab) || 'cat' });
+            this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, repInfo, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -2826,9 +2837,19 @@ const AdminView = {
                 });
                 const rows = per.filter(x => x.t.main || x.n).map(x => [x.t.name, x.n]).concat(other ? [['Другие действия', other]] : []);
                 const mx = Math.max(1, ...rows.map(x => x[1]));
-                return `<div class="sec"><h4>Действия по видам · ${acts.length} без сообщений в чатах</h4><div class="card">${rows
+                // должность — из последнего «Авторизовался как …»
+                const auth = acts
+                    .filter(r => /авторизовался\s+как/i.test(String(r.transaction_desc || '')))
+                    .sort((x, y) => new Date(y.time) - new Date(x.time))[0];
+                const role = auth ? String(auth.transaction_desc).replace(/^.*авторизовался\s+как\s*/i, '').trim() : '';
+                const ri = d.repInfo;
+                return `<div class="sec"><h4>Действия по видам · ${acts.length} без сообщений в чатах${role ? ` · ${U.esc(role)}` : ''}</h4><div class="card">${rows
                     .map(([n, c]) => `<div class="vdl-bar${c ? '' : ' muted'}"><span class="nm">${n}</span><span class="tr"><b style="width:${c ? Math.max(3, Math.round((c / mx) * 100)) : 0}%"></b></span><span class="n">${c}</span></div>`)
-                    .join('')}</div></div>`;
+                    .join('')}${
+                    ri && ri.all
+                        ? `<div class="sub" style="padding:8px 2px 2px">В жалобах/вопросах всего ${ri.all} записей; в число вошли закрытия и муты репорта. Не входят: ответов ${ri.replies}, PM ${ri.pm}, «взял в работу» ${ri.work}.</div>`
+                        : ''
+                }</div></div>`;
             })()}
             <div class="sec"><h4>По категориям</h4><div class="card">${
                 cats.length
@@ -2919,7 +2940,7 @@ const AdminView = {
                     do {
                         const next = [];
                         for (const m of left) {
-                            const r = await Api.all(m.params, 60, (p, n) => this.prog(`${m.cat.name}: ещё ${n} записей…`, gen), null, alive, m.next);
+                            const r = await Api.all(m.params, 60, (p, n) => this.prog(`${m.cat.name}: ещё ${n} записей…`, gen), null, alive, m.next, { strict: true });
                             if (gen !== this._gen) return;
                             d.addRows(r, m.cat);
                             m.next = r.next;
