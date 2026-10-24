@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.38
+// @version      1.2.39
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.38
+// @version      1.2.39
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.38';
+const VERSION = '1.2.39';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2468,6 +2468,16 @@ const ADMIN_CATS = [
     // такой категории может не быть на сервере — считается, только если номер вписан вручную
     { k: 'report', name: 'Жалобы / обращения', re: null, opt: true }
 ];
+// виды админ-действий (по тексту записи, порядок важен: первое совпадение)
+const ACT_TYPES = [
+    { k: 'rmute', name: 'Мут репорта', re: /(мут|mute|заглуш|запрет)[^.\n]{0,30}(репорт|report|реп\b|жалоб)|(репорт|report)[^.\n]{0,20}(мут|mute)|\brmute\b/i },
+    { k: 'unfreeze', name: 'Разморозка', re: /размороз|разфриз|unfreeze|unfrz/i },
+    { k: 'repair', name: 'Починка машин', re: /почин|отремонт|ремонт|fixcar|fix\s*car|\brepair|восстанов\S*\s+(транспорт|машин|авто)/i },
+    { k: 'tp', name: 'ТП к себе', re: /(телепорт\S*|тп|переместил\S*)[^.\n]{0,40}к\s+себе|gethere|get\s*here|\/gh\b/i },
+    { k: 'spec', name: 'Слежка', re: /слеж|следит|следил|наблюд|спек|spec|recon|\/sp\b|\bsp\s+\d/i },
+    { k: 'block', name: 'Блокировка', re: /блок|бан|\bban|unban|варн|warn|джайл|jail|деморган|кик|\bkick|мут|\bmute/i }
+];
+const actType = t => ACT_TYPES.find(x => x.re.test(t)) || null;
 const AdminView = {
     // номера категорий, вписанные вручную: { act: '70', … }
     ids() {
@@ -2722,6 +2732,23 @@ const AdminView = {
  ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
+            ${(() => {
+                // разбивка действий (без сообщений в админ-чатах) по видам
+                const acts = own.filter(r => actIds.has(String(r.category_id)));
+                if (!acts.length) return '';
+                const per = ACT_TYPES.map(t => ({ t, n: 0 }));
+                let other = 0;
+                acts.forEach(r => {
+                    const t = actType(String(r.transaction_desc || ''));
+                    if (t) per.find(x => x.t === t).n++;
+                    else other++;
+                });
+                const rows = per.map(x => [x.t.name, x.n]).concat(other ? [['Другие действия', other]] : []);
+                const mx = Math.max(1, ...rows.map(x => x[1]));
+                return `<div class="sec"><h4>Действия по видам · ${acts.length} без сообщений в чатах</h4><div class="card">${rows
+                    .map(([n, c]) => `<div class="vdl-bar${c ? '' : ' muted'}"><span class="nm">${n}</span><span class="tr"><b style="width:${c ? Math.max(3, Math.round((c / mx) * 100)) : 0}%"></b></span><span class="n">${c}</span></div>`)
+                    .join('')}</div></div>`;
+            })()}
             <div class="sec"><h4>По категориям</h4><div class="card">${
                 cats.length
                     ? cats.map(g => `<div class="vdl-bar${g.n ? '' : ' muted'}"><span class="nm" title="${U.esc(nm(g.k))}">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${g.n ? Math.max(3, Math.round((g.n / cmax) * 100)) : 0}%"></b></span><span class="n">${g.n}</span></div>`).join('')
@@ -2833,6 +2860,14 @@ const AdminView = {
         out.querySelector('[data-a="copy"]').onclick = () => {
             const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
             cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
+            const acts = own.filter(r => actIds.has(String(r.category_id)));
+            if (acts.length) {
+                L.push(`Действий без сообщений в чатах: ${acts.length}`);
+                ACT_TYPES.forEach(t => {
+                    const n = acts.filter(r => actType(String(r.transaction_desc || '')) === t).length;
+                    if (n) L.push(`  ${t.name}: ${n}`);
+                });
+            }
             if (days.length > 1) {
                 L.push('По дням:');
                 days.forEach(k => perDay.get(k) && L.push(`  ${fmtDay(k)} — ${perDay.get(k)}`));
