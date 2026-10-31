@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.42
+// @version      1.2.43
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.42
+// @version      1.2.43
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.42';
+const VERSION = '1.2.43';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -731,8 +731,8 @@ const Api = {
     mine: new Set(),
     // сайт принимает только order_by=time (по возрастанию): «-time» отвечает 400
     order: 'time',
-    // записей за запрос: сайт понимает limit (проверено 500); не принял — дальше без него
-    LIMIT: 500,
+    // записей за запрос: сайт понимает limit (проверено до 2000); не принял — дальше без него
+    LIMIT: 2000,
     server() {
         const m = location.pathname.match(/\/gslogs\/(\d+)/);
         return m ? m[1] : Store.get('server', '');
@@ -742,9 +742,9 @@ const Api = {
         this._q = p.catch(() => {});
         return p;
     },
-    // пауза между запросами — 1 с; сайт отвечает 429 («слишком часто») — увеличиваем её, потом постепенно возвращаем
-    BASE_GAP: 1000,
-    gap: 1000,
+    // пауза между запросами — 1,3 с (при 1 с сайт часто отвечает 429); сайт отвечает 429 («слишком часто») — увеличиваем её, потом постепенно возвращаем
+    BASE_GAP: 1300,
+    gap: 1300,
     async _page(params, offset, retried, tries = 0, reordered) {
         const wait = this.gap - (Date.now() - this.last);
         if (wait > 0) await new Promise(r => setTimeout(r, wait));
@@ -771,6 +771,15 @@ const Api = {
         // пауза считается от ответа: долгий ответ не съедает её
         this.last = Date.now();
         if (!r.ok) clearTimeout(timer);
+        if (r.status === 403) {
+            // у учётной записи нет доступа к этой категории — это не выход из логов: вызывающий пропускает категорию
+            const body = await r.text().catch(() => '');
+            if (/прав|категори|permission/i.test(body)) {
+                const e = new Error('нет доступа к этой категории логов');
+                e.noAccess = true;
+                throw e;
+            }
+        }
         if (r.status === 401 || r.status === 403) throw new Error('сайт логов не пускает — войди заново');
         if (!r.ok) {
             // «слишком часто» — ждём дольше и повторяем, дальше запрашиваем реже
@@ -845,7 +854,15 @@ const Api = {
                 if (i > 0 || from) out.capped = true;
                 break;
             }
-            const d = i === 0 && first ? first : await this.page(params, off);
+            let d;
+            try {
+                d = i === 0 && first ? first : await this.page(params, off);
+            } catch (e) {
+                // нет доступа к категории — для вызывающего это «записей нет» с пометкой noAccess
+                if (!e.noAccess) throw e;
+                out.noAccess = true;
+                break;
+            }
             // за неполной (по запомненному размеру) страницей нашлось ещё — значит, страницы у сайта такого размера
             if (i > 0 && d.length && prev !== this.pageSize()) {
                 this.size = prev;
@@ -999,8 +1016,9 @@ const CATS_BUILTIN = {
     0: 'Инвентарь и предметы', 1: 'Штрафы', 2: 'Бизнесы', 3: 'Казино', 4: 'Работы', 5: 'Семья', 6: 'Кейсы и награды', 7: 'Награды и календарь',
     8: 'Аренда и штрафы ДТП', 9: 'Лицензии', 10: 'Банк', 12: 'Благотворительность', 14: 'Магазины 24/7', 16: 'Дома и промокоды', 17: 'Транспорт и парковка',
     19: 'Склад фракций', 20: 'Объявления', 24: 'Фракции', 26: 'Метрики устройства', 27: 'Передача денег', 30: 'Контейнеры', 35: 'Ивенты и квесты',
-    38: 'Подключения / Отключения', 40: 'Жалобы/Вопросы', 41: 'Админ-действия', 42: 'СМС', 45: 'Админ-блокировки', 47: 'Чат: подмена символов, муты',
-    52: 'Семейный чат', 53: 'Чат объявлений', 54: 'Чат', 55: 'Чат', 56: 'Личные сообщения', 57: 'Трейды', 60: 'Blackpass', 65: 'Настройки игры', 71: 'Радио'
+    38: 'Подключения / Отключения', 39: 'Админ-чат', 40: 'Жалобы/Вопросы', 41: 'Админ-действия', 42: 'СМС', 43: 'Админ-объявления', 45: 'Админ-блокировки',
+    46: 'Ограничения возможностей', 47: 'Чат: подмена символов, муты', 48: 'Смена имени', 49: 'Купоны', 52: 'Семейный чат', 53: 'Чат объявлений', 54: 'Чат',
+    55: 'Чат', 56: 'Личные сообщения', 57: 'Трейды', 58: 'Чат ask', 60: 'Blackpass', 65: 'Настройки игры', 71: 'Радио'
 };
 function catName(r) {
     // названия: выученные по таблице сайта + обычный <select>, если он есть
@@ -2509,11 +2527,12 @@ const ADMIN_CATS = [
     // на сайте: «Админ-действия», «Админ-общий-чат», «Админ-чат», «Админ-блокировки», «Админ-супердействия»
     { k: 'act', name: 'Админ действия', re: /^админ[\s-]*действ/i, def: '41' },
     { k: 'gchat', name: 'Админ общий чат', re: /^админ[\s-]*общ\S*[\s-]*чат/i },
-    { k: 'chat', name: 'Админ чат', re: /^админ[\s-]*чат/i },
+    { k: 'chat', name: 'Админ чат', re: /^админ[\s-]*чат/i, def: '39' },
     { k: 'block', name: 'Админ блокировки', re: /^админ[\s-]*блок/i, def: '45' },
     { k: 'super', name: 'Супер наказания', re: /супер[\s-]*(наказ|действ)/i },
     // такой категории может не быть на сервере — считается, только если номер вписан вручную
-    { k: 'report', name: 'Жалобы / обращения', re: null, opt: true }
+    // все записи админа в «Жалобах/Вопросах» (взял, ответил, закрыл, мут репорта) — так считает куратор
+    { k: 'report', name: 'Жалобы/Вопросы', re: /^жалоб/i, def: '40' }
 ];
 // виды админ-действий по тексту записи (формулировки сайта логов); первое совпадение.
 // main — виды, которые куратор считает всегда; остальные показываются ниже, если были
@@ -2528,6 +2547,10 @@ const ACT_TYPES = [
     { k: 'unfreeze', name: 'Разморозка', main: 1, re: /разморозил/i },
     { k: 'repair', name: 'Починка машин', main: 1, re: /починил\s+транспорт|починил/i },
     { k: 'rmute', name: 'Мут репорта', main: 1, re: /действие:\s*выдача\s+мута\s+репорта/i },
+    { k: 'repwork', name: 'Взял обращение', re: /тип:\s*в\s+работе/i },
+    { k: 'repmsg', name: 'Ответ в обращении', re: /тип:\s*сообщение/i },
+    { k: 'pm', name: 'PM игроку', re: /^PM\s+для/i },
+    { k: 'repclose', name: 'Обращение закрыто (мут/выход)', re: /тип:\s*(не\s+)?закрыта/i },
     { k: 'mute', name: 'Мут', re: /выдал\s+мут/i },
     { k: 'kick', name: 'Кик', re: /кикнул/i },
     { k: 'jail', name: 'Деморган', re: /деморган/i },
@@ -2711,7 +2734,8 @@ const AdminView = {
             const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
             const own = [];
             let capped = false;
-            const more = [];
+            const more = [],
+                noAccess = [];
             // каждая запись сайта — одно действие, одинаковые не склеиваем (сайт показывает их все)
             const addRows = (rows, cat) =>
                 rows.forEach(r => {
@@ -2724,6 +2748,11 @@ const AdminView = {
                 const step = `${cat.name} (${i + 1}/${ready.length})`;
                 // как считает куратор: фильтр сайта «ник + категория» за период — число записей
                 const r = await Api.all({ player_name__exact: nick, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}: страница ${p}, записей ${n}…`, gen), null, alive, 0, { strict: true });
+                // нет доступа к категории у этой учётной записи — считаем остальные и пишем об этом
+                if (r.noAccess) {
+                    noAccess.push(cat.name);
+                    continue;
+                }
                 if (!alive()) return;
                 capped = capped || r.capped;
                 if (r.capped) more.push({ cat, params: { player_name__exact: nick, category_id__exact: cat.id, ...range }, next: r.next });
@@ -2752,7 +2781,7 @@ const AdminView = {
                 cats.push(rm);
             }
             this.prog('', gen);
-            this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, repInfo, tab: (this.last && this.last.tab) || 'cat' });
+            this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -2820,7 +2849,7 @@ const AdminView = {
             <div class="k"><small>В среднем в день</small><b>${days.length ? String(+(own.length / days.length).toFixed(1)) : 0}</b></div>
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="amore" data-all="1" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить всё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}</div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="amore" data-all="1" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить всё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}${d.noAccess && d.noAccess.length ? ` · <b style="color:#f5a524">нет доступа: ${d.noAccess.map(U.esc).join(', ')}</b> — эти категории не посчитаны` : ''}</div>
  ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
