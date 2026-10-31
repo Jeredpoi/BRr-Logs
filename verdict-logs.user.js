@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.46
+// @version      1.2.47
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.46
+// @version      1.2.47
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.46';
+const VERSION = '1.2.47';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -235,6 +235,42 @@ const Access = {
     }
 };
 
+// цвет ника: оттенки раздаются по порядку появления ника на странице (золотой угол) — любые два ника
+// заметно различаются; один и тот же ник в таблице и в отчётах одного цвета, пока страница открыта
+const NICK_IDX = new Map();
+const nickHue = n => {
+    const k = String(n).toLowerCase();
+    if (!NICK_IDX.has(k)) NICK_IDX.set(k, NICK_IDX.size);
+    return Math.round((NICK_IDX.get(k) * 137.508 + 200) % 360);
+};
+const NICK_TXT = /\b[A-Z][A-Za-z0-9]{1,20}_[A-Z][A-Za-z0-9]{1,20}\b/g;
+// ники в текстах отчётов — цветом (только текстовые узлы: разметку и поля ввода не трогаем)
+function paintNicks(root) {
+    const skip = '.vdl-nk, input, textarea, select, button, script, style, .vdl-talk, .m-head, .vdl-dd-pop';
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: n => (!n.parentElement || n.parentElement.closest(skip) ? NodeFilter.FILTER_REJECT : /[A-Z][A-Za-z0-9]{1,20}_[A-Z]/.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP)
+    });
+    const nodes = [];
+    while (w.nextNode()) nodes.push(w.currentNode);
+    nodes.forEach(node => {
+        const t = node.nodeValue;
+        const f = document.createDocumentFragment();
+        let i = 0;
+        for (const m of t.matchAll(NICK_TXT)) {
+            f.append(t.slice(i, m.index));
+            const sp = document.createElement('span');
+            sp.className = 'vdl-nk';
+            sp.style.setProperty('--h', nickHue(m[0]));
+            sp.textContent = m[0];
+            f.append(sp);
+            i = m.index + m[0].length;
+        }
+        if (!i) return;
+        f.append(t.slice(i));
+        node.replaceWith(f);
+    });
+}
+
 const Layer = {
     _root: null,
     root() {
@@ -244,6 +280,9 @@ const Layer = {
         document.documentElement.appendChild(host);
         this._root = host.attachShadow({ mode: 'open' });
         this._root.innerHTML = `${uiStyles(this._root)}<style>${LOGS_UI_CSS}</style><div class="v-root"><div class="toasts"></div></div>`;
+        // отчёты дорисовываются частями (вкладки, «Загрузить ещё») — красим ники после каждой перерисовки
+        const el = this._root.querySelector('.v-root');
+        new MutationObserver(U.debounce(() => paintNicks(el), 120)).observe(el, { childList: true, subtree: true });
         return this._root;
     },
     el() {
@@ -595,6 +634,7 @@ const LOGS_UI_CSS = `
 .vdl-sus .chips .vdl-talk:hover { filter: brightness(1.25); }
 .vdl-sus .chips .vdl-tag.off { opacity: .35; }
 .vdl-sus textarea { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.5 ui-monospace, monospace; }
+.vdl-nk { color: hsl(var(--h), 78%, 70%); font-weight: 650; }
 .vdl-tag { font-size: 10.5px; font-weight: 750; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--c, var(--acc)) 18%, transparent); color: color-mix(in srgb, var(--c, var(--acc)) 75%, #fff); border: 1px solid color-mix(in srgb, var(--c, var(--acc)) 35%, transparent); }
 .vdl-more { margin: 6px 0 4px 14px; padding-left: 12px; border-left: 2px solid color-mix(in srgb, var(--acc) 45%, transparent); }
 .vdl-more .vdl-row { padding: 6px 2px; }
@@ -3767,8 +3807,14 @@ const BotView = {
 
 const LogsPage = {
     // настройки подсветки: тип → вкл и базовый цвет. По умолчанию только IP
-    DEF: { ip: { on: true, col: '#3aa0ff' }, nick: { on: false, col: '#2fbf71' }, dev: { on: false, col: '#a970ff' }, money: true },
+    DEF: { ip: { on: true, col: '#3aa0ff' }, nick: { on: true, col: '#2fbf71' }, dev: { on: false, col: '#a970ff' }, money: true },
     cfg() {
+        // цветные ники включаются у всех один раз (раньше подсветка ников была выключена по умолчанию)
+        if (!Store.get('nickCol1', false)) {
+            Store.set('nickCol1', true);
+            const m = Store.get('mark', {});
+            Store.set('mark', Object.assign({}, m, { nick: Object.assign({}, m.nick, { on: true }) }));
+        }
         const c = Store.get('mark', {});
         return {
             ip: Object.assign({}, this.DEF.ip, c.ip),
@@ -4333,7 +4379,9 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
             cells.forEach(td => (by.get(td.dataset.hv) || by.set(td.dataset.hv, []).get(td.dataset.hv)).push(td));
             let idx = 0;
             const hue = new Map();
-            if (c[type].on) [...by.keys()].filter(v => by.get(v).length > 1).forEach(v => hue.set(v, base + this.SPREAD[idx++ % this.SPREAD.length]));
+            // ники — каждый своим цветом (как в отчётах), IP и устройства — повторы оттенками выбранного цвета
+            if (c[type].on && type === 'nick') [...by.keys()].forEach(v => hue.set(v, nickHue(v)));
+            else if (c[type].on) [...by.keys()].filter(v => by.get(v).length > 1).forEach(v => hue.set(v, base + this.SPREAD[idx++ % this.SPREAD.length]));
             by.forEach((tds, val) => {
                 const n = tds.length;
                 const h = hue.get(val);
@@ -4370,7 +4418,13 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
                         pill.style.boxShadow = h != null ? `inset 0 0 0 1px hsla(${h},80%,65%,.6)` : '';
                     }
                     let cnt = td.querySelector('.vdl-cnt');
-                    if (h != null && !cnt) {
+                    // «×N» — только у повторов (ник, встреченный один раз, просто окрашен)
+                    const many = h != null && n > 1;
+                    if (cnt && !many) {
+                        cnt.remove();
+                        cnt = null;
+                    }
+                    if (many && !cnt) {
                         cnt = document.createElement('span');
                         cnt.className = 'vdl-cnt';
 
@@ -4386,7 +4440,7 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
                             this.recolor();
                         };
                         td.appendChild(cnt);
-                    } else if (h == null && cnt) cnt.remove();
+                    }
                     if (cnt) {
                         if (cnt.textContent !== '×' + n) cnt.textContent = '×' + n;
                         const what = { ip: 'Этот IP-адрес', nick: 'Этот ник', dev: 'Это устройство (APPMDID)' }[type];
@@ -4398,7 +4452,7 @@ html body :is(.vs__open-indicator, .vs__clear) { fill: #e8eaee !important; }
                         }
                     }
                     // зачёркиваем, только пока есть ×N — им же отметку и снимают
-                    const mark = c[type].on && isDone && h != null;
+                    const mark = c[type].on && isDone && many;
                     td.classList.toggle('vdl-done', mark);
                     const tr = td.closest('tr');
                     // строку зачёркиваем, если её отметил хоть один вид (иначе выключенные ники снимали отметку IP)
