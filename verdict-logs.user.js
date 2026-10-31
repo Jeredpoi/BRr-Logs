@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.45
+// @version      1.2.46
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.45
+// @version      1.2.46
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.45';
+const VERSION = '1.2.46';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -557,6 +557,9 @@ const LOGS_UI_CSS = `
 .vdl-fab:hover { filter: brightness(1.08); transform: translateY(-1px); }
 .modal.vdl { width: min(860px, 100%); }
 .vdl-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.vdl-period { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-2); }
+.vdl-period[hidden] { display: none; }
+.vdl-period input[type=date] { width: 140px; height: 32px; color-scheme: dark; }
 .vdl-form .inp { flex: 1 1 220px; height: 36px; }
 .vdl-prog { font-size: 12px; color: var(--tx-3); margin: 6px 0 10px; min-height: 16px; }
 .vdl-sum { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
@@ -893,6 +896,23 @@ const Api = {
         return { time__gte: new Date(end - days * 864e5).toISOString(), time__lte: end.toISOString() };
     }
 };
+
+// период аналитики: число дней до «сейчас» или свои даты { a, b } (YYYY-MM-DD, сутки по МСК)
+const Period = {
+    range(p) {
+        if (typeof p === 'number') return Api.range(p);
+        const a = Date.parse(p.a + 'T00:00:00+03:00'),
+            b = Math.min(Date.parse(p.b + 'T00:00:00+03:00') + 864e5 - 1, Date.now());
+        return { time__gte: new Date(a).toISOString(), time__lte: new Date(b).toISOString() };
+    },
+    label(p) {
+        if (typeof p === 'number') return p + ' дн.';
+        const r = s => s.split('-').reverse().join('.');
+        return p.a === p.b ? r(p.a) : `${r(p.a)} — ${r(p.b)}`;
+    },
+    same: (x, y) => JSON.stringify(x) === JSON.stringify(y)
+};
+const mskDate = t => new Date(t + 3 * 3600e3).toISOString().slice(0, 10);
 
 const Geo = {
     MOBILE: /mts|mobile ?telesystems|megafon|beeline|vimpelcom|tele2|t2 mobile|yota|mobile|lte|motiv|win mobile|volna/i,
@@ -1415,7 +1435,8 @@ const Panel = {
               <div class="vdl-form">
                 <div class="seg" data-g="mode"><button data-v="nick">Игрок</button><button data-v="id">ID</button><button data-v="ip">IP</button><button data-v="dev">Устройство</button></div>
                 <input class="inp" data-a="q" placeholder="">
-                <div class="seg" data-g="days"><button data-v="7">7 дн.</button><button data-v="30">30 дн.</button><button data-v="90">90 дн.</button></div>
+                <div class="seg" data-g="days"><button data-v="7">7 дн.</button><button data-v="30">30 дн.</button><button data-v="90">90 дн.</button><button data-v="180">180 дн.</button><button data-v="custom" title="Свои даты (по МСК)">Свой период</button></div>
+                <span class="vdl-period" hidden>с <input class="inp" type="date" data-a="pa"> по <input class="inp" type="date" data-a="pb"></span>
                 <button class="btn pri" data-a="go">${icon('search', 14)}Проверить</button>
               </div>
               <div class="vdl-prog"></div>
@@ -1432,19 +1453,38 @@ const Panel = {
             scrim.querySelectorAll('[data-g="mode"] button').forEach(b => b.classList.toggle('on', b.dataset.v === m));
             q.placeholder = { nick: 'Ник: Ivan_Ivanov', id: 'ID игрока: 1016171', ip: 'IP: 95.57.212.23', dev: 'APPMDID устройства' }[m];
         };
+        const pa = scrim.querySelector('[data-a="pa"]'),
+            pb = scrim.querySelector('[data-a="pb"]'),
+            pbox = scrim.querySelector('.vdl-period');
         const setDays = d => {
             this.days = d;
             Store.set('days', d);
-            scrim.querySelectorAll('[data-g="days"] button').forEach(b => b.classList.toggle('on', +b.dataset.v === d));
+            const custom = typeof d !== 'number';
+            scrim.querySelectorAll('[data-g="days"] button').forEach(b => b.classList.toggle('on', custom ? b.dataset.v === 'custom' : +b.dataset.v === d));
+            pbox.hidden = !custom;
+            if (custom) (pa.value = d.a), (pb.value = d.b);
         };
-        scrim.querySelectorAll('[data-g="mode"] button').forEach(b => (b.onclick = () => setMode(b.dataset.v)));
         // сменил период при открытом отчёте — пересчитываем, чтобы отчёт и вкладки были за один период
+        const changed = was => !Period.same(was, this.days) && q.value.trim() && (this.busy || scrim.querySelector('.vdl-out').children.length) && go();
+        const today = mskDate(Date.now());
+        pa.max = pb.max = today;
+        const onDates = () => {
+            if (!pa.value || !pb.value) return;
+            if (pa.value > pb.value) [pa.value, pb.value] = [pb.value, pa.value];
+            const was = this.days;
+            setDays({ a: pa.value, b: pb.value });
+            changed(was);
+        };
+        pa.onchange = pb.onchange = onDates;
+        scrim.querySelectorAll('[data-g="mode"] button').forEach(b => (b.onclick = () => setMode(b.dataset.v)));
         scrim.querySelectorAll('[data-g="days"] button').forEach(
             b =>
                 (b.onclick = () => {
                     const was = this.days;
-                    setDays(+b.dataset.v);
-                    if (was !== this.days && q.value.trim() && (this.busy || scrim.querySelector('.vdl-out').children.length)) go();
+                    // «Свой»: по умолчанию последние полгода, дальше даты меняются в полях
+                    if (b.dataset.v === 'custom') setDays(typeof was === 'number' ? { a: mskDate(Date.now() - 180 * 864e5), b: today } : was);
+                    else setDays(+b.dataset.v);
+                    changed(was);
                 })
         );
         this._setMode = setMode;
@@ -1548,7 +1588,7 @@ const Panel = {
         const nick0 = nick;
         return this.run(async () => {
             const days = prev ? prev.days : this.days;
-            const base = prev ? prev.base : Object.assign({}, sel, Api.range(days));
+            const base = prev ? prev.base : Object.assign({}, sel, Period.range(days));
             this.prog('Читаю подключения игрока…');
             let rows;
             if (prev) {
@@ -1606,10 +1646,10 @@ const Panel = {
                 <div class="sec"><h4>Сессии (вход / выход)</h4><div class="card" data-l="ses"></div></div>
                 <div class="sec"><h4>Когда играет (по входам, МСК)</h4><div class="card" data-l="hrs"></div></div>
               </div>
-              <div data-tab="money" hidden><div class="sec"><h4>Деньги за ${days} дн.</h4><div class="card" data-l="money"></div></div></div>
-              <div data-tab="act" hidden><div class="sec"><h4>Чем занимался за ${days} дн. (записей по категориям)</h4><div class="card" data-l="cats"></div></div></div>
-              <div data-tab="tr" hidden><div class="sec"><h4>Трейды игрока за ${days} дн.</h4><div class="card" data-l="tr"></div></div></div>
-              <div data-tab="ac" hidden><div class="sec"><h4>Античит за ${days} дн.</h4><div class="card" data-l="ac"></div></div></div>
+              <div data-tab="money" hidden><div class="sec"><h4>Деньги за ${Period.label(days)}</h4><div class="card" data-l="money"></div></div></div>
+              <div data-tab="act" hidden><div class="sec"><h4>Чем занимался за ${Period.label(days)} (записей по категориям)</h4><div class="card" data-l="cats"></div></div></div>
+              <div data-tab="tr" hidden><div class="sec"><h4>Трейды игрока за ${Period.label(days)}</h4><div class="card" data-l="tr"></div></div></div>
+              <div data-tab="ac" hidden><div class="sec"><h4>Античит за ${Period.label(days)}</h4><div class="card" data-l="ac"></div></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
             // платформы входа
             const conRows = rows.filter(r => /подключ/i.test(r.transaction_desc || ''));
@@ -2011,7 +2051,7 @@ const Panel = {
     },
     // период — тот же, что у отчёта (base), а не текущие 7/30/90 дней
     async loadTrades(sel, gen, base) {
-        const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Api.range(this.days);
+        const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Period.range(this.days);
         const params = { ...sel, transaction_desc__ilike: '%TradeID%', ...range };
         const tr = await Api.all(params, 6, (pp, nn) => gen === this._gen && this.prog(`Трейды: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen);
         if (gen === this._gen) this.prog('');
@@ -2061,7 +2101,7 @@ const Panel = {
     },
     // античит: категория с «античит» в названии, иначе — записи со словом «античит» / anticheat
     async loadAc(sel, gen, base) {
-        const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Api.range(this.days);
+        const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Period.range(this.days);
         catName({ category_id: 0 });
         const ids = Object.keys(CATS).filter(k => /^\d+$/.test(k) && CATS_SURE.has(k) && AC_RE.test(CATS[k]));
         // без категории — по тексту («античит», «анти-чит», «Anti Cheat»), но не сообщения игрока в чатах
@@ -2322,7 +2362,7 @@ const Panel = {
                 <div class="k"><small>Записей</small><b>${rows.length}</b></div>
                 <div class="k"><small>Аккаунтов</small><b>${nicks.length}</b></div>
                 <div class="k"><small>Устройств</small><b>${devN}</b></div>
-                <div class="k"><small>Период</small><b style="font-size:15px">${days} дн.</b></div>
+                <div class="k"><small>Период</small><b style="font-size:15px">${Period.label(days)}</b></div>
               </div>
               <div class="sec"><h4>Аккаунты с этого IP</h4><div class="card" data-l="nicks"></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
@@ -2343,7 +2383,7 @@ const Panel = {
         return this.run(async () => {
             const days = into && this.report ? this.report.days : this.days;
             const rows = await Api.all(
-                Object.assign({ category_id__exact: 38, transaction_desc__ilike: `%${dev}%` }, Api.range(days)),
+                Object.assign({ category_id__exact: 38, transaction_desc__ilike: `%${dev}%` }, Period.range(days)),
                 6,
                 (p, n) => this.prog(`Устройство: страница ${p}, записей ${n}…`),
                 null,
@@ -2364,7 +2404,7 @@ const Panel = {
 
     async ipRows(ip, onPage, days) {
         for (const key of ['player_ip__exact', 'player_ip__ilike', 'player_ip']) {
-            const params = Object.assign({ category_id__exact: 38, [key]: ip }, Api.range(days || this.days));
+            const params = Object.assign({ category_id__exact: 38, [key]: ip }, Period.range(days || this.days));
             const first = await Api.page(params, 0);
             const same = r => !r.player_ip || r.player_ip === ip;
             // «похоже» (ilike) находит и 11.2.3.45 для 1.2.3.4 — берём только точный IP
@@ -2425,7 +2465,7 @@ const Panel = {
         if (this.report && this.report.related) this.report.related.set(what + ' ' + key, others.map(x => x.k));
         box.innerHTML = others.length
             ? `<div class="sub" style="margin:2px 0 4px"><span class="vdl-tag" style="--c:#f5a524">возможные твинки: ${others.length}</span></div>`
-            : `<div class="sub" style="margin:4px 0">С этого ${what === 'IP' ? 'IP' : 'устройства'} за ${(this.report && this.report.days) || this.days} дн. заходил только ${U.esc(except)}</div>`;
+            : `<div class="sub" style="margin:4px 0">С этого ${what === 'IP' ? 'IP' : 'устройства'} за ${Period.label((this.report && this.report.days) || this.days)} заходил только ${U.esc(except)}</div>`;
         others.forEach(g => box.appendChild(this.nickRow(g)));
     },
 
@@ -2434,7 +2474,7 @@ const Panel = {
         if (!r) return;
         const L = [];
         if (r.kind === 'nick') {
-            L.push(`Игрок ${r.nick}${r.id ? ` (ID ${r.id})` : ''} — за ${r.days} дн. (сервер ${Api.server()})`);
+            L.push(`Игрок ${r.nick}${r.id ? ` (ID ${r.id})` : ''} — за ${Period.label(r.days)} (сервер ${Api.server()})`);
             L.push(`IP-адресов: ${r.ips.length}, устройств: ${r.devs.length}`);
             if (r.plats && r.plats.length) L.push('Платформы: ' + r.plats.join('; '));
             if (r.ses && r.ses.n) L.push(`Сессий: ${r.ses.n}, в игре ${durHM(r.ses.total)}, в среднем ${durHM(r.ses.avg)}${r.peak >= 0 ? `, чаще всего в ${String(r.peak).padStart(2, '0')}:00 МСК` : ''}`);
@@ -2451,7 +2491,7 @@ const Panel = {
                 r.related.forEach((list, k) => list.length && L.push(`• ${k}: ${list.join(', ')}`));
             }
         } else if (r.kind === 'ip') {
-            L.push(`IP ${r.ip} — за ${r.days} дн. (сервер ${Api.server()})${r.geo ? ` · ${[r.geo.country, r.geo.city].filter(Boolean).join(', ')} · ${r.geo.isp}` : ''}`);
+            L.push(`IP ${r.ip} — за ${Period.label(r.days)} (сервер ${Api.server()})${r.geo ? ` · ${[r.geo.country, r.geo.city].filter(Boolean).join(', ')} · ${r.geo.isp}` : ''}`);
             r.nicks.forEach(g => L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}`));
         }
         navigator.clipboard.writeText(L.join('\n')).then(
