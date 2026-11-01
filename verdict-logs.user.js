@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.48
+// @version      1.2.49
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.48
+// @version      1.2.49
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.48';
+const VERSION = '1.2.49';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -1869,11 +1869,15 @@ const Panel = {
             const a0 = amtOf(d.rows[b0.i]);
             b0.start = Number.isFinite(a0) ? b0.b - a0 : b0.b;
         }
-        const big = ops.slice().sort((a, b) => Math.abs(b.a) - Math.abs(a.a)).slice(0, 10);
+        // вид списка операций: сортировка, фильтр, сколько показано (сохраняется между перерисовками)
+        const V = (d._mv = d._mv || { sort: 'big', f: 'all', n: 30, cats: false, gives: 15 });
+        const flt = ops.filter(x => V.f === 'all' || (V.f === 'in' ? x.a > 0 : x.a < 0));
+        const big = flt.slice().sort(V.sort === 'big' ? (a, b) => Math.abs(b.a) - Math.abs(a.a) : V.sort === 'new' ? (a, b) => b.t - a.t : (a, b) => a.t - b.t);
         // отдал деньги другому игроку: расход, где в тексте «передал/перевёл…» и чужой ник
         const self = new Set(d.rows.map(r => String(r.player_name || '').toLowerCase()).filter(Boolean));
         const toWhom = r => (String(r.transaction_desc || '').match(NICK_RE) || []).find(n => !self.has(n.toLowerCase()));
-        const gives = ops.filter(x => x.a < 0 && GIVE_RE.test(String(x.r.transaction_desc || '')) && toWhom(x.r)).sort((a, b) => b.t - a.t).slice(0, 15);
+        const givesAll = ops.filter(x => x.a < 0 && GIVE_RE.test(String(x.r.transaction_desc || '')) && toWhom(x.r)).sort((a, b) => b.t - a.t);
+        const gives = givesAll.slice(0, V.gives);
         // доходы и расходы по категориям
         const byCat = sign => {
             const m = new Map();
@@ -1884,7 +1888,7 @@ const Panel = {
                 g.n++;
                 m.set(k, g);
             });
-            return [...m.values()].sort((a, b) => Math.abs(b.sum) - Math.abs(a.sum)).slice(0, 6);
+            return [...m.values()].sort((a, b) => Math.abs(b.sum) - Math.abs(a.sum));
         };
         const bars = (list, cls) => {
             const max = list.length ? Math.abs(list[0].sum) : 1;
@@ -1895,7 +1899,10 @@ const Panel = {
                 })
                 .join('');
         };
-        const cIn = byCat(1), cOut = byCat(-1);
+        const cInAll = byCat(1), cOutAll = byCat(-1);
+        const cIn = V.cats ? cInAll : cInAll.slice(0, 6), cOut = V.cats ? cOutAll : cOutAll.slice(0, 6);
+        const moreB = (a, t) => `<button class="btn" data-mv="${a}" style="height:26px;margin:6px 2px">${t}</button>`;
+        const seg = (k, opts) => `<span class="seg" style="display:inline-flex;margin:0 6px 0 0">${opts.map(([v, t]) => `<button data-mk="${k}" data-v="${v}" class="${V[k] === v ? 'on' : ''}" style="height:26px">${t}</button>`).join('')}</span>`;
         this.report.money = { inc, exp, b0: b0 && !d.capped ? b0.start : NaN, b1: b1 && b1.b, n: d.rows.length, capped: d.capped };
         const cls = n => (n > 0 ? 'vdl-pos' : n < 0 ? 'vdl-neg' : '');
         box.innerHTML = `
@@ -1908,9 +1915,35 @@ const Panel = {
           ${ops.length ? '' : '<div class="sub" style="padding:0 2px 8px">Денежных операций за период нет (или сайт не отдаёт сумму)</div>'}
           ${cIn.length ? `<div class="sub" style="padding:8px 2px 2px">Откуда приходили деньги</div>${bars(cIn, 'vdl-pos')}` : ''}
           ${cOut.length ? `<div class="sub" style="padding:8px 2px 2px">На что уходили</div>${bars(cOut, 'vdl-neg')}` : ''}
-          ${gives.length ? `<div class="sub" style="padding:10px 2px 2px">Передал другим игрокам</div>${gives.map(x => `<div class="vdl-row m-give"><div class="main"><div class="ttl"><span class="vdl-neg">${fmtMoney(x.a)}</span><span class="vdl-tag" style="--c:#f5a524">→ ${U.esc(toWhom(x.r))}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(moneyText(String(x.r.transaction_desc || '').slice(0, 160)))}</div></div></div>`).join('')}` : ''}
-          ${big.length ? `<div class="sub" style="padding:10px 2px 2px">Крупные операции</div>${big.map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="${cls(x.a)}">${fmtMoney(x.a)}</span><span class="vdl-tag">${U.esc(catLabel(x.r.category_id, d.rows).name)}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(moneyText(String(x.r.transaction_desc || '').slice(0, 160)))}</div></div></div>`).join('')}` : ''}
+          ${cInAll.length > 6 || cOutAll.length > 6 ? moreB('cats', V.cats ? 'Свернуть категории' : `Все категории (${cInAll.length + cOutAll.length})`) : ''}
+          ${gives.length ? `<div class="sub" style="padding:10px 2px 2px">Передал другим игрокам</div>${gives.map(x => `<div class="vdl-row m-give"><div class="main"><div class="ttl"><span class="vdl-neg">${fmtMoney(x.a)}</span><span class="vdl-tag" style="--c:#f5a524">→ ${U.esc(toWhom(x.r))}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(moneyText(String(x.r.transaction_desc || '').slice(0, 160)))}</div></div></div>`).join('')}${givesAll.length > gives.length ? moreB('gives', `Показать ещё (осталось ${givesAll.length - gives.length})`) : ''}` : ''}
+          ${ops.length ? `<div class="sub" style="padding:10px 2px 6px">Все операции · ${flt.length}</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 6px">${seg('f', [['all', 'Все'], ['in', 'Пришло'], ['out', 'Ушло']])}${seg('sort', [['big', 'Крупные'], ['new', 'Новые'], ['old', 'Старые']])}</div>${big.slice(0, V.n).map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="${cls(x.a)}">${fmtMoney(x.a)}</span><span class="vdl-tag">${U.esc(catLabel(x.r.category_id, d.rows).name)}</span></div><div class="sub">${fmtDate(x.t)} · ${U.esc(moneyText(String(x.r.transaction_desc || '').slice(0, 160)))}</div></div></div>`).join('')}${big.length > V.n ? moreB('ops', `Показать ещё 50 (осталось ${big.length - V.n})`) + moreB('opsall', 'Показать все') : ''}` : ''}
           ${this.capNote(d)}`;
+        const redraw = () => {
+            // перерисовка не сбрасывает прокрутку окна
+            const sc = box.closest('.pane'), top = sc && sc.scrollTop;
+            this.renderMoney(box, d);
+            if (sc) sc.scrollTop = top;
+        };
+        box.querySelectorAll('[data-mv]').forEach(
+            b =>
+                (b.onclick = () => {
+                    const a = b.dataset.mv;
+                    if (a === 'cats') V.cats = !V.cats;
+                    else if (a === 'gives') V.gives += 50;
+                    else if (a === 'ops') V.n += 50;
+                    else if (a === 'opsall') V.n = Infinity;
+                    redraw();
+                })
+        );
+        box.querySelectorAll('[data-mk]').forEach(
+            b =>
+                (b.onclick = () => {
+                    V[b.dataset.mk] = b.dataset.v;
+                    V.n = 30;
+                    redraw();
+                })
+        );
         this.renameButtons(box, () => this.renderMoney(box, d), d.rows);
     },
     // ✎ у категории без названия: подписать прямо в списке
