@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.49
+// @version      1.2.50
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.49
+// @version      1.2.50
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.49';
+const VERSION = '1.2.50';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -786,10 +786,49 @@ const Api = {
         const m = location.pathname.match(/\/gslogs\/(\d+)/);
         return m ? m[1] : Store.get('server', '');
     },
-    page(params, offset) {
-        const p = (this._q || Promise.resolve()).then(() => this._page(params, offset));
-        this._q = p.catch(() => {});
-        return p;
+    // bg() → true: фоновый запрос (вкладка, которую сейчас не смотрят) — уступает очередь всем остальным
+    page(params, offset, bg) {
+        return this.run(() => this._page(params, offset), bg);
+    },
+    // очередь запросов к сайту по одному: сначала то, что нужно на открытой странице и по кнопкам, фоновые — потом
+    _jobs: [],
+    _fgAt: 0,
+    run(fn, bg) {
+        return new Promise((res, rej) => {
+            this._jobs.push({ fn, bg, res, rej });
+            this._pump();
+        });
+    },
+    async _pump() {
+        if (this._busy) return;
+        this._busy = true;
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        try {
+            while (this._jobs.length) {
+                // пауза между запросами — до выбора: обычная загрузка успевает поставить следующую страницу
+                const wait = this.gap - (Date.now() - this.last);
+                if (wait > 0) await sleep(wait);
+                let i = this._jobs.findIndex(j => !(j.bg && j.bg()));
+                if (i < 0) {
+                    // остались только фоновые, а обычная загрузка только что шла — ждём, не попросит ли она ещё
+                    if (Date.now() - this._fgAt < 700) {
+                        await sleep(150);
+                        continue;
+                    }
+                    i = 0;
+                }
+                const j = this._jobs.splice(i, 1)[0];
+                const fg = !(j.bg && j.bg());
+                try {
+                    j.res(await j.fn());
+                } catch (e) {
+                    j.rej(e);
+                }
+                if (fg) this._fgAt = Date.now();
+            }
+        } finally {
+            this._busy = false;
+        }
     },
     // пауза между запросами — 1,3 с (при 1 с сайт часто отвечает 429); сайт отвечает 429 («слишком часто») — увеличиваем её, потом постепенно возвращаем
     BASE_GAP: 1300,
@@ -890,6 +929,7 @@ const Api = {
     // first — уже полученная первая страница (чтобы не качать её второй раз);
     // alive() — окно ещё открыто: иначе листание прекращается и не занимает очередь
     // from — с какой записи продолжить (out.next прошлого вызова): «Загрузить ещё» не качает уже загруженное заново
+    // opt.bg — фоновая загрузка (см. page)
     // opt.strict — листать до пустой страницы: короткая страница посреди списка (сайт не всегда отдаёт limit целиком)
     // не обрывает подсчёт; для админ-действий, где важна каждая запись
     async all(params, maxPages, onPage, first, alive, from = 0, opt = {}) {
@@ -905,7 +945,7 @@ const Api = {
             }
             let d;
             try {
-                d = i === 0 && first ? first : await this.page(params, off);
+                d = i === 0 && first ? first : await this.page(params, off, opt.bg);
             } catch (e) {
                 // нет доступа к категории — для вызывающего это «записей нет» с пометкой noAccess
                 if (!e.noAccess) throw e;
@@ -1287,7 +1327,7 @@ const CatLearn = {
         this.fails = this.fails || {};
         if ((this.fails[url] = (this.fails[url] || 0) + 1) >= 2) this.tried.add(url);
         const rows = await new Promise((res, rej) => {
-            const p = (Api._q || Promise.resolve()).then(async () => {
+            const p = Api.run(async () => {
                 Api.mine.add(url);
                 const wait = Api.gap - (Date.now() - Api.last);
                 if (wait > 0) await new Promise(res2 => setTimeout(res2, wait));
@@ -1303,7 +1343,6 @@ const CatLearn = {
                     clearTimeout(timer);
                 }
             });
-            Api._q = p.catch(() => {});
             p.then(res, rej);
         });
         if (!Array.isArray(rows)) {
@@ -1740,10 +1779,10 @@ const Panel = {
             const tabs = o.querySelector('[data-g="tab"]');
             // load — первая загрузка, draw — отрисовка, more — следующие страницы (share — вкладка на тех же данных)
             const T = {
-                money: { load: () => this.loadAll(base, gen), draw: (box, d) => this.renderMoney(box, d), more: d => this.moreAll(base, gen, d), share: 'act' },
-                act: { load: () => this.loadAll(base, gen), draw: (box, d) => this.renderCats(box, d), more: d => this.moreAll(base, gen, d), share: 'money' },
-                tr: { load: () => this.loadTrades(sel, gen, base), draw: (box, l) => this.renderTrades(box, l), more: l => this.moreTrades(l, gen) },
-                ac: { load: () => this.loadAc(sel, gen, base), draw: (box, d) => this.renderAc(box, d), more: d => this.moreAc(d, gen) }
+                money: { load: bg => this.loadAll(base, gen, bg), draw: (box, d) => this.renderMoney(box, d), more: d => this.moreAll(base, gen, d), share: 'act' },
+                act: { load: bg => this.loadAll(base, gen, bg), draw: (box, d) => this.renderCats(box, d), more: d => this.moreAll(base, gen, d), share: 'money' },
+                tr: { load: bg => this.loadTrades(sel, gen, base, bg), draw: (box, l) => this.renderTrades(box, l), more: l => this.moreTrades(l, gen) },
+                ac: { load: bg => this.loadAc(sel, gen, base, bg), draw: (box, d) => this.renderAc(box, d), more: d => this.moreAc(d, gen) }
             };
             const boxOf = t => o.querySelector(`[data-tab="${t}"] .card`);
             const paint = (t, box, d) => {
@@ -1793,39 +1832,54 @@ const Panel = {
                 }
             };
             const loaders = {};
-            Object.keys(T).forEach(t => (loaders[t] = box => T[t].load().then(d => paint(t, box, d))));
+            // вкладка грузится в фоне, пока её не открыли («Доходы» и «Активность» — одни данные)
+            const lane = t => () => !(T[t].share ? [t, T[t].share] : [t]).includes(this.tab);
+            Object.keys(T).forEach(t => (loaders[t] = box => T[t].load(lane(t)).then(d => paint(t, box, d))));
             this._moreBusy = false;
             const started = {};
+            const start = t => {
+                if (!loaders[t] || started[t]) return started[t];
+                const box = o.querySelector(`[data-tab="${t}"] .card`);
+                box.innerHTML = '<div class="vdl-row"><div class="main sub">Загружаю…</div></div>';
+                return (started[t] = loaders[t](box).catch(err => {
+                    if (gen !== this._gen) return;
+                    started[t] = false;
+                    if (this.tab === t) this.prog('');
+                    box.innerHTML = `<div class="vdl-row"><div class="main sub">Не загрузилось: ${U.esc(err.message)}</div><div class="vdl-btns"><button class="btn" data-a="retry">Повторить</button></div></div>`;
+                    box.querySelector('[data-a="retry"]').onclick = () => show(t);
+                }));
+            };
             const show = t => {
                 this.tab = t;
                 tabs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === t));
                 o.querySelectorAll('[data-tab]').forEach(x => (x.hidden = x.dataset.tab !== t));
-                if (!loaders[t] || started[t]) return;
-                started[t] = true;
-                const box = o.querySelector(`[data-tab="${t}"] .card`);
-                box.innerHTML = '<div class="vdl-row"><div class="main sub">Загружаю…</div></div>';
-                loaders[t](box).catch(err => {
-                    if (gen !== this._gen) return;
-                    started[t] = false;
-                    this.prog('');
-                    box.innerHTML = `<div class="vdl-row"><div class="main sub">Не загрузилось: ${U.esc(err.message)}</div><div class="vdl-btns"><button class="btn" data-a="retry">Повторить</button></div></div>`;
-                    box.querySelector('[data-a="retry"]').onclick = () => show(t);
-                });
+                start(t);
             };
             tabs.querySelectorAll('button').forEach(b => (b.onclick = () => show(b.dataset.v)));
             show(loaders[this.tab] || this.tab === 'in' ? this.tab : 'in');
+            // остальные вкладки — потихоньку в фоне, по одной; открытая страница и кнопки идут вне очереди
+            (async () => {
+                for (const t of Object.keys(T)) {
+                    if (gen !== this._gen) return;
+                    await start(t);
+                }
+            })();
             o.querySelectorAll('[data-a="inmore"]').forEach(im => (im.onclick = () => this.player(sel, nick0, id, Object.assign({}, inMore, { all: !!im.dataset.all }))));
             o.querySelector('[data-a="copy"]').onclick = () => this.copy();
         });
     },
 
     // все записи игрока за период (до 500) — одни на «Доходы» и «Активность»
-    loadAll(base, gen) {
+    // bg() → true: грузится в фоне — без строки прогресса и с уступкой очереди
+    fgOk(gen, bg) {
+        return gen === this._gen && !(bg && bg());
+    },
+    loadAll(base, gen, bg) {
         const key = gen + '|' + JSON.stringify(base);
         if (this._all && this._all.key === key) return this._all.p;
         const LIM = 10;
-        const p = Api.all(base, LIM, (pg, n) => gen === this._gen && this.prog(`Все записи игрока: страница ${pg}, записей ${n}…`), null, () => gen === this._gen).then(rows => {
-            if (gen === this._gen) this.prog('');
+        const p = Api.all(base, LIM, (pg, n) => this.fgOk(gen, bg) && this.prog(`Все записи игрока: страница ${pg}, записей ${n}…`), null, () => gen === this._gen, 0, { bg }).then(rows => {
+            if (this.fgOk(gen, bg)) this.prog('');
             return { rows, capped: rows.capped, next: rows.next };
         });
         this._all = { key, p };
@@ -2123,11 +2177,11 @@ const Panel = {
         );
     },
     // период — тот же, что у отчёта (base), а не текущие 7/30/90 дней
-    async loadTrades(sel, gen, base) {
+    async loadTrades(sel, gen, base, bg) {
         const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Period.range(this.days);
         const params = { ...sel, transaction_desc__ilike: '%TradeID%', ...range };
-        const tr = await Api.all(params, 6, (pp, nn) => gen === this._gen && this.prog(`Трейды: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen);
-        if (gen === this._gen) this.prog('');
+        const tr = await Api.all(params, 6, (pp, nn) => this.fgOk(gen, bg) && this.prog(`Трейды: страница ${pp}, записей ${nn}…`), null, () => gen === this._gen, 0, { bg });
+        if (this.fgOk(gen, bg)) this.prog('');
         return this.tradeList(tr, sel, params);
     },
     async moreTrades(old, gen) {
@@ -2173,7 +2227,7 @@ const Panel = {
         return p;
     },
     // античит: категория с «античит» в названии, иначе — записи со словом «античит» / anticheat
-    async loadAc(sel, gen, base) {
+    async loadAc(sel, gen, base, bg) {
         const range = base ? { time__gte: base.time__gte, time__lte: base.time__lte } : Period.range(this.days);
         catName({ category_id: 0 });
         const ids = Object.keys(CATS).filter(k => /^\d+$/.test(k) && CATS_SURE.has(k) && AC_RE.test(CATS[k]));
@@ -2181,13 +2235,13 @@ const Panel = {
         const qs = ids.length ? ids.map(id => ({ category_id__exact: id })) : [{ transaction_desc__ilike: '%анти%чит%' }, { transaction_desc__ilike: '%anti%cheat%' }];
         const keep = x => ids.length || (AC_RE.test(String(x.transaction_desc || '')) && !/чат|chat/i.test(catName(x)));
         const d = { rows: [], seen: new Set(), keep, capped: false, more: qs.map(q => ({ params: { ...sel, ...q, ...range }, next: 0 })) };
-        return this.moreAc(d, gen, true);
+        return this.moreAc(d, gen, true, bg);
     },
     // first — первая загрузка; дальше продолжаем только запросы, упёршиеся в предел страниц
-    async moreAc(d, gen, first) {
+    async moreAc(d, gen, first, bg) {
         const left = [];
         for (const m of d.more) {
-            const r = await Api.all(m.params, 10, (pp, nn) => gen === this._gen && this.prog(`${first ? 'Античит' : 'Ещё античит'}: страница ${pp}, записей ${d.rows.length + nn}…`), null, first ? () => gen === this._gen : this.moreAlive(gen), m.next);
+            const r = await Api.all(m.params, 10, (pp, nn) => this.fgOk(gen, bg) && this.prog(`${first ? 'Античит' : 'Ещё античит'}: страница ${pp}, записей ${d.rows.length + nn}…`), null, first ? () => gen === this._gen : this.moreAlive(gen), m.next, { bg });
             if (gen !== this._gen) return null;
             if (r.capped || this._moreStop) left.push(Object.assign(m, { next: r.next, capped: r.capped }));
             r.forEach(x => {
@@ -2196,7 +2250,7 @@ const Panel = {
                 if (!d.seen.has(k)) d.seen.add(k) && d.rows.push(x);
             });
         }
-        if (gen === this._gen) this.prog('');
+        if (this.fgOk(gen, bg)) this.prog('');
         d.more = left;
         d.capped = left.length > 0;
         d.rows.sort((a, b) => new Date(b.time) - new Date(a.time));
