@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.47
+// @version      1.2.48
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.47
+// @version      1.2.48
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.47';
+const VERSION = '1.2.48';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2635,6 +2635,7 @@ const ADMIN_CATS = [
 ];
 // виды админ-действий по тексту записи (формулировки сайта логов); первое совпадение.
 // main — виды, которые куратор считает всегда; остальные показываются ниже, если были
+// skip — не админ-действия (куратор их не считает): в число не входят, показываются справкой
 const ACT_TYPES = [
     { k: 'spec', name: 'Слежка', main: 1, re: /начал\s+следить\s+за/i },
     { k: 'specend', name: 'Выход со слежки', main: 1, re: /закончил\s+следить/i },
@@ -2646,7 +2647,7 @@ const ACT_TYPES = [
     { k: 'unfreeze', name: 'Разморозка', main: 1, re: /разморозил/i },
     { k: 'repair', name: 'Починка машин', main: 1, re: /починил\s+транспорт|починил/i },
     { k: 'rmute', name: 'Мут репорта', main: 1, re: /действие:\s*выдача\s+мута\s+репорта/i },
-    { k: 'repwork', name: 'Взял обращение', re: /тип:\s*в\s+работе/i },
+    { skip: 1, k: 'repwork', name: 'Взял обращение', re: /тип:\s*в\s+работе/i },
     { k: 'repmsg', name: 'Ответ в обращении', re: /тип:\s*сообщение/i },
     { k: 'pm', name: 'PM игроку', re: /^PM\s+для/i },
     { k: 'repclose', name: 'Обращение закрыто (мут/выход)', re: /тип:\s*(не\s+)?закрыта/i },
@@ -2659,13 +2660,13 @@ const ACT_TYPES = [
     { k: 'tpto', name: 'ТП к игроку', re: /телепортировался\s+к/i },
     { k: 'spawn', name: 'Спавн игрока', re: /заспавнил/i },
     { k: 'slap', name: 'Подбросил', re: /подбросил/i },
-    { k: 'stats', name: 'Смотрел статистику', re: /статистик/i },
+    { skip: 1, k: 'stats', name: 'Смотрел статистику', re: /статистик/i },
     { k: 'hp', name: 'Выдал здоровье', re: /уровень\s+здоровья/i },
     { k: 'event', name: 'Мероприятия', re: /мероприяти|победител/i },
-    { k: 'godmode', name: 'Бессмертие', re: /бессмерти/i },
-    { k: 'adminlist', name: 'Смотрел список админов', re: /список\s+администрации/i },
-    { k: 'auth', name: 'Авторизация', re: /авторизовался/i },
-    { k: 'tpmenu', name: 'Меню телепортов', re: /меню\s+телепортов/i }
+    { skip: 1, k: 'godmode', name: 'Бессмертие', re: /бессмерти/i },
+    { skip: 1, k: 'adminlist', name: 'Смотрел список админов', re: /список\s+администрации/i },
+    { skip: 1, k: 'auth', name: 'Авторизация', re: /авторизовался/i },
+    { skip: 1, k: 'tpmenu', name: 'Меню телепортов', re: /меню\s+телепортов/i }
 ];
 const actType = t => ACT_TYPES.find(x => x.re.test(t)) || null;
 const AdminView = {
@@ -2834,12 +2835,18 @@ const AdminView = {
             const own = [];
             let capped = false;
             const more = [],
-                noAccess = [];
+                noAccess = [],
+                skipped = [];
             // каждая запись сайта — одно действие, одинаковые не склеиваем (сайт показывает их все)
             const addRows = (rows, cat) =>
                 rows.forEach(r => {
                     // только запрошенная категория, даже если сайт вернул лишнее
                     if (r.category_id != null && String(r.category_id) !== String(cat.id)) return;
+                    // меню телепортов, авторизация, список админов, бессмертие, статистика, «взял обращение» — не действия
+                    if (!/chat/.test(cat.k || '')) {
+                        const t = actType(String(r.transaction_desc || ''));
+                        if (t && t.skip) return void skipped.push(r);
+                    }
                     // запись сайта могла прийти без номера категории — проставляем тот, по которому искали
                     own.push(r.category_id == null ? Object.assign({}, r, { category_id: cat.id }) : r);
                 });
@@ -2880,7 +2887,7 @@ const AdminView = {
                 cats.push(rm);
             }
             this.prog('', gen);
-            this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
+            this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, repInfo, noAccess, skipped, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -2967,17 +2974,21 @@ const AdminView = {
                 const mx = Math.max(1, ...rows.map(x => x[1]));
                 // должность — из последнего «Авторизовался как …»
                 const auth = acts
+                    .concat(d.skipped || [])
                     .filter(r => /авторизовался\s+как/i.test(String(r.transaction_desc || '')))
                     .sort((x, y) => new Date(y.time) - new Date(x.time))[0];
                 const role = auth ? String(auth.transaction_desc).replace(/^.*авторизовался\s+как\s*/i, '').trim() : '';
                 const ri = d.repInfo;
+                const sk = ACT_TYPES.filter(t => t.skip)
+                    .map(t => [t.name, (d.skipped || []).filter(r => actType(String(r.transaction_desc || '')) === t).length])
+                    .filter(x => x[1]);
                 return `<div class="sec"><h4>Действия по видам · ${acts.length} без сообщений в чатах${role ? ` · ${U.esc(role)}` : ''}</h4><div class="card">${rows
                     .map(([n, c]) => `<div class="vdl-bar${c ? '' : ' muted'}"><span class="nm">${n}</span><span class="tr"><b style="width:${c ? Math.max(3, Math.round((c / mx) * 100)) : 0}%"></b></span><span class="n">${c}</span></div>`)
                     .join('')}${
                     ri && ri.all
                         ? `<div class="sub" style="padding:8px 2px 2px">В жалобах/вопросах всего ${ri.all} записей; в число вошли закрытия и муты репорта. Не входят: ответов ${ri.replies}, PM ${ri.pm}, «взял в работу» ${ri.work}.</div>`
                         : ''
-                }</div></div>`;
+                }${sk.length ? `<div class="sub" style="padding:8px 2px 2px">Не считаются действиями: ${sk.map(([n, c]) => `${U.esc(n.toLowerCase())} ${c}`).join(', ')}.</div>` : ''}</div></div>`;
             })()}
             <div class="sec"><h4>По категориям</h4><div class="card">${
                 cats.length
