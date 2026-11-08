@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.51
+// @version      1.2.52
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.51
+// @version      1.2.52
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.51';
+const VERSION = '1.2.52';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2944,27 +2944,25 @@ const AdminView = {
                 if (r.capped) more.push({ cat, params: { player_name__exact: nick, category_id__exact: cat.id, ...range }, next: r.next });
                 addRows(r, cat);
             }
-            // мут репорта («Действие: выдача мута репорта») и закрытие обращения пишутся в «Жалобы/Вопросы» — куратор считает их действиями;
-            // берём только эти записи, если сама категория жалоб не считается целиком
+            // «Жалобы/Вопросы» — не админ-категория: куратор считает только категории с «Админ» в названии.
+            // Закрытия и муты репорта оттуда показываем справкой, в число не входят (иначе перебор на сотни)
             let repInfo = null;
             const repCat = this.known().find(x => /жалоб/i.test(x.name)) || { id: '40' };
             if (repCat && !ready.some(c => String(c.id) === String(repCat.id))) {
-                const rm = { k: 'rmute', name: 'Жалобы: закрытия и муты репорта', id: repCat.id };
                 // все записи админа в жалобах за период: считаются закрытия и муты репорта, остальное — для справки
                 const r = await Api.all({ player_name__exact: nick, category_id__exact: repCat.id, ...range }, 60, (p, n) => this.prog(`Жалобы/вопросы: страница ${p}, записей ${n}…`, gen), null, alive, 0, { strict: true });
                 if (!alive()) return;
                 const RM = /действие:\s*выдача\s+мута\s+репорта/i,
                     CL = /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i;
-                addRows(r.filter(x => RM.test(String(x.transaction_desc || '')) || CL.test(String(x.transaction_desc || ''))), rm);
                 const T = x => String(x.transaction_desc || '');
                 repInfo = {
                     all: r.length,
+                    closes: r.filter(x => CL.test(T(x))).length,
+                    rmutes: r.filter(x => RM.test(T(x))).length,
                     replies: r.filter(x => /тип:\s*сообщение/i.test(T(x))).length,
                     pm: r.filter(x => /^PM\s+для/i.test(T(x))).length,
                     work: r.filter(x => /тип:\s*в\s+работе/i.test(T(x))).length
                 };
-                capped = capped || r.capped;
-                cats.push(rm);
             }
             this.prog('', gen);
             this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
@@ -3062,7 +3060,7 @@ const AdminView = {
                     .map(([n, c]) => `<div class="vdl-bar${c ? '' : ' muted'}"><span class="nm">${n}</span><span class="tr"><b style="width:${c ? Math.max(3, Math.round((c / mx) * 100)) : 0}%"></b></span><span class="n">${c}</span></div>`)
                     .join('')}${
                     ri && ri.all
-                        ? `<div class="sub" style="padding:8px 2px 2px">В жалобах/вопросах всего ${ri.all} записей; в число вошли закрытия и муты репорта. Не входят: ответов ${ri.replies}, PM ${ri.pm}, «взял в работу» ${ri.work}.</div>`
+                        ? `<div class="sub" style="padding:8px 2px 2px">Для справки, в число не входят (категория «Жалобы/Вопросы» не админская): закрыл обращений ${ri.closes}, мутов репорта ${ri.rmutes}, ответов ${ri.replies}, PM ${ri.pm}, «взял в работу» ${ri.work}; всего записей ${ri.all}.</div>`
                         : ''
                 }</div></div>`;
             })()}
