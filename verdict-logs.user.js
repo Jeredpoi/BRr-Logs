@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.56
+// @version      1.2.57
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.56
+// @version      1.2.57
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.56';
+const VERSION = '1.2.57';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3617,7 +3617,7 @@ const CompareView = {
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
             <div class="m-head"><span class="vic" style="--c:#2fbf71;width:34px;height:34px;border-radius:10px">${icon('users', 16)}</span>
-              <div><div class="m-title">Сравнение</div><div class="m-sub">Два игрока или админа · общие IP и устройства · расстояние между IP · передачи</div></div>
+              <div><div class="m-title">Сравнение</div></div>
               <span style="flex:1"></span><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
               <div class="vdl-cmp-form">${side('a', 'Первый')}${side('b', 'Второй')}</div>
@@ -3796,9 +3796,7 @@ const CompareView = {
         const admTag = s =>
             s.adm
                 ? `<span class="vdl-tag" style="--c:#7a5cff" title="Записи в «Админ действиях» за сегодня (МСК), последняя ${U.esc(fmtDate(s.adm.last))}">админ · сегодня ${s.adm.n}${s.adm.nick && s.nicks.length > 1 ? ' (' + U.esc(s.adm.nick) + ')' : ''}</span>`
-                : s.adm === false
-                  ? '<span class="vdl-tag" style="--c:#8b8f9a" title="За сегодня (МСК) в «Админ действиях» записей нет">не админ</span>'
-                  : '<span class="vdl-tag" style="--c:#8b8f9a" title="Номер категории «Админ действия» не найден">админ ли — не проверено</span>';
+                : '';
         const card = (s, t) => `<div class="card" style="padding:12px 14px"><div class="sub" style="font-weight:700">${t} ${admTag(s)}</div><div class="ttl" style="margin:4px 0">${U.esc(who(s))}</div>
             <div class="sub">ID: ${U.esc(s.ids.join(', ') || '—')} · IP: ${s.ips.length} · устройств: ${s.devs.length} · сессий: ${s.ses.length}</div>
             <div class="sub">${s.ips[0] ? `основной IP ${U.esc(s.ips[0].k)} — ${place(s.ips[0].k)}` : 'входов за период нет'}</div></div>`;
@@ -3814,33 +3812,38 @@ const CompareView = {
             <div class="k"><small>Между основными IP</small><b style="font-size:15px">${mainKm == null ? '—' : mainKm === 0 ? 'один IP' : '≈ ' + mainKm + ' км'}</b></div>
             <div class="k"><small>Ближайшие IP</small><b style="font-size:15px">${nearest ? (nearest.km === 0 ? 'один IP' : '≈ ' + nearest.km + ' км') : '—'}</b></div>
           </div>
-          <div class="sec"><h4>Расстояние между IP (ближайшие пары)</h4><div class="card">${
+          <div class="sec"><h4>Расстояние между IP</h4><div class="card">${
               withKm.length
                   ? withKm
                         .slice(0, 12)
                         .map(p => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-mono">${U.esc(p.a)}</span> ↔ <span class="vdl-mono">${U.esc(p.b)}</span> ${kmTag(p.km, p.a, p.b)}</div><div class="sub">${place(p.a)} ↔ ${place(p.b)}</div></div></div>`)
                         .join('') + (withKm.length > 12 ? `<div class="sub" style="padding:6px 2px">Показаны 12 ближайших из ${withKm.length} пар</div>` : '')
-                  : '<div class="vdl-row"><div class="main sub">Нет координат IP — сервис определения места не ответил</div></div>'
+                  : '<div class="vdl-row"><div class="main sub">Место IP не определилось</div></div>'
           }</div></div>
-          <div class="sec"><h4>Разброс внутри каждого (самые далёкие свои IP)</h4><div class="card">${[
-              [A, spA, 'Первый'],
-              [B, spB, 'Второй']
-          ]
-              .map(([s, sp, t]) => `<div class="vdl-row"><div class="main"><div class="ttl">${t}: ${U.esc(who(s))} ${sp ? kmTag(sp.km, sp.a, sp.b) : '<span class="muted">один IP или нет координат</span>'}</div>${sp ? `<div class="sub"><span class="vdl-mono">${U.esc(sp.a)}</span> ${place(sp.a)} ↔ <span class="vdl-mono">${U.esc(sp.b)}</span> ${place(sp.b)}</div>` : ''}</div></div>`)
-              .join('')}</div></div>
+          ${
+              spA || spB
+                  ? `<div class="sec"><h4>Самые далёкие свои IP</h4><div class="card">${[
+                        [A, spA],
+                        [B, spB]
+                    ]
+                        .filter(([, sp]) => sp)
+                        .map(([s, sp]) => `<div class="vdl-row"><div class="main"><div class="ttl">${U.esc(who(s))} ${kmTag(sp.km, sp.a, sp.b)}</div><div class="sub"><span class="vdl-mono">${U.esc(sp.a)}</span> ${place(sp.a)} ↔ <span class="vdl-mono">${U.esc(sp.b)}</span> ${place(sp.b)}</div></div></div>`)
+                        .join('')}</div></div>`
+                  : ''
+          }
           ${
               comIp.length || comDev.length
                   ? `<div class="sec"><h4>Совпадения</h4><div class="card">${comIp.map(ip => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#f5a524">IP</span><span class="vdl-mono">${U.esc(ip)}</span></div><div class="sub">${place(ip)}</div></div><div class="vdl-btns"><button class="btn" data-ip="${U.esc(ip)}">IP</button></div></div>`).join('')}${comDev.map(dv => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#e5484d">устройство</span><span class="vdl-mono">${U.esc(dv)}</span></div></div></div>`).join('')}</div></div>`
                   : ''
           }
-          <div class="sec"><h4>Передачи, трейды и упоминания друг друга</h4><div class="card">${
+          <div class="sec"><h4>Друг о друге в логах</h4><div class="card">${
               tx.length
                   ? `<div class="sub" style="padding:6px 2px">${tx.length} ${plural(tx.length, 'запись', 'записи', 'записей')}${money ? ` · деньгами ${fmtNum(money)}` : ''}</div>` +
                     tx
                         .slice(0, 40)
                         .map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(x))}</span><span class="sub" style="margin:0">${fmtDate(x.time)} · ${U.esc(x._from)} → ${U.esc(x._to)}</span>${Number.isFinite(amtOf(x)) ? `<b class="${amtOf(x) < 0 ? 'vdl-neg' : 'vdl-pos'}">${fmtMoney(amtOf(x))}</b>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(String(x.transaction_desc || '').slice(0, 200)))}</div></div></div>`)
                         .join('')
-                  : '<div class="vdl-row"><div class="main sub">В записях одного нет ника другого</div></div>'
+                  : '<div class="vdl-row"><div class="main sub">Нет</div></div>'
           }</div></div>
           <div class="btns" style="margin-top:12px"><span style="flex:1"></span>${A.nicks[0] ? `<button class="btn" data-an="${U.esc(A.nicks[0].k)}">${icon('search', 13)}${U.esc(A.nicks[0].k)}</button>` : ''}${B.nicks[0] ? `<button class="btn" data-an="${U.esc(B.nicks[0].k)}">${icon('search', 13)}${U.esc(B.nicks[0].k)}</button>` : ''}<button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
         out.querySelectorAll('[data-an]').forEach(b => (b.onclick = () => Panel.open('nick', b.dataset.an, { stack: true })));
@@ -3852,7 +3855,7 @@ const CompareView = {
                 `Общих IP: ${comIp.length}${comIp.length ? ' (' + comIp.join(', ') + ')' : ''}, общих устройств: ${comDev.length}`,
                 `Между основными IP: ${mainKm == null ? 'неизвестно' : mainKm === 0 ? 'один IP' : '≈' + mainKm + ' км'}${nearest ? `; ближайшие IP ${nearest.a} и ${nearest.b} — ≈${nearest.km} км` : ''}`,
                 `Разброс своих IP: первый ${spA ? '≈' + spA.km + ' км' : '—'}, второй ${spB ? '≈' + spB.km + ' км' : '—'}`,
-                `Админ: первый — ${admTxt(A)}, второй — ${admTxt(B)}`,
+                ...[A, B].filter(x => x.adm).map(x => `Админ: ${admTxt(x)}`),
                 `Записей друг о друге: ${tx.length}${money ? `, деньгами ${fmtNum(money)}` : ''}`
             ];
             navigator.clipboard.writeText(L.join('\n')).then(
