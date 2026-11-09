@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.57
+// @version      1.2.58
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.57
+// @version      1.2.58
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.57';
+const VERSION = '1.2.58';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -647,6 +647,8 @@ const LOGS_UI_CSS = `
 .vdl-bar { display: grid; grid-template-columns: minmax(120px, 220px) 1fr minmax(54px, auto); gap: 10px; align-items: center; padding: 6px 2px; font-size: 12.5px; }
 .vdl-bar .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx-2); }
 .vdl-bar.vdl-tog { cursor: pointer; border-radius: 8px; }
+.vdl-catlist { max-height: 340px; overflow: auto; }
+.vdl-catlist .vdl-mrow { gap: 10px; }
 .vdl-cmp-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .vdl-cmp-side .seg { flex-wrap: wrap; }
 @media (max-width: 700px) { .vdl-cmp-form { grid-template-columns: 1fr; } }
@@ -667,7 +669,7 @@ const LOGS_UI_CSS = `
 .vdl-tabs { display: flex; width: 100%; margin: 4px 0 2px; }
 .vdl-presets .btn.on { background: color-mix(in srgb, var(--acc) 30%, transparent); border-color: color-mix(in srgb, var(--acc) 50%, transparent); color: #fff; }
 .vdl-filter { width: 100%; margin-bottom: 8px; }
-.btn[hidden], .vdl-ftools [hidden] { display: none !important; }
+.btn[hidden], .vdl-ftools [hidden], .sec[hidden] { display: none !important; }
 /* фильтры античита: чипы-переключатели */
 .vdl-fbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
 .vdl-fbar .lbl { font-size: 11px; color: var(--tx-3, #8b8f9a); margin-right: 2px; }
@@ -1779,8 +1781,8 @@ const Panel = {
               <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button><button data-v="ac">${icon('shield', 13)}Античит</button><button data-v="links">${icon('search', 13)}Связи</button><button data-v="pun">${icon('lock', 13)}Наказания</button></div>
               <div data-tab="in">
                 <div class="sec"><h4>С чего заходил (платформа)</h4><div class="card" data-l="plat"></div></div>
-                <div class="sec"><h4>IP-адреса игрока</h4><div class="card" data-l="ips">${ips.length ? '' : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>'}</div></div>
-                <div class="sec"><h4>Устройства (APPMDID)</h4><div class="card" data-l="devs">${devs.length ? '' : '<div class="vdl-row"><div class="main sub">В подключениях нет APPMDID</div></div>'}</div></div>
+                <div class="sec" ${ips.length ? '' : 'hidden'}><h4>IP-адреса игрока</h4><div class="card" data-l="ips"></div></div>
+                <div class="sec" ${devs.length ? '' : 'hidden'}><h4>Устройства (APPMDID)</h4><div class="card" data-l="devs"></div></div>
                 <div class="sec"><h4>Сессии (вход / выход)</h4><div class="card" data-l="ses"></div></div>
                 <div class="sec"><h4>Когда играет (по входам, МСК)</h4><div class="card" data-l="hrs"></div></div>
               </div>
@@ -1800,10 +1802,7 @@ const Panel = {
                 pb.innerHTML = plats
                     .map(g => `<div class="vdl-row"><div class="main"><div class="ttl">${U.esc(g.k)}<span class="vdl-tag" style="--c:#2fbf71">${g.n} ${plural(g.n, 'вход', 'входа', 'входов')}</span></div><div class="sub">${fmtDate(g.first)} — ${fmtDate(g.last)}</div></div></div>`)
                     .join('');
-            } else {
-                const ex = conRows.slice().sort((a, b) => new Date(b.time) - new Date(a.time))[0];
-                pb.innerHTML = `<div class="vdl-row"><div class="main sub">${conRows.length ? 'В записях входа платформа не указана' : 'Входов за период нет'}${ex ? `<br>Пример записи входа: <span class="vdl-mono">${U.esc(String(ex.transaction_desc || '').slice(0, 200))}</span>` : ''}</div></div>`;
-            }
+            } else pb.closest('.sec').hidden = true;
             o.querySelectorAll('.vdl-copyid').forEach(el => el.dataset.v && copyText(el, () => el.dataset.v, 'ID'));
             const li = o.querySelector('[data-l="ips"]');
             ips.slice(0, 30).forEach((g, i) => li.appendChild(this.ipRow(g, nick, i ? ips[0].k : '')));
@@ -1817,6 +1816,7 @@ const Panel = {
             const longest = full.reduce((a, x) => Math.max(a, x.end - x.start), 0);
             this.report.ses = { n: ses.length, total, avg: full.length ? total / full.length : 0, longest };
             const sb = o.querySelector('[data-l="ses"]');
+            if (!ses.length) sb.closest('.sec').hidden = true;
             sb.innerHTML = ses.length
                 ? `<div class="vdl-row"><div class="main"><div class="ttl">${ses.length} ${plural(ses.length, 'сессия', 'сессии', 'сессий')} · в игре ${durHM(total)}</div>
                      <div class="sub">в среднем ${full.length ? durHM(total / full.length) : '—'} · самая долгая ${longest ? durHM(longest) : '—'}${full.length < ses.length ? ` · без пары вход/выход: ${ses.length - full.length}` : ''}</div></div></div>` +
@@ -1832,6 +1832,7 @@ const Panel = {
             const starts = rows.filter(r => /подключ/i.test(r.transaction_desc || '')).map(r => new Date(r.time).getTime());
             const H = hoursHtml(starts.length ? starts : rows.map(r => new Date(r.time).getTime()));
             this.report.peak = H.peak;
+            if (!rows.length) o.querySelector('[data-l="hrs"]').closest('.sec').hidden = true;
             o.querySelector('[data-l="hrs"]').innerHTML = rows.length
                 ? `${H.html}<div class="sub" style="padding:0 2px 8px">${H.peak >= 0 ? `Чаще всего заходит в ${String(H.peak).padStart(2, '0')}:00–${String(H.peak).padStart(2, '0')}:59 МСК` : ''}${starts.length ? '' : ' · по всем записям, входов нет'}</div>`
                 : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>';
@@ -3103,9 +3104,13 @@ const AdminView = {
                 await CatLearn.discover().catch(() => {});
             }
             if (!alive()) return;
-            const cats = this.resolve();
+            const cats0 = this.resolve();
             const ids0 = new Set();
-            const ready = cats.filter(c => c.id && !ids0.has(c.id) && ids0.add(c.id));
+            let ready = cats0.filter(c => c.id && !ids0.has(c.id) && ids0.add(c.id));
+            // категории, отмеченные вручную в «Что считать» (любые с сайта) — вместо набора по умолчанию
+            const sel = this.selected();
+            if (sel) ready = sel.map(id => this.catOf(id, cats0));
+            const cats = sel ? ready : cats0;
             if (!ready.length) throw new Error('не найдены номера категорий — впиши их в «Что считать»');
             // конец периода — не позже «сейчас»: новые записи во время листания не сдвигают страницы
             const t0 = this.dayStart(a),
@@ -3269,7 +3274,7 @@ const AdminView = {
                     else other++;
                 });
                 const rows = per
-                    .filter(x => x.t.main || x.n)
+                    .filter(x => x.n)
                     .map(x => ({ k: x.t.k, name: x.t.name, n: x.n }))
                     .concat(other ? [{ k: 'other', name: 'Другие действия', n: other }] : [])
                     .map(x => Object.assign(x, { off: off.types.has(x.k) }));
@@ -3290,8 +3295,8 @@ const AdminView = {
                 }</div></div>`;
             })()}
             <div class="sec"><h4>По категориям</h4><div class="card">${
-                cats.length
-                    ? cats.map(g => `<div class="vdl-bar vdl-tog${g.n ? '' : ' muted'}${g.off ? ' off' : ''}" data-tog="cats:${g.ck}" title="${g.off ? 'Не считается — нажми, чтобы вернуть' : 'Нажми, чтобы не считать эту категорию'}"><span class="nm">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${g.n && !g.off ? Math.max(3, Math.round((g.n / cmax) * 100)) : 0}%"></b></span><span class="n">${g.n}</span></div>`).join('')
+                cats.some(g => g.n || g.off)
+                    ? cats.filter(g => g.n || g.off).map(g => `<div class="vdl-bar vdl-tog${g.n ? '' : ' muted'}${g.off ? ' off' : ''}" data-tog="cats:${g.ck}" title="${g.off ? 'Не считается — нажми, чтобы вернуть' : 'Нажми, чтобы не считать эту категорию'}"><span class="nm">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${g.n && !g.off ? Math.max(3, Math.round((g.n / cmax) * 100)) : 0}%"></b></span><span class="n">${g.n}</span></div>`).join('')
                     : '<div class="vdl-row"><div class="main sub">Админ-действий за период нет</div></div>'
             }</div></div>
           </div>
@@ -3434,6 +3439,19 @@ const AdminView = {
         };
     },
 
+    // отмеченные вручную номера категорий (null — набор по умолчанию)
+    selected() {
+        const v = Store.get('adminSel', null);
+        return Array.isArray(v) ? v.map(String) : null;
+    },
+    // категория по номеру: из набора по умолчанию или любая с сайта (чат — по названию)
+    catOf(id, cats0) {
+        id = String(id);
+        const c = (cats0 || this.resolve()).find(x => String(x.id) === id);
+        if (c) return c;
+        const name = CATS[id] || 'Категория #' + id;
+        return { k: (/чат|chat/i.test(name) ? 'xchat' : 'x') + id, name, id };
+    },
     // что считать админ-действиями
     settings() {
         if (this.cfgScrim) this.cfgScrim.remove();
@@ -3449,6 +3467,14 @@ const AdminView = {
                       c => `<div class="vdl-mrow"><span class="vic" style="--c:${c.id ? '#2fbf71' : c.opt ? '#8b8f9a' : '#f5a524'};width:22px;height:22px;border-radius:7px">${icon(c.id ? 'check' : 'x', 12)}</span><span class="nm">${U.esc(c.name)}</span><input class="inp" data-k="${c.k}" inputmode="numeric" maxlength="4" placeholder="№" value="${U.esc(c.id)}" title="Номер категории на сайте логов" style="width:74px;height:30px;text-align:center"></div>`
                   )
                   .join('')}</div>
+              <div class="sec"><h4>Все категории сайта</h4><div class="sub" style="padding:0 2px 6px">Отмеченные считаются админ-действиями.${this.selected() ? ' <button class="btn" data-a="def" style="height:24px;margin-left:6px">Как по умолчанию</button>' : ''}</div><div class="card vdl-catlist">${(() => {
+                  const sel = this.selected();
+                  const on = new Set(sel || cats.filter(c => c.id).map(c => String(c.id)));
+                  return this.known()
+                      .sort((a, b) => +a.id - +b.id)
+                      .map(c => `<label class="vdl-mrow" style="cursor:pointer"><input type="checkbox" data-cat="${U.esc(c.id)}" ${on.has(String(c.id)) ? 'checked' : ''} style="width:18px;height:18px"><span class="vdl-tag">${U.esc(c.id)}</span><span class="nm">${U.esc(c.name)}</span></label>`)
+                      .join('');
+              })()}</div></div>
               <div class="btns" style="margin-top:10px"><button class="btn" data-a="find">${icon('search', 14)}Найти номера</button><span style="flex:1"></span><button class="btn pri" data-a="save">Сохранить</button></div>
             </div></div></div>`)
         ));
@@ -3469,7 +3495,21 @@ const AdminView = {
             if (n || !left) this.settings();
             else bt.disabled = false;
         };
+        let catDirty = false;
+        scrim.querySelectorAll('[data-cat]').forEach(x => (x.onchange = () => (catDirty = true)));
+        const def = scrim.querySelector('[data-a="def"]');
+        if (def)
+            def.onclick = () => {
+                Store.set('adminSel', null);
+                toast('Набор категорий — по умолчанию');
+                this.settings();
+            };
         scrim.querySelector('[data-a="save"]').onclick = () => {
+            if (catDirty) {
+                const list = [...scrim.querySelectorAll('[data-cat]:checked')].map(x => x.dataset.cat);
+                if (!list.length) return toast('Отметь хотя бы одну категорию', 'err');
+                Store.set('adminSel', list);
+            }
             const man = {};
             const old = this.ids();
             const auto = new Map(cats.filter(c => c.auto).map(c => [c.k, c.id]));
@@ -3617,7 +3657,7 @@ const CompareView = {
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
             <div class="m-head"><span class="vic" style="--c:#2fbf71;width:34px;height:34px;border-radius:10px">${icon('users', 16)}</span>
-              <div><div class="m-title">Сравнение</div></div>
+              <div><div class="m-title">Сравнение</div><div class="m-sub">Два игрока или админа · общие IP и устройства · расстояние между IP · передачи</div></div>
               <span style="flex:1"></span><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
               <div class="vdl-cmp-form">${side('a', 'Первый')}${side('b', 'Второй')}</div>
