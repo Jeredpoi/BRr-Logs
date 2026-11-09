@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.52
+// @version      1.2.53
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.52
+// @version      1.2.53
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.52';
+const VERSION = '1.2.53';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -645,6 +645,12 @@ const LOGS_UI_CSS = `
 .vdl-hours-l { display: grid; grid-template-columns: repeat(4, 1fr) auto; font-size: 10.5px; color: var(--tx-3); padding: 0 2px 8px; }
 .vdl-bar { display: grid; grid-template-columns: minmax(120px, 220px) 1fr minmax(54px, auto); gap: 10px; align-items: center; padding: 6px 2px; font-size: 12.5px; }
 .vdl-bar .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx-2); }
+.vdl-bar.vdl-tog { cursor: pointer; border-radius: 8px; }
+.vdl-bar.vdl-tog:hover { background: rgba(255,255,255,.04); }
+.vdl-bar.off { opacity: .45; }
+.vdl-bar.off .nm, .vdl-bar.off .n { text-decoration: line-through; }
+.vdl-botrow.is-banned { opacity: .55; }
+.vdl-botrow.is-banned:hover { opacity: 1; }
 .vdl-bar .tr { height: 8px; border-radius: 99px; background: rgba(255,255,255,.06); overflow: hidden; }
 .vdl-bar .tr b { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--acc), color-mix(in srgb, var(--acc) 50%, var(--acc2))); }
 .vdl-bar .n { text-align: right; font-weight: 700; color: var(--tx); }
@@ -2716,23 +2722,22 @@ const ADMIN_CATS = [
     { k: 'gchat', name: 'Админ общий чат', re: /^админ[\s-]*общ\S*[\s-]*чат/i },
     { k: 'chat', name: 'Админ чат', re: /^админ[\s-]*чат/i, def: '39' },
     { k: 'block', name: 'Админ блокировки', re: /^админ[\s-]*блок/i, def: '45' },
-    { k: 'super', name: 'Супер наказания', re: /супер[\s-]*(наказ|действ)/i },
-    // категория жалоб целиком — только если номер вписан вручную; по умолчанию из неё берутся закрытия и муты репорта
-    { k: 'report', name: 'Жалобы / обращения', re: null, opt: true }
+    { k: 'super', name: 'Супер наказания', re: /супер[\s-]*(наказ|действ)/i }
+    // «Жалобы/Вопросы» сюда не входят: куратор считает только категории с «Админ» в названии
 ];
 // виды админ-действий по тексту записи (формулировки сайта логов); первое совпадение.
 // main — виды, которые куратор считает всегда; остальные показываются ниже, если были
 const ACT_TYPES = [
     { k: 'spec', name: 'Слежка', main: 1, re: /начал\s+следить\s+за/i },
     { k: 'specend', name: 'Выход со слежки', main: 1, re: /закончил\s+следить/i },
-    { k: 'close', name: 'Закрыл обращение', main: 1, re: /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i },
+    { k: 'close', name: 'Закрыл обращение', re: /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i },
     { k: 'blockform', name: 'Блокировка по чужой форме', re: /заблокировал[^|]*\|\s*by\s/i },
     { k: 'block', name: 'Блокировка', main: 1, re: /заблокировал|забанил/i },
     { k: 'form', name: 'Создал форму наказания', re: /создал\s+форму\s+для\s+администрации/i },
     { k: 'tp', name: 'ТП к себе', main: 1, re: /телепортировал\s+к\s+себе\s+(?!авто)/i },
     { k: 'unfreeze', name: 'Разморозка', main: 1, re: /разморозил/i },
     { k: 'repair', name: 'Починка машин', main: 1, re: /починил\s+транспорт|починил/i },
-    { k: 'rmute', name: 'Мут репорта', main: 1, re: /действие:\s*выдача\s+мута\s+репорта/i },
+    { k: 'rmute', name: 'Мут репорта', re: /действие:\s*выдача\s+мута\s+репорта/i },
     { k: 'repwork', name: 'Взял обращение', re: /тип:\s*в\s+работе/i },
     { k: 'repmsg', name: 'Ответ в обращении', re: /тип:\s*сообщение/i },
     { k: 'pm', name: 'PM игроку', re: /^PM\s+для/i },
@@ -2975,9 +2980,34 @@ const AdminView = {
         }
     },
 
+    // что куратор исключил кликом по строке: { cats: ['chat'], types: ['auth'] }
+    off() {
+        const o = Store.get('adminOff', {}) || {};
+        return { cats: new Set(o.cats || []), types: new Set(o.types || []) };
+    },
+    toggleOff(kind, k) {
+        const o = this.off();
+        o[kind].has(k) ? o[kind].delete(k) : o[kind].add(k);
+        Store.set('adminOff', { cats: [...o.cats], types: [...o.types] });
+    },
     render(out, d) {
-        const { nick, a, b, all, own } = d;
+        const { nick, a, b, all } = d;
         const list = d.cats || [];
+        const off = this.off();
+        const kOfId = new Map(list.filter(c => c.id).map(c => [String(c.id), c.k]));
+        const catK = r => kOfId.get(String(r.category_id)) || '';
+        // вид действия есть только у записей не из чатов
+        const typeK = r => (catK(r) && !/chat/.test(catK(r)) ? (actType(String(r.transaction_desc || '')) || { k: 'other' }).k : '');
+        const typeOk = r => !off.types.has(typeK(r));
+        const own = d.own.filter(r => !off.cats.has(catK(r)) && typeOk(r));
+        const cut = d.own.length - own.length;
+        // контроль периода: записи, время которых не попало в выбранные сутки (МСК)
+        const p0 = this.dayStart(a),
+            p1 = this.dayStart(b) + 864e5;
+        const times = own.map(r => new Date(r.time).getTime()).filter(Number.isFinite);
+        const outside = times.filter(t => t < p0 || t >= p1).length;
+        const tMin = times.length ? Math.min(...times) : 0,
+            tMax = times.length ? Math.max(...times) : 0;
         const missing = list.filter(c => !c.id && !c.opt);
         const days = [];
         // в Москве нет перевода часов — сутки ровно по 24 ч
@@ -2988,16 +3018,17 @@ const AdminView = {
             if (perDay.has(k)) perDay.set(k, perDay.get(k) + 1);
         });
         const active = [...perDay.values()].filter(Boolean).length;
+        // по категориям — с учётом исключённых видов; у выключенной категории число показано зачёркнутым
         const cnt = new Map();
-        own.forEach(r => cnt.set(String(r.category_id), (cnt.get(String(r.category_id)) || 0) + 1));
+        d.own.filter(typeOk).forEach(r => cnt.set(String(r.category_id), (cnt.get(String(r.category_id)) || 0) + 1));
         const dups = own.length - new Set(own.map(r => `${r.time}|${r.category_id}|${r.player_name}|${r.transaction_desc}`)).size;
         const seenIds = new Set();
-        const cats = list.filter(c => c.id && !seenIds.has(c.id) && seenIds.add(c.id)).map(c => ({ k: c.id, name: c.name, n: cnt.get(String(c.id)) || 0 }));
+        const cats = list.filter(c => c.id && !seenIds.has(c.id) && seenIds.add(c.id)).map(c => ({ k: c.id, ck: c.k, off: off.cats.has(c.k), name: c.name, n: cnt.get(String(c.id)) || 0 }));
         // над кем работал — только по наказаниям и действиям, не по сообщениям в админ-чатах
         const actIds = new Set(list.filter(c => c.id && !/chat/.test(c.k)).map(c => String(c.id)));
         const catNm = new Map(cats.map(c => [String(c.k), c.name]));
         const dmax = Math.max(1, ...perDay.values());
-        const cmax = Math.max(1, ...cats.map(g => g.n));
+        const cmax = Math.max(1, ...cats.filter(g => !g.off).map(g => g.n));
         // над кем работал: ники из описаний действий (кроме самого админа)
         const tg = new Map();
         own.forEach(r => {
@@ -3033,13 +3064,14 @@ const AdminView = {
             <div class="k"><small>В среднем в день</small><b>${days.length ? String(+(own.length / days.length).toFixed(1)) : 0}</b></div>
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="amore" data-all="1" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить всё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}${d.noAccess && d.noAccess.length ? ` · <b style="color:#f5a524">нет доступа: ${d.noAccess.map(U.esc).join(', ')}</b> — эти категории не посчитаны` : ''}</div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="amore" data-all="1" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить всё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}${d.noAccess && d.noAccess.length ? ` · <b style="color:#f5a524">нет доступа: ${d.noAccess.map(U.esc).join(', ')}</b> — эти категории не посчитаны` : ''}${times.length ? ` · записи с ${fmtDate(tMin)} по ${fmtDate(tMax)}` : ''}${outside ? ` · <b style="color:#f5a524">вне выбранных суток: ${outside}</b> (время сайта и периода расходятся — сообщи разработчику)` : ''}${cut ? ` · <b style="color:#f5a524">не считается по твоему выбору: ${cut}</b> (зачёркнутые строки ниже — нажми, чтобы вернуть)` : ''}</div>
  ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
           <div data-at="cat">
             ${(() => {
                 // разбивка действий (без сообщений в админ-чатах) по видам
-                const acts = own.filter(r => actIds.has(String(r.category_id)));
+                // все действия включённых категорий; исключённые виды остаются в списке зачёркнутыми
+                const acts = d.own.filter(r => actIds.has(String(r.category_id)) && !off.cats.has(catK(r)));
                 if (!acts.length) return '';
                 const per = ACT_TYPES.map(t => ({ t, n: 0 }));
                 let other = 0;
@@ -3048,16 +3080,21 @@ const AdminView = {
                     if (t) per.find(x => x.t === t).n++;
                     else other++;
                 });
-                const rows = per.filter(x => x.t.main || x.n).map(x => [x.t.name, x.n]).concat(other ? [['Другие действия', other]] : []);
-                const mx = Math.max(1, ...rows.map(x => x[1]));
+                const rows = per
+                    .filter(x => x.t.main || x.n)
+                    .map(x => ({ k: x.t.k, name: x.t.name, n: x.n }))
+                    .concat(other ? [{ k: 'other', name: 'Другие действия', n: other }] : [])
+                    .map(x => Object.assign(x, { off: off.types.has(x.k) }));
+                const mx = Math.max(1, ...rows.filter(x => !x.off).map(x => x.n));
+                const counted = rows.filter(x => !x.off).reduce((s0, x) => s0 + x.n, 0);
                 // должность — из последнего «Авторизовался как …»
                 const auth = acts
                     .filter(r => /авторизовался\s+как/i.test(String(r.transaction_desc || '')))
                     .sort((x, y) => new Date(y.time) - new Date(x.time))[0];
                 const role = auth ? String(auth.transaction_desc).replace(/^.*авторизовался\s+как\s*/i, '').trim() : '';
                 const ri = d.repInfo;
-                return `<div class="sec"><h4>Действия по видам · ${acts.length} без сообщений в чатах${role ? ` · ${U.esc(role)}` : ''}</h4><div class="card">${rows
-                    .map(([n, c]) => `<div class="vdl-bar${c ? '' : ' muted'}"><span class="nm">${n}</span><span class="tr"><b style="width:${c ? Math.max(3, Math.round((c / mx) * 100)) : 0}%"></b></span><span class="n">${c}</span></div>`)
+                return `<div class="sec"><h4>Действия по видам · ${counted} без сообщений в чатах${role ? ` · ${U.esc(role)}` : ''}</h4><div class="sub" style="padding:0 2px 6px">Нажми на строку, чтобы не считать этот вид (или категорию ниже) — число пересчитается, выбор запомнится.</div><div class="card">${rows
+                    .map(x => `<div class="vdl-bar vdl-tog${x.n ? '' : ' muted'}${x.off ? ' off' : ''}" data-tog="types:${x.k}" title="${x.off ? 'Не считается — нажми, чтобы вернуть' : 'Нажми, чтобы не считать'}"><span class="nm">${x.name}</span><span class="tr"><b style="width:${x.n && !x.off ? Math.max(3, Math.round((x.n / mx) * 100)) : 0}%"></b></span><span class="n">${x.n}</span></div>`)
                     .join('')}${
                     ri && ri.all
                         ? `<div class="sub" style="padding:8px 2px 2px">Для справки, в число не входят (категория «Жалобы/Вопросы» не админская): закрыл обращений ${ri.closes}, мутов репорта ${ri.rmutes}, ответов ${ri.replies}, PM ${ri.pm}, «взял в работу» ${ri.work}; всего записей ${ri.all}.</div>`
@@ -3066,7 +3103,7 @@ const AdminView = {
             })()}
             <div class="sec"><h4>По категориям</h4><div class="card">${
                 cats.length
-                    ? cats.map(g => `<div class="vdl-bar${g.n ? '' : ' muted'}"><span class="nm" title="${U.esc(nm(g.k))}">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${g.n ? Math.max(3, Math.round((g.n / cmax) * 100)) : 0}%"></b></span><span class="n">${g.n}</span></div>`).join('')
+                    ? cats.map(g => `<div class="vdl-bar vdl-tog${g.n ? '' : ' muted'}${g.off ? ' off' : ''}" data-tog="cats:${g.ck}" title="${g.off ? 'Не считается — нажми, чтобы вернуть' : 'Нажми, чтобы не считать эту категорию'}"><span class="nm">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${g.n && !g.off ? Math.max(3, Math.round((g.n / cmax) * 100)) : 0}%"></b></span><span class="n">${g.n}</span></div>`).join('')
                     : '<div class="vdl-row"><div class="main sub">Админ-действий за период нет</div></div>'
             }</div></div>
           </div>
@@ -3095,6 +3132,17 @@ const AdminView = {
             <input class="inp vdl-filter" data-a="flt" placeholder="Найти: ник, слово…">
             <div class="card" data-l="list"></div></div></div>
           <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
+        out.querySelectorAll('[data-tog]').forEach(
+            el =>
+                (el.onclick = () => {
+                    const [kind, k] = el.dataset.tog.split(':');
+                    this.toggleOff(kind, k);
+                    const sc = out.closest('.pane'),
+                        top = sc && sc.scrollTop;
+                    this.render(out, d);
+                    if (sc) sc.scrollTop = top;
+                })
+        );
         // список действий с поиском
         const sorted = own.slice().sort((x, y) => new Date(y.time) - new Date(x.time));
         const listBox = out.querySelector('[data-l="list"]');
@@ -3174,7 +3222,7 @@ const AdminView = {
         });
         out.querySelector('[data-a="copy"]').onclick = () => {
             const L = [`Админ-действия ${nick} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`} (МСК) · сервер ${Api.server()}`, `Всего: ${own.length}, дней с действиями: ${active} из ${days.length}`];
-            cats.forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
+            cats.filter(g => !g.off).forEach(g => L.push(`• ${nm(g.k)}: ${g.n}`));
             const acts = own.filter(r => actIds.has(String(r.category_id)));
             if (acts.length) {
                 L.push(`Действий без сообщений в чатах: ${acts.length}`);
@@ -3601,7 +3649,8 @@ const BotView = {
             const byNick = new Map();
             arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
             const catOf = id => blk.find(x => String(x.id) === String(id));
-            const BAN = /заблок|забан|блокир|бан[аеиу]?\b|\bban|banned|\bblock/i;
+            // «бан» отдельным словом (не «банк», «банда»): \b в JS видит только латиницу, поэтому границы — вручную
+            const BAN = /заблок|забан|блокир|(^|[^а-яё])бан(а|у|е|ом|ы|ил[аи]?)?(?![а-яё])|\bban(ned)?\b|\bblock(ed)?\b/i;
             const UN = /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)|сня(т|ли)\s+(бан|блок)/i;
             let seenRows = 0;
             // запись блокировки/разбана: ники в тексте или в поле «игрок» получают отметку
@@ -3617,7 +3666,8 @@ const BotView = {
                         if (!un && !(cat && cat.k === 'block') && !BAN.test(txt)) return;
                         seenRows++;
                         const seen = new Set();
-                        const fromText = (txt.match(/[A-Za-z0-9]{1,24}_[A-Za-z0-9]{1,24}/g) || []);
+                        // любые «слова» латиницей: у ботов ники часто без подчёркивания (Arcanum777), их тоже ищем в тексте блокировки
+                        const fromText = txt.match(/[A-Za-z0-9_]{3,49}/g) || [];
                         // запись не из админских категорий (сообщение в чате «Bot_X забанят») — считаем, только если это запись самого бота
                         const cands = cat ? [...fromText, String(x.player_name || '')] : [String(x.player_name || '')];
                         cands.forEach(n => {
@@ -3677,7 +3727,10 @@ const BotView = {
         // заблокированные видны (с пометкой), галочка «Скрыть» убирает их сразу; слабые совпадения по умолчанию скрыты
         const arr = d.arr.filter(g => (!d.hideBan || !g.banned) && (d.showWeak || !g.weak));
         const shownKeys = new Set(arr.map(g => g.key));
-        const bots = arr.filter(g => g.bot);
+        // «похожи на ботов» и «Ники ботов» — только те, кто ещё не заблокирован: их и надо блокировать
+        const bots = arr.filter(g => g.bot && !g.banned);
+        // активные сверху, заблокированные — в конце списка
+        arr.sort((x, y) => !!x.banned - !!y.banned);
         const PER = 25;
         const pages = Math.max(1, Math.ceil(arr.length / PER));
         d.page = Math.min(Math.max(0, d.page || 0), pages - 1);
@@ -3746,7 +3799,7 @@ const BotView = {
           }
           <div class="vdl-sum">
             <div class="k"><small>Похожи на ботов</small><b>${bots.length}</b></div>
-            <div class="k"><small>Писали рекламу</small><b>${arr.length}</b></div>
+            <div class="k"><small>Писали рекламу</small><b>${arr.length}</b>${nBanned && !d.hideBan ? `<small style="letter-spacing:0;text-transform:none">из них заблокировано ${nBanned}</small>` : ''}</div>
             <div class="k"><small>Сообщений</small><b>${nMsg}</b></div>
             <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
           </div>
@@ -3758,7 +3811,7 @@ const BotView = {
               arr.length
                   ? pageRows
                         .map(
-                            g => `<div class="vdl-row vdl-botrow ${g.bot ? 'is-bot' : ''}"><div class="main">
+                            g => `<div class="vdl-row vdl-botrow ${g.banned ? 'is-banned' : g.bot ? 'is-bot' : ''}"><div class="main">
                       <div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>
                         ${g.banned ? `<span class="vdl-tag" style="--c:#8b8f9a" title="${U.esc(fmtDate(g.banned.t) + ' — ' + g.banned.desc.slice(0, 160))}">заблокирован ${U.esc(fmtDate(g.banned.t).split(',')[0])}${g.banned.until ? ' до ' + U.esc(fmtDate(g.banned.until).split(',')[0]) : ''}</span>` : g.bot ? '<span class="vdl-tag" style="--c:#e5484d">похож на бота</span>' : ''}
                         ${g.level != null ? `<span class="vdl-tag" style="--c:${g.level <= c.level ? '#e5484d' : '#8b8f9a'}">ур. ${g.level}</span>` : ''}
