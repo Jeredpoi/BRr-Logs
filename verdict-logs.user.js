@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.55
+// @version      1.2.56
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.55
+// @version      1.2.56
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.55';
+const VERSION = '1.2.56';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3617,7 +3617,7 @@ const CompareView = {
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
             <div class="m-head"><span class="vic" style="--c:#2fbf71;width:34px;height:34px;border-radius:10px">${icon('users', 16)}</span>
-              <div><div class="m-title">Сравнение</div><div class="m-sub">Два игрока или админа · общие IP и устройства · расстояние между IP · онлайн · передачи</div></div>
+              <div><div class="m-title">Сравнение</div><div class="m-sub">Два игрока или админа · общие IP и устройства · расстояние между IP · передачи</div></div>
               <span style="flex:1"></span><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
               <div class="vdl-cmp-form">${side('a', 'Первый')}${side('b', 'Второй')}</div>
@@ -3644,9 +3644,39 @@ const CompareView = {
         };
         scrim.querySelector('[data-a="go"]').onclick = go;
         scrim.querySelectorAll('.inp').forEach(i => i.addEventListener('keydown', e => e.key === 'Enter' && go()));
+        // тип определяется сам по тому, что вписали (переключатель можно поправить руками)
+        ['a', 'b'].forEach(k => {
+            const inp = scrim.querySelector(`[data-a="q${k}"]`);
+            inp.addEventListener('input', () => {
+                const m = this.guess(inp.value);
+                if (m) scrim.querySelectorAll(`[data-g="m${k}"] button`).forEach(x => x.classList.toggle('on', x.dataset.v === m));
+            });
+        });
+    },
+    // что вписано: IP, ID (число), устройство (APPMDID или длинный код), иначе ник
+    guess(v) {
+        v = String(v || '').trim();
+        if (!v) return '';
+        if (IP_RE.test(v)) return 'ip';
+        if (/^\d{1,9}$/.test(v)) return 'id';
+        if (DEV_RE.test(v) || (/^[A-Za-z0-9+/=_-]{12,}$/.test(v) && !/^[A-Za-z]+_[A-Za-z0-9]+$/.test(v) && /\d/.test(v))) return 'dev';
+        return 'nick';
     },
     prog(t, gen) {
         if (this.scrim && gen === this._gen) this.scrim.querySelector('.vdl-prog').textContent = t;
+    },
+    // админ ли: записи в «Админ действиях» за сегодня (МСК). Раньше — не годится: права могли снять
+    async adminToday(nicks, gen) {
+        const act = AdminView.resolve().find(x => x.k === 'act' && x.id);
+        if (!act) return null;
+        const since = new Date(AdminView.dayStart(AdminView.mskDay(Date.now()))).toISOString();
+        for (const n of nicks.slice(0, 3)) {
+            if (gen !== this._gen) return null;
+            const r = await Api.page({ category_id__exact: act.id, player_name__exact: n, time__gte: since }, 0);
+            const own = r.filter(x => sameNick(x.player_name, n));
+            if (own.length) return { nick: n, n: own.length, last: Math.max(...own.map(x => new Date(x.time).getTime() || 0)) };
+        }
+        return false;
     },
     // все входы/выходы стороны за период
     async side(mode, q, range, gen, label) {
@@ -3707,6 +3737,12 @@ const CompareView = {
                 const r = await Api.all({ player_name__exact: from, transaction_desc__ilike: `%${to}%`, ...range }, 3, null, null, alive);
                 r.filter(x => nickIn(x.transaction_desc, to)).forEach(x => tx.push(Object.assign({}, x, { _from: from, _to: to })));
             }
+            for (const [s0, t] of [[A, 'первый'], [B, 'второй']]) {
+                if (!alive()) return;
+                this.prog(`Админ ли ${t}: админ-действия за сегодня…`, gen);
+                s0.adm = await this.adminToday(s0.nicks.map(g => g.k).concat(st['m' + (s0 === A ? 'a' : 'b')] === 'nick' ? [s0.q] : []).filter((x, i, a) => a.findIndex(y => sameNick(x, y)) === i), gen);
+            }
+            if (!alive()) return;
             this.prog('', gen);
             this.render(out, { st, A, B, ipsA, ipsB, geo, tx });
         } catch (e) {
@@ -3743,14 +3779,6 @@ const CompareView = {
         };
         const spA = spread(d.ipsA),
             spB = spread(d.ipsB);
-        // онлайн одновременно
-        let overlap = 0,
-            overlapN = 0;
-        const full = s => s.filter(x => x.start && x.end);
-        full(A.ses).forEach(x => full(B.ses).forEach(y => {
-            const o = Math.min(x.end, y.end) - Math.max(x.start, y.start);
-            if (o > 0) (overlap += o), overlapN++;
-        }));
         // вывод
         let verdict, vc;
         if (comNick.length || comId.length) (verdict = 'Это один и тот же аккаунт (общий ник или ID)'), (vc = '#8b8f9a');
@@ -3764,12 +3792,19 @@ const CompareView = {
             return g ? `${U.esc(g.flag)} ${U.esc([g.city, g.country].filter(Boolean).join(', '))}${g.host ? ' <span class="vdl-tag" style="--c:#e5484d">VPN?</span>' : g.mobile ? ' <span class="vdl-tag" style="--c:#3aa0ff">моб.</span>' : ''}` : '<span class="muted">место неизвестно</span>';
         };
         const kmTag = (km, a, b) => (km == null ? '<span class="muted">нет координат</span>' : `<span class="vdl-tag" style="--c:${km < 30 ? '#2fbf71' : km < 500 ? '#3aa0ff' : '#f5a524'}">${U.esc(Geo.kmText(km, geo.get(a), geo.get(b)))}</span>`);
-        const card = (s, t) => `<div class="card" style="padding:12px 14px"><div class="sub" style="font-weight:700">${t}</div><div class="ttl" style="margin:4px 0">${U.esc(who(s))}</div>
+        const admTxt = s => (s.adm ? `админ (${s.adm.nick}: сегодня ${s.adm.n} в «Админ действиях»)` : s.adm === false ? 'не админ' : 'не проверено');
+        const admTag = s =>
+            s.adm
+                ? `<span class="vdl-tag" style="--c:#7a5cff" title="Записи в «Админ действиях» за сегодня (МСК), последняя ${U.esc(fmtDate(s.adm.last))}">админ · сегодня ${s.adm.n}${s.adm.nick && s.nicks.length > 1 ? ' (' + U.esc(s.adm.nick) + ')' : ''}</span>`
+                : s.adm === false
+                  ? '<span class="vdl-tag" style="--c:#8b8f9a" title="За сегодня (МСК) в «Админ действиях» записей нет">не админ</span>'
+                  : '<span class="vdl-tag" style="--c:#8b8f9a" title="Номер категории «Админ действия» не найден">админ ли — не проверено</span>';
+        const card = (s, t) => `<div class="card" style="padding:12px 14px"><div class="sub" style="font-weight:700">${t} ${admTag(s)}</div><div class="ttl" style="margin:4px 0">${U.esc(who(s))}</div>
             <div class="sub">ID: ${U.esc(s.ids.join(', ') || '—')} · IP: ${s.ips.length} · устройств: ${s.devs.length} · сессий: ${s.ses.length}</div>
             <div class="sub">${s.ips[0] ? `основной IP ${U.esc(s.ips[0].k)} — ${place(s.ips[0].k)}` : 'входов за период нет'}</div></div>`;
         const tx = d.tx.sort((x, y) => new Date(y.time) - new Date(x.time));
         const money = tx.reduce((a, x) => a + (Number.isFinite(amtOf(x)) ? Math.abs(amtOf(x)) : 0), 0);
-        this.report = { d, verdict, comIp, comDev, mainKm, nearest, overlap, overlapN, tx, money };
+        this.report = { d, verdict, comIp, comDev, mainKm, nearest, tx, money };
         out.innerHTML = `
           <div class="card" style="padding:12px 14px;margin-bottom:12px;border-color:${vc}66"><b style="color:${vc}">${U.esc(verdict)}</b></div>
           <div class="vdl-cmp-form" style="margin-bottom:12px">${card(A, 'Первый')}${card(B, 'Второй')}</div>
@@ -3777,7 +3812,7 @@ const CompareView = {
             <div class="k"><small>Общих IP</small><b>${comIp.length}</b></div>
             <div class="k"><small>Общих устройств</small><b>${comDev.length}</b></div>
             <div class="k"><small>Между основными IP</small><b style="font-size:15px">${mainKm == null ? '—' : mainKm === 0 ? 'один IP' : '≈ ' + mainKm + ' км'}</b></div>
-            <div class="k"><small>Онлайн вместе</small><b style="font-size:15px">${overlapN ? durHM(overlap) : 'нет'}</b></div>
+            <div class="k"><small>Ближайшие IP</small><b style="font-size:15px">${nearest ? (nearest.km === 0 ? 'один IP' : '≈ ' + nearest.km + ' км') : '—'}</b></div>
           </div>
           <div class="sec"><h4>Расстояние между IP (ближайшие пары)</h4><div class="card">${
               withKm.length
@@ -3798,7 +3833,6 @@ const CompareView = {
                   ? `<div class="sec"><h4>Совпадения</h4><div class="card">${comIp.map(ip => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#f5a524">IP</span><span class="vdl-mono">${U.esc(ip)}</span></div><div class="sub">${place(ip)}</div></div><div class="vdl-btns"><button class="btn" data-ip="${U.esc(ip)}">IP</button></div></div>`).join('')}${comDev.map(dv => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#e5484d">устройство</span><span class="vdl-mono">${U.esc(dv)}</span></div></div></div>`).join('')}</div></div>`
                   : ''
           }
-          <div class="sec"><h4>Онлайн одновременно</h4><div class="card"><div class="vdl-row"><div class="main"><div class="ttl">${overlapN ? `${overlapN} ${plural(overlapN, 'раз', 'раза', 'раз')} · вместе ${durHM(overlap)}` : 'Ни разу не были в игре одновременно'}</div><div class="sub">По парам «вход — выход». Твинки одного человека обычно в игре не одновременно (если не с двух устройств).</div></div></div></div></div>
           <div class="sec"><h4>Передачи, трейды и упоминания друг друга</h4><div class="card">${
               tx.length
                   ? `<div class="sub" style="padding:6px 2px">${tx.length} ${plural(tx.length, 'запись', 'записи', 'записей')}${money ? ` · деньгами ${fmtNum(money)}` : ''}</div>` +
@@ -3818,7 +3852,7 @@ const CompareView = {
                 `Общих IP: ${comIp.length}${comIp.length ? ' (' + comIp.join(', ') + ')' : ''}, общих устройств: ${comDev.length}`,
                 `Между основными IP: ${mainKm == null ? 'неизвестно' : mainKm === 0 ? 'один IP' : '≈' + mainKm + ' км'}${nearest ? `; ближайшие IP ${nearest.a} и ${nearest.b} — ≈${nearest.km} км` : ''}`,
                 `Разброс своих IP: первый ${spA ? '≈' + spA.km + ' км' : '—'}, второй ${spB ? '≈' + spB.km + ' км' : '—'}`,
-                `Онлайн вместе: ${overlapN ? durHM(overlap) + ` (${overlapN} раз)` : 'ни разу'}`,
+                `Админ: первый — ${admTxt(A)}, второй — ${admTxt(B)}`,
                 `Записей друг о друге: ${tx.length}${money ? `, деньгами ${fmtNum(money)}` : ''}`
             ];
             navigator.clipboard.writeText(L.join('\n')).then(
@@ -4383,7 +4417,7 @@ const LogsPage = {
         // кнопки — в шапке сайта рядом с «Black Log · сервер»; без шапки — внизу слева
         const head = (this.head = document.createElement('span'));
         head.className = 'vdl-head';
-        head.innerHTML = `<button type="button" class="vdl-hbtn" data-a="an" title="Аналитика по игроку, ID, IP и устройству">${icon('shield', 14)}<span class="lbl">Аналитика</span></button><button type="button" class="vdl-hbtn vdl-hadm" data-a="adm" title="Подсчёт админ-действий по нику администратора за период">${icon('lock', 14)}<span class="lbl">Админ-действия</span></button><button type="button" class="vdl-hbtn vdl-hbot" data-a="bot" title="Поиск ботов: реклама, аккаунты с одного IP, низкий уровень">${icon('bot', 14)}<span class="lbl">Боты</span></button><button type="button" class="vdl-hbtn vdl-hcmp" data-a="cmp" title="Сравнить двух игроков или админов: общие IP и устройства, расстояние между IP, онлайн, передачи">${icon('users', 14)}<span class="lbl">Сравнение</span></button><button type="button" class="vdl-hbtn vdl-hcog" data-a="cog" title="Подсветка и оформление">${icon('spark', 14)}</button>`;
+        head.innerHTML = `<button type="button" class="vdl-hbtn" data-a="an" title="Аналитика по игроку, ID, IP и устройству">${icon('shield', 14)}<span class="lbl">Аналитика</span></button><button type="button" class="vdl-hbtn vdl-hadm" data-a="adm" title="Подсчёт админ-действий по нику администратора за период">${icon('lock', 14)}<span class="lbl">Админ-действия</span></button><button type="button" class="vdl-hbtn vdl-hbot" data-a="bot" title="Поиск ботов: реклама, аккаунты с одного IP, низкий уровень">${icon('bot', 14)}<span class="lbl">Боты</span></button><button type="button" class="vdl-hbtn vdl-hcmp" data-a="cmp" title="Сравнить двух игроков или админов: общие IP и устройства, расстояние между IP, передачи">${icon('users', 14)}<span class="lbl">Сравнение</span></button><button type="button" class="vdl-hbtn vdl-hcog" data-a="cog" title="Подсветка и оформление">${icon('spark', 14)}</button>`;
         head.querySelector('[data-a="an"]').onclick = () => Panel.open();
         head.querySelector('[data-a="adm"]').onclick = () => AdminView.open();
         head.querySelector('[data-a="bot"]').onclick = () => BotView.open();
