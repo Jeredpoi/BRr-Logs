@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.54
+// @version      1.2.55
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.54
+// @version      1.2.55
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.54';
+const VERSION = '1.2.55';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -93,6 +93,7 @@ const ICONS = {
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
     down: '<path d="M6 9l6 6 6-6"/>',
     pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+    users: '<circle cx="9" cy="9" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6"/><path d="M15.5 6.2a3 3 0 010 5.6M17.5 14.8c1.6.6 2.7 2 3 4.2"/>',
     bot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/><circle cx="12" cy="3.5" r="1"/>',
     spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>'
 };
@@ -646,6 +647,9 @@ const LOGS_UI_CSS = `
 .vdl-bar { display: grid; grid-template-columns: minmax(120px, 220px) 1fr minmax(54px, auto); gap: 10px; align-items: center; padding: 6px 2px; font-size: 12.5px; }
 .vdl-bar .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx-2); }
 .vdl-bar.vdl-tog { cursor: pointer; border-radius: 8px; }
+.vdl-cmp-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.vdl-cmp-side .seg { flex-wrap: wrap; }
+@media (max-width: 700px) { .vdl-cmp-form { grid-template-columns: 1fr; } }
 .vdl-bar.vdl-tog:hover { background: rgba(255,255,255,.04); }
 .vdl-bar.off { opacity: .45; }
 .vdl-bar.off .nm, .vdl-bar.off .n { text-decoration: line-through; }
@@ -1007,7 +1011,8 @@ const Geo = {
     get(ip) {
         const all = Store.get('geo', {});
         const hit = all[ip];
-        if (hit && Date.now() - hit.at < 7 * 864e5) return Promise.resolve(hit);
+        // старые записи без координат — переспрашиваем (нужны для расстояния между IP)
+        if (hit && Date.now() - hit.at < 7 * 864e5 && hit.lat != null) return Promise.resolve(hit);
         if (this._wait.has(ip)) return this._wait.get(ip);
         const p = new Promise(res => {
             if (typeof GM_xmlhttpRequest !== 'function') return res(null);
@@ -1033,7 +1038,9 @@ const Geo = {
                         isp,
                         asn: c.asn ? 'AS' + c.asn : '',
                         mobile: this.MOBILE.test(isp + ' ' + (c.org || '')),
-                        host: this.HOST.test(isp + ' ' + (c.org || '') + ' ' + (c.domain || ''))
+                        host: this.HOST.test(isp + ' ' + (c.org || '') + ' ' + (c.domain || '')),
+                        lat: Number.isFinite(+j.latitude) ? +j.latitude : null,
+                        lon: Number.isFinite(+j.longitude) ? +j.longitude : null
                     };
                     const all2 = Store.get('geo', {});
                     all2[ip] = g;
@@ -1048,6 +1055,19 @@ const Geo = {
         }).finally(() => this._wait.delete(ip));
         this._wait.set(ip, p);
         return p;
+    },
+    // расстояние между точками IP по прямой, км (null — координат нет)
+    km(a, b) {
+        if (!a || !b || a.lat == null || b.lat == null) return null;
+        const r = x => (x * Math.PI) / 180;
+        const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lon - a.lon) / 2) ** 2;
+        return Math.round(6371 * 2 * Math.asin(Math.min(1, Math.sqrt(h))));
+    },
+    // «≈ 640 км» (по городу IP — точность в десятки км; VPN/хостинг — не настоящее место)
+    kmText(km, a, b) {
+        if (km == null) return '';
+        const vpn = (a && a.host) || (b && b.host);
+        return `${km < 30 ? 'тот же город (≈' + km + ' км)' : '≈ ' + String(km).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' км'}${vpn ? ' · есть VPN/хостинг' : ''}`;
     },
     html(g) {
         if (!g) return '<span class="sub">сведения об IP недоступны</span>';
@@ -1786,7 +1806,7 @@ const Panel = {
             }
             o.querySelectorAll('.vdl-copyid').forEach(el => el.dataset.v && copyText(el, () => el.dataset.v, 'ID'));
             const li = o.querySelector('[data-l="ips"]');
-            ips.slice(0, 30).forEach(g => li.appendChild(this.ipRow(g, nick)));
+            ips.slice(0, 30).forEach((g, i) => li.appendChild(this.ipRow(g, nick, i ? ips[0].k : '')));
             const ld = o.querySelector('[data-l="devs"]');
             devs.forEach(g => (g.plat = [...new Set(rows.filter(r => devOf(r) === g.k).map(platOf).filter(Boolean))].join(', ')));
             devs.slice(0, 15).forEach(g => ld.appendChild(this.devRow(g, nick)));
@@ -2709,16 +2729,25 @@ const Panel = {
         throw new Error('сайт логов не дал искать по IP');
     },
 
-    ipRow(g, nick) {
+    ipRow(g, nick, mainIp) {
         const r = U.h(`<div><div class="vdl-row">
           <div class="main"><div class="ttl"><span class="vdl-mono">${U.esc(g.k)}</span><span class="vdl-tag">${g.n} ${plural(g.n, 'вход', 'входа', 'входов')}</span></div>
             <div class="sub">${fmtDate(g.first)} — ${fmtDate(g.last)} · <span data-geo>…</span></div></div>
           <div class="vdl-btns"><button class="btn" data-a="who">${icon('search', 13)}Кто ещё с этого IP</button></div>
         </div><div class="vdl-more" hidden></div></div>`);
-        Geo.get(g.k).then(x => {
+        Geo.get(g.k).then(async x => {
             g.geo = x;
             const el = r.querySelector('[data-geo]');
-            if (el) el.innerHTML = Geo.html(x);
+            if (!el) return;
+            el.innerHTML = Geo.html(x);
+            // от основного IP игрока (с которого заходил чаще всего)
+            if (!mainIp || !x) return;
+            const m = await Geo.get(mainIp);
+            const km = Geo.km(m, x);
+            if (km != null) {
+                g.km = km;
+                el.insertAdjacentHTML('beforeend', ` · <span class="vdl-tag" style="--c:${km < 30 ? '#2fbf71' : km < 500 ? '#3aa0ff' : '#f5a524'}" title="От основного IP ${U.esc(mainIp)} (${U.esc([m.city, m.country].filter(Boolean).join(', '))})">${U.esc(Geo.kmText(km, m, x))} от основного</span>`);
+            }
         });
         r.querySelector('[data-a="who"]').onclick = async e => {
             const btn = e.currentTarget;
@@ -2776,7 +2805,7 @@ const Panel = {
             if (r.pun) L.push(`Наказания: ${r.pun.length ? r.pun.join('; ') : 'нет'}`);
             if (r.links && r.links.length) L.push('Связанные аккаунты: ' + r.links.join('; '));
             r.ips.slice(0, 15).forEach(g =>
-                L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}${g.geo ? ` · ${[g.geo.country, g.geo.city, g.geo.isp].filter(Boolean).join(', ')}${g.geo.host ? ' (хостинг/VPN?)' : ''}` : ''}`)
+                L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}${g.geo ? ` · ${[g.geo.country, g.geo.city, g.geo.isp].filter(Boolean).join(', ')}${g.geo.host ? ' (хостинг/VPN?)' : ''}` : ''}${g.km != null ? ` · ≈${g.km} км от основного` : ''}`)
             );
             if (r.related.size) {
                 L.push('Другие аккаунты:');
@@ -3574,6 +3603,232 @@ const Bots = {
     }
 };
 
+// сравнение двух игроков / админов: по нику, ID, IP или устройству
+const CompareView = {
+    MODES: [['nick', 'Ник'], ['id', 'ID'], ['ip', 'IP'], ['dev', 'Устройство']],
+    open() {
+        if (this.scrim) return Layer.show(this.scrim);
+        Layer.closeModals();
+        this._gen = (this._gen || 0) + 1;
+        const last = Store.get('cmpLast', {});
+        const side = (k, t) => `<div class="vdl-cmp-side"><div class="sub" style="margin-bottom:6px;font-weight:700">${t}</div>
+            <div class="seg" data-g="m${k}">${this.MODES.map(([v, n]) => `<button data-v="${v}" class="${(last['m' + k] || 'nick') === v ? 'on' : ''}">${n}</button>`).join('')}</div>
+            <input class="inp" data-a="q${k}" placeholder="Ник, ID, IP или APPMDID" value="${U.esc(last['q' + k] || '')}" style="width:100%;margin-top:6px"></div>`;
+        const scrim = (this.scrim = Layer.add(
+            U.h(`<div class="scrim"><div class="modal vdl">
+            <div class="m-head"><span class="vic" style="--c:#2fbf71;width:34px;height:34px;border-radius:10px">${icon('users', 16)}</span>
+              <div><div class="m-title">Сравнение</div><div class="m-sub">Два игрока или админа · общие IP и устройства · расстояние между IP · онлайн · передачи</div></div>
+              <span style="flex:1"></span><button class="icon-btn" data-a="x">${icon('x')}</button></div>
+            <div class="pane">
+              <div class="vdl-cmp-form">${side('a', 'Первый')}${side('b', 'Второй')}</div>
+              <div class="vdl-form" style="margin-top:10px">
+                <div class="seg" data-g="days">${[7, 30, 90, 180].map(d => `<button data-v="${d}" class="${(last.days || 30) === d ? 'on' : ''}">${d} дн.</button>`).join('')}</div>
+                <span style="flex:1"></span><button class="btn pri" data-a="go">${icon('search', 14)}Сравнить</button>
+              </div>
+              <div class="vdl-prog"></div>
+              <div class="vdl-out"></div>
+            </div></div></div>`)
+        ));
+        const close = () => Layer.hide(scrim);
+        scrim.querySelector('[data-a="x"]').onclick = close;
+        scrim.addEventListener('mousedown', e => e.target === scrim && close());
+        scrim.querySelectorAll('.seg').forEach(g =>
+            g.querySelectorAll('button').forEach(b => (b.onclick = () => g.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b))))
+        );
+        const go = () => {
+            const val = g => (scrim.querySelector(`[data-g="${g}"] .on`) || {}).dataset;
+            const st = { ma: val('ma').v, mb: val('mb').v, qa: scrim.querySelector('[data-a="qa"]').value.trim(), qb: scrim.querySelector('[data-a="qb"]').value.trim(), days: +val('days').v };
+            if (!st.qa || !st.qb) return toast('Впиши обоих', 'err');
+            Store.set('cmpLast', st);
+            this.run(st);
+        };
+        scrim.querySelector('[data-a="go"]').onclick = go;
+        scrim.querySelectorAll('.inp').forEach(i => i.addEventListener('keydown', e => e.key === 'Enter' && go()));
+    },
+    prog(t, gen) {
+        if (this.scrim && gen === this._gen) this.scrim.querySelector('.vdl-prog').textContent = t;
+    },
+    // все входы/выходы стороны за период
+    async side(mode, q, range, gen, label) {
+        const alive = () => gen === this._gen;
+        const on = (p, n) => this.prog(`${label}: страница ${p}, записей ${n}…`, gen);
+        let rows;
+        if (mode === 'ip') {
+            if (!IP_RE.test(q)) throw new Error(`${label}: «${q}» — это не IP-адрес`);
+            rows = (await Api.all({ category_id__exact: 38, player_ip__exact: q, ...range }, 10, on, null, alive)).filter(r => !r.player_ip || r.player_ip === q);
+        } else if (mode === 'dev') {
+            const dev = (String(q).match(DEV_RE) || [, q])[1].trim();
+            rows = (await Api.all({ category_id__exact: 38, transaction_desc__ilike: `%${dev}%`, ...range }, 10, on, null, alive)).filter(r => devOf(r) === dev);
+        } else if (mode === 'id') {
+            if (!/^\d+$/.test(q)) throw new Error(`${label}: ID — это число`);
+            rows = await Api.all({ category_id__exact: 38, player_id__exact: q, ...range }, 10, on, null, alive);
+        } else rows = await Api.all({ category_id__exact: 38, player_name__exact: q, ...range }, 10, on, null, alive);
+        const con = conn(rows);
+        return {
+            q,
+            mode,
+            rows,
+            nicks: group(rows, r => r.player_name),
+            ids: [...new Set(rows.map(r => r.player_id).filter(x => x != null && x !== '').map(String))],
+            ips: group(con, r => r.player_ip),
+            devs: group(con, devOf),
+            ses: sessionsOf(rows)
+        };
+    },
+    async run(st) {
+        if (this.busy && this._busyGen === this._gen) return toast('Подожди, сравнение ещё идёт', 'info');
+        this.busy = true;
+        const gen = (this._busyGen = this._gen);
+        const alive = () => gen === this._gen;
+        const out = this.scrim.querySelector('.vdl-out');
+        out.innerHTML = '';
+        try {
+            const range = Period.range(st.days);
+            const A = await this.side(st.ma, st.qa, range, gen, 'Первый');
+            if (!alive()) return;
+            const B = await this.side(st.mb, st.qb, range, gen, 'Второй');
+            if (!alive()) return;
+            if (!A.rows.length && !B.rows.length) throw new Error('у обоих нет входов за период — возьми период длиннее');
+            // местоположение IP (до 12 самых частых с каждой стороны)
+            const ipsA = A.ips.slice(0, 12),
+                ipsB = B.ips.slice(0, 12);
+            this.prog('Определяю, где находятся IP…', gen);
+            const geo = new Map();
+            await Promise.all([...new Set([...ipsA, ...ipsB].map(g => g.k))].map(ip => Geo.get(ip).then(x => geo.set(ip, x))));
+            if (!alive()) return;
+            // передачи и трейды между ними: записи первого, где упомянут ник второго (и наоборот)
+            const tx = [];
+            const nA = A.nicks.slice(0, 2).map(g => g.k),
+                nB = B.nicks.slice(0, 2).map(g => g.k);
+            for (const [from, to] of [...nA.flatMap(a => nB.map(b => [a, b])), ...nB.flatMap(b => nA.map(a => [b, a]))].slice(0, 8)) {
+                if (!alive()) return;
+                if (sameNick(from, to)) continue;
+                this.prog(`Ищу связи ${from} → ${to}…`, gen);
+                const r = await Api.all({ player_name__exact: from, transaction_desc__ilike: `%${to}%`, ...range }, 3, null, null, alive);
+                r.filter(x => nickIn(x.transaction_desc, to)).forEach(x => tx.push(Object.assign({}, x, { _from: from, _to: to })));
+            }
+            this.prog('', gen);
+            this.render(out, { st, A, B, ipsA, ipsB, geo, tx });
+        } catch (e) {
+            if (!alive()) return;
+            this.prog('', gen);
+            out.innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(e.message)}</div>`;
+        } finally {
+            if (this._busyGen === gen) this.busy = false;
+        }
+    },
+    render(out, d) {
+        const { A, B, geo } = d;
+        const keys = l => new Set(l.map(g => String(g.k).toLowerCase()));
+        const inter = (a, b) => [...keys(a)].filter(k => keys(b).has(k));
+        const comIp = inter(A.ips, B.ips),
+            comDev = inter(A.devs, B.devs),
+            comNick = inter(A.nicks, B.nicks),
+            comId = A.ids.filter(x => B.ids.includes(x));
+        // пары IP «первый — второй» с расстоянием
+        const pairs = [];
+        d.ipsA.forEach(a => d.ipsB.forEach(b => pairs.push({ a: a.k, b: b.k, km: a.k === b.k ? 0 : Geo.km(geo.get(a.k), geo.get(b.k)) })));
+        const withKm = pairs.filter(p => p.km != null).sort((x, y) => x.km - y.km);
+        const nearest = withKm[0];
+        // основные IP (чаще всего) и расстояние между ними
+        const mainKm = A.ips[0] && B.ips[0] ? (A.ips[0].k === B.ips[0].k ? 0 : Geo.km(geo.get(A.ips[0].k), geo.get(B.ips[0].k))) : null;
+        // разброс внутри стороны: самое большое расстояние между своими IP
+        const spread = list => {
+            let best = null;
+            list.forEach((x, i) => list.slice(i + 1).forEach(y => {
+                const km = Geo.km(geo.get(x.k), geo.get(y.k));
+                if (km != null && (!best || km > best.km)) best = { a: x.k, b: y.k, km };
+            }));
+            return best;
+        };
+        const spA = spread(d.ipsA),
+            spB = spread(d.ipsB);
+        // онлайн одновременно
+        let overlap = 0,
+            overlapN = 0;
+        const full = s => s.filter(x => x.start && x.end);
+        full(A.ses).forEach(x => full(B.ses).forEach(y => {
+            const o = Math.min(x.end, y.end) - Math.max(x.start, y.start);
+            if (o > 0) (overlap += o), overlapN++;
+        }));
+        // вывод
+        let verdict, vc;
+        if (comNick.length || comId.length) (verdict = 'Это один и тот же аккаунт (общий ник или ID)'), (vc = '#8b8f9a');
+        else if (comDev.length) (verdict = 'Скорее всего один человек: общее устройство'), (vc = '#e5484d');
+        else if (comIp.length) (verdict = `Возможно, связаны: ${comIp.length} ${plural(comIp.length, 'общий IP', 'общих IP', 'общих IP')}`), (vc = '#f5a524');
+        else if (nearest && nearest.km < 30) (verdict = 'Общих IP нет, но заходили из одного города'), (vc = '#3aa0ff');
+        else (verdict = 'Явных совпадений нет'), (vc = '#2fbf71');
+        const who = s => `${s.nicks.slice(0, 3).map(g => g.k).join(', ') || s.q}${s.nicks.length > 3 ? ' и ещё ' + (s.nicks.length - 3) : ''}`;
+        const place = ip => {
+            const g = geo.get(ip);
+            return g ? `${U.esc(g.flag)} ${U.esc([g.city, g.country].filter(Boolean).join(', '))}${g.host ? ' <span class="vdl-tag" style="--c:#e5484d">VPN?</span>' : g.mobile ? ' <span class="vdl-tag" style="--c:#3aa0ff">моб.</span>' : ''}` : '<span class="muted">место неизвестно</span>';
+        };
+        const kmTag = (km, a, b) => (km == null ? '<span class="muted">нет координат</span>' : `<span class="vdl-tag" style="--c:${km < 30 ? '#2fbf71' : km < 500 ? '#3aa0ff' : '#f5a524'}">${U.esc(Geo.kmText(km, geo.get(a), geo.get(b)))}</span>`);
+        const card = (s, t) => `<div class="card" style="padding:12px 14px"><div class="sub" style="font-weight:700">${t}</div><div class="ttl" style="margin:4px 0">${U.esc(who(s))}</div>
+            <div class="sub">ID: ${U.esc(s.ids.join(', ') || '—')} · IP: ${s.ips.length} · устройств: ${s.devs.length} · сессий: ${s.ses.length}</div>
+            <div class="sub">${s.ips[0] ? `основной IP ${U.esc(s.ips[0].k)} — ${place(s.ips[0].k)}` : 'входов за период нет'}</div></div>`;
+        const tx = d.tx.sort((x, y) => new Date(y.time) - new Date(x.time));
+        const money = tx.reduce((a, x) => a + (Number.isFinite(amtOf(x)) ? Math.abs(amtOf(x)) : 0), 0);
+        this.report = { d, verdict, comIp, comDev, mainKm, nearest, overlap, overlapN, tx, money };
+        out.innerHTML = `
+          <div class="card" style="padding:12px 14px;margin-bottom:12px;border-color:${vc}66"><b style="color:${vc}">${U.esc(verdict)}</b></div>
+          <div class="vdl-cmp-form" style="margin-bottom:12px">${card(A, 'Первый')}${card(B, 'Второй')}</div>
+          <div class="vdl-sum">
+            <div class="k"><small>Общих IP</small><b>${comIp.length}</b></div>
+            <div class="k"><small>Общих устройств</small><b>${comDev.length}</b></div>
+            <div class="k"><small>Между основными IP</small><b style="font-size:15px">${mainKm == null ? '—' : mainKm === 0 ? 'один IP' : '≈ ' + mainKm + ' км'}</b></div>
+            <div class="k"><small>Онлайн вместе</small><b style="font-size:15px">${overlapN ? durHM(overlap) : 'нет'}</b></div>
+          </div>
+          <div class="sec"><h4>Расстояние между IP (ближайшие пары)</h4><div class="card">${
+              withKm.length
+                  ? withKm
+                        .slice(0, 12)
+                        .map(p => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-mono">${U.esc(p.a)}</span> ↔ <span class="vdl-mono">${U.esc(p.b)}</span> ${kmTag(p.km, p.a, p.b)}</div><div class="sub">${place(p.a)} ↔ ${place(p.b)}</div></div></div>`)
+                        .join('') + (withKm.length > 12 ? `<div class="sub" style="padding:6px 2px">Показаны 12 ближайших из ${withKm.length} пар</div>` : '')
+                  : '<div class="vdl-row"><div class="main sub">Нет координат IP — сервис определения места не ответил</div></div>'
+          }</div></div>
+          <div class="sec"><h4>Разброс внутри каждого (самые далёкие свои IP)</h4><div class="card">${[
+              [A, spA, 'Первый'],
+              [B, spB, 'Второй']
+          ]
+              .map(([s, sp, t]) => `<div class="vdl-row"><div class="main"><div class="ttl">${t}: ${U.esc(who(s))} ${sp ? kmTag(sp.km, sp.a, sp.b) : '<span class="muted">один IP или нет координат</span>'}</div>${sp ? `<div class="sub"><span class="vdl-mono">${U.esc(sp.a)}</span> ${place(sp.a)} ↔ <span class="vdl-mono">${U.esc(sp.b)}</span> ${place(sp.b)}</div>` : ''}</div></div>`)
+              .join('')}</div></div>
+          ${
+              comIp.length || comDev.length
+                  ? `<div class="sec"><h4>Совпадения</h4><div class="card">${comIp.map(ip => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#f5a524">IP</span><span class="vdl-mono">${U.esc(ip)}</span></div><div class="sub">${place(ip)}</div></div><div class="vdl-btns"><button class="btn" data-ip="${U.esc(ip)}">IP</button></div></div>`).join('')}${comDev.map(dv => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#e5484d">устройство</span><span class="vdl-mono">${U.esc(dv)}</span></div></div></div>`).join('')}</div></div>`
+                  : ''
+          }
+          <div class="sec"><h4>Онлайн одновременно</h4><div class="card"><div class="vdl-row"><div class="main"><div class="ttl">${overlapN ? `${overlapN} ${plural(overlapN, 'раз', 'раза', 'раз')} · вместе ${durHM(overlap)}` : 'Ни разу не были в игре одновременно'}</div><div class="sub">По парам «вход — выход». Твинки одного человека обычно в игре не одновременно (если не с двух устройств).</div></div></div></div></div>
+          <div class="sec"><h4>Передачи, трейды и упоминания друг друга</h4><div class="card">${
+              tx.length
+                  ? `<div class="sub" style="padding:6px 2px">${tx.length} ${plural(tx.length, 'запись', 'записи', 'записей')}${money ? ` · деньгами ${fmtNum(money)}` : ''}</div>` +
+                    tx
+                        .slice(0, 40)
+                        .map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(x))}</span><span class="sub" style="margin:0">${fmtDate(x.time)} · ${U.esc(x._from)} → ${U.esc(x._to)}</span>${Number.isFinite(amtOf(x)) ? `<b class="${amtOf(x) < 0 ? 'vdl-neg' : 'vdl-pos'}">${fmtMoney(amtOf(x))}</b>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(String(x.transaction_desc || '').slice(0, 200)))}</div></div></div>`)
+                        .join('')
+                  : '<div class="vdl-row"><div class="main sub">В записях одного нет ника другого</div></div>'
+          }</div></div>
+          <div class="btns" style="margin-top:12px"><span style="flex:1"></span>${A.nicks[0] ? `<button class="btn" data-an="${U.esc(A.nicks[0].k)}">${icon('search', 13)}${U.esc(A.nicks[0].k)}</button>` : ''}${B.nicks[0] ? `<button class="btn" data-an="${U.esc(B.nicks[0].k)}">${icon('search', 13)}${U.esc(B.nicks[0].k)}</button>` : ''}<button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
+        out.querySelectorAll('[data-an]').forEach(b => (b.onclick = () => Panel.open('nick', b.dataset.an, { stack: true })));
+        out.querySelectorAll('[data-ip]').forEach(b => (b.onclick = () => Panel.open('ip', b.dataset.ip, { stack: true })));
+        out.querySelector('[data-a="copy"]').onclick = () => {
+            const L = [
+                `Сравнение: ${who(A)} и ${who(B)} · за ${d.st.days} дн. · сервер ${Api.server()}`,
+                `Итог: ${verdict}`,
+                `Общих IP: ${comIp.length}${comIp.length ? ' (' + comIp.join(', ') + ')' : ''}, общих устройств: ${comDev.length}`,
+                `Между основными IP: ${mainKm == null ? 'неизвестно' : mainKm === 0 ? 'один IP' : '≈' + mainKm + ' км'}${nearest ? `; ближайшие IP ${nearest.a} и ${nearest.b} — ≈${nearest.km} км` : ''}`,
+                `Разброс своих IP: первый ${spA ? '≈' + spA.km + ' км' : '—'}, второй ${spB ? '≈' + spB.km + ' км' : '—'}`,
+                `Онлайн вместе: ${overlapN ? durHM(overlap) + ` (${overlapN} раз)` : 'ни разу'}`,
+                `Записей друг о друге: ${tx.length}${money ? `, деньгами ${fmtNum(money)}` : ''}`
+            ];
+            navigator.clipboard.writeText(L.join('\n')).then(
+                () => toast('Отчёт скопирован'),
+                () => toast('Не удалось скопировать', 'err')
+            );
+        };
+    }
+};
+
 const BotView = {
     RANGES: [
         ['1 час', () => [Date.now() - 3600e3, Date.now()]],
@@ -4128,10 +4383,11 @@ const LogsPage = {
         // кнопки — в шапке сайта рядом с «Black Log · сервер»; без шапки — внизу слева
         const head = (this.head = document.createElement('span'));
         head.className = 'vdl-head';
-        head.innerHTML = `<button type="button" class="vdl-hbtn" data-a="an" title="Аналитика по игроку, ID, IP и устройству">${icon('shield', 14)}<span class="lbl">Аналитика</span></button><button type="button" class="vdl-hbtn vdl-hadm" data-a="adm" title="Подсчёт админ-действий по нику администратора за период">${icon('lock', 14)}<span class="lbl">Админ-действия</span></button><button type="button" class="vdl-hbtn vdl-hbot" data-a="bot" title="Поиск ботов: реклама, аккаунты с одного IP, низкий уровень">${icon('bot', 14)}<span class="lbl">Боты</span></button><button type="button" class="vdl-hbtn vdl-hcog" data-a="cog" title="Подсветка и оформление">${icon('spark', 14)}</button>`;
+        head.innerHTML = `<button type="button" class="vdl-hbtn" data-a="an" title="Аналитика по игроку, ID, IP и устройству">${icon('shield', 14)}<span class="lbl">Аналитика</span></button><button type="button" class="vdl-hbtn vdl-hadm" data-a="adm" title="Подсчёт админ-действий по нику администратора за период">${icon('lock', 14)}<span class="lbl">Админ-действия</span></button><button type="button" class="vdl-hbtn vdl-hbot" data-a="bot" title="Поиск ботов: реклама, аккаунты с одного IP, низкий уровень">${icon('bot', 14)}<span class="lbl">Боты</span></button><button type="button" class="vdl-hbtn vdl-hcmp" data-a="cmp" title="Сравнить двух игроков или админов: общие IP и устройства, расстояние между IP, онлайн, передачи">${icon('users', 14)}<span class="lbl">Сравнение</span></button><button type="button" class="vdl-hbtn vdl-hcog" data-a="cog" title="Подсветка и оформление">${icon('spark', 14)}</button>`;
         head.querySelector('[data-a="an"]').onclick = () => Panel.open();
         head.querySelector('[data-a="adm"]').onclick = () => AdminView.open();
         head.querySelector('[data-a="bot"]').onclick = () => BotView.open();
+        head.querySelector('[data-a="cmp"]').onclick = () => CompareView.open();
         head.querySelector('[data-a="cog"]').onclick = () => this.settings();
         this.placeHead();
         const st = document.createElement('style');
@@ -4144,6 +4400,7 @@ const LogsPage = {
 @media (max-width: 1200px) { .vdl-hbtn .lbl { display: none; } .vdl-hbtn { padding: 0 9px; } .vdl-head { margin: 0 auto 0 8px; } }
 .vdl-hadm { background: linear-gradient(135deg, color-mix(in srgb, ${acc} 55%, #7a5cff), #7a5cff); box-shadow: 0 6px 16px -8px #7a5cff; }
 .vdl-hbot { background: linear-gradient(135deg, #f5a524, #e5484d); box-shadow: 0 6px 16px -8px #f5a524; }
+.vdl-hcmp { background: linear-gradient(135deg, #2fbf71, #1f9fb0); box-shadow: 0 6px 16px -8px #2fbf71; }
 .vdl-bot { display: inline-flex; align-items: center; margin-left: 8px; padding: 1px 8px; vertical-align: middle; border-radius: 7px; font-size: 11.5px; font-weight: 750; color: #fff; background: color-mix(in srgb, #e5484d 75%, #f5a524); cursor: help; }
 .vdl-multi { display: inline-flex; align-items: center; margin-left: 6px; padding: 0 6px; height: 18px; vertical-align: middle; border-radius: 999px; font-size: 11px; font-weight: 800; color: #1a1205; background: #f5a524; cursor: help; }
 .vdl-hcog { padding: 0 8px; background: rgba(255,255,255,.08); border: 1px solid color-mix(in srgb, ${acc} 40%, transparent); box-shadow: none; }
