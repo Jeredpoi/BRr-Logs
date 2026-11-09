@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.53
+// @version      1.2.54
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.53
+// @version      1.2.54
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.53';
+const VERSION = '1.2.54';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -649,8 +649,8 @@ const LOGS_UI_CSS = `
 .vdl-bar.vdl-tog:hover { background: rgba(255,255,255,.04); }
 .vdl-bar.off { opacity: .45; }
 .vdl-bar.off .nm, .vdl-bar.off .n { text-decoration: line-through; }
-.vdl-botrow.is-banned { opacity: .55; }
-.vdl-botrow.is-banned:hover { opacity: 1; }
+.vdl-row.is-banned { opacity: .55; }
+.vdl-row.is-banned:hover { opacity: 1; }
 .vdl-bar .tr { height: 8px; border-radius: 99px; background: rgba(255,255,255,.06); overflow: hidden; }
 .vdl-bar .tr b { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--acc), color-mix(in srgb, var(--acc) 50%, var(--acc2))); }
 .vdl-bar .n { text-align: right; font-weight: 700; color: var(--tx); }
@@ -1099,6 +1099,39 @@ function banInfo(t, txt) {
         if (k) out.until = at + Number(m[1]) * k;
     }
     return out;
+}
+
+// наказания по тексту админской записи; первое совпадение. Снятия — раньше выдач («разбанил» содержит «бан»)
+const PUN_TYPES = [
+    { k: 'unban', name: 'Разбан', c: '#2fbf71', re: /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)/i },
+    { k: 'unmute', name: 'Снят мут', c: '#2fbf71', re: /размут|снял[аи]?\s+мут|unmute/i },
+    { k: 'unjail', name: 'Выпущен', c: '#2fbf71', re: /выпустил|unjail|освободил\s+из/i },
+    { k: 'unwarn', name: 'Снят варн', c: '#2fbf71', re: /снял[аи]?\s+(предупрежд|варн)|unwarn/i },
+    { k: 'ban', name: 'Блокировка', c: '#e5484d', re: /заблокир|забанил|блокировк|(^|[^а-яё])бан(а|у|е|ом)?(?![а-яё])|\bban(ned)?\b/i },
+    { k: 'jail', name: 'Деморган', c: '#e5484d', re: /деморган|\bjail\b|посадил\s+в\s+тюрьм/i },
+    { k: 'mute', name: 'Мут', c: '#f5a524', re: /(выдал|выдала)\s+мут|замутил|\bmute\b|заглушил/i },
+    { k: 'warn', name: 'Предупреждение', c: '#f5a524', re: /предупрежд|варн|\bwarn\b/i },
+    { k: 'kick', name: 'Кик', c: '#f5a524', re: /кикнул|\bkick\b/i }
+];
+const punType = t => PUN_TYPES.find(x => x.re.test(t)) || null;
+// ник стоит в тексте отдельным словом (не часть другого ника)
+const nickIn = (txt, nick) => new RegExp(`(^|[^A-Za-z0-9_])${String(nick).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`, 'i').test(String(txt || ''));
+// по записям наказаний одного ника: заблокирован ли сейчас ({ t, desc, until } или null)
+function banState(rows, nick) {
+    let st = null;
+    rows
+        .slice()
+        .sort((a, b) => new Date(a.time) - new Date(b.time))
+        .forEach(r => {
+            const txt = String(r.transaction_desc || '');
+            if (!nickIn(txt, nick) && !sameNick(r.player_name, nick)) return;
+            const t = punType(txt);
+            if (!t) return;
+            if (t.k === 'unban') st = null;
+            else if (t.k === 'ban') st = banInfo(r.time, txt);
+        });
+    if (st && st.until && st.until < Date.now()) st = null;
+    return st;
 }
 
 // деньги и категории из записи API (названия полей — как в фильтрах сайта)
@@ -1723,7 +1756,7 @@ const Panel = {
                 <div class="k"><small>ID игрока</small><b style="font-size:15px" class="vdl-copyid" data-v="${U.esc(ids.join(', '))}">${U.esc(ids.join(', ') || '—')}</b></div>
               </div>
               ${note ? `<div class="muted" style="font-size:12px;margin-bottom:10px">${U.esc(note)}${inMore ? `<button class="btn" data-a="inmore" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="inmore" data-all="1" style="height:24px;margin-left:6px">${icon('download', 12)}Загрузить всё</button>` : ''}</div>` : ''}
-              <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button><button data-v="ac">${icon('shield', 13)}Античит</button></div>
+              <div class="seg vdl-tabs" data-g="tab"><button data-v="in">${icon('shield', 13)}Заходы</button><button data-v="money">${icon('download', 13)}Доходы</button><button data-v="act">${icon('spark', 13)}Активность</button><button data-v="tr">${icon('eye', 13)}Трейды</button><button data-v="ac">${icon('shield', 13)}Античит</button><button data-v="links">${icon('search', 13)}Связи</button><button data-v="pun">${icon('lock', 13)}Наказания</button></div>
               <div data-tab="in">
                 <div class="sec"><h4>С чего заходил (платформа)</h4><div class="card" data-l="plat"></div></div>
                 <div class="sec"><h4>IP-адреса игрока</h4><div class="card" data-l="ips">${ips.length ? '' : '<div class="vdl-row"><div class="main sub">Нет записей за период</div></div>'}</div></div>
@@ -1735,6 +1768,8 @@ const Panel = {
               <div data-tab="act" hidden><div class="sec"><h4>Чем занимался за ${Period.label(days)} (записей по категориям)</h4><div class="card" data-l="cats"></div></div></div>
               <div data-tab="tr" hidden><div class="sec"><h4>Трейды игрока за ${Period.label(days)}</h4><div class="card" data-l="tr"></div></div></div>
               <div data-tab="ac" hidden><div class="sec"><h4>Античит за ${Period.label(days)}</h4><div class="card" data-l="ac"></div></div></div>
+              <div data-tab="links" hidden><div class="sec"><h4>Другие аккаунты с тех же IP и устройств за ${Period.label(days)}</h4><div class="card" data-l="links"></div></div></div>
+              <div data-tab="pun" hidden><div class="sec"><h4>Наказания игрока (за ${Period.label(days)}, но не меньше 180 дней)</h4><div class="card" data-l="pun"></div></div></div>
               <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`);
             // платформы входа
             const conRows = rows.filter(r => /подключ/i.test(r.transaction_desc || ''));
@@ -1788,7 +1823,9 @@ const Panel = {
                 money: { load: bg => this.loadAll(base, gen, bg), draw: (box, d) => this.renderMoney(box, d), more: d => this.moreAll(base, gen, d), share: 'act' },
                 act: { load: bg => this.loadAll(base, gen, bg), draw: (box, d) => this.renderCats(box, d), more: d => this.moreAll(base, gen, d), share: 'money' },
                 tr: { load: bg => this.loadTrades(sel, gen, base, bg), draw: (box, l) => this.renderTrades(box, l), more: l => this.moreTrades(l, gen) },
-                ac: { load: bg => this.loadAc(sel, gen, base, bg), draw: (box, d) => this.renderAc(box, d), more: d => this.moreAc(d, gen) }
+                ac: { load: bg => this.loadAc(sel, gen, base, bg), draw: (box, d) => this.renderAc(box, d), more: d => this.moreAc(d, gen) },
+                links: { load: bg => this.loadLinks(nick, ids, ips, devs, base, gen, bg), draw: (box, d) => this.renderLinks(box, d), more: d => d },
+                pun: { load: bg => this.loadPun(nick, base, gen, bg), draw: (box, d) => this.renderPun(box, d), more: d => d }
             };
             const boxOf = t => o.querySelector(`[data-tab="${t}"] .card`);
             const paint = (t, box, d) => {
@@ -2142,6 +2179,126 @@ const Panel = {
             toast(`Сохранено ников: ${list.length}`);
             redraw();
         };
+    },
+    // ---- «Связи»: кто ещё заходил с IP и устройств игрока; у каждого — заблокирован ли ----
+    async loadLinks(nick, ids, ips, devs, base, gen, bg) {
+        const range = { time__gte: base.time__gte, time__lte: base.time__lte };
+        const alive = () => gen === this._gen;
+        const say = t => this.fgOk(gen, bg) && this.prog(t);
+        const own = new Set((ids || []).map(String));
+        const found = new Map();
+        const add = (r, via) => {
+            const n = String(r.player_name || '').trim();
+            if (!n || sameNick(n, nick) || (r.player_id != null && own.has(String(r.player_id)))) return;
+            const g = found.get(n.toLowerCase()) || { nick: n, ids: new Set(), via: new Set(), n: 0, last: 0 };
+            g.n++;
+            g.via.add(via);
+            if (r.player_id != null) g.ids.add(String(r.player_id));
+            g.last = Math.max(g.last, new Date(r.time).getTime() || 0);
+            found.set(n.toLowerCase(), g);
+        };
+        const topIps = ips.slice(0, 8),
+            topDevs = devs.slice(0, 5);
+        for (const [i, g] of topIps.entries()) {
+            if (!alive()) return null;
+            say(`Связи: IP ${i + 1} из ${topIps.length}…`);
+            const r = await Api.all({ category_id__exact: 38, player_ip__exact: g.k, ...range }, 3, null, null, alive, 0, { bg });
+            r.filter(x => !x.player_ip || x.player_ip === g.k).forEach(x => add(x, 'IP ' + g.k));
+        }
+        for (const [i, g] of topDevs.entries()) {
+            if (!alive()) return null;
+            say(`Связи: устройство ${i + 1} из ${topDevs.length}…`);
+            const r = await Api.all({ category_id__exact: 38, transaction_desc__ilike: `%${g.k}%`, ...range }, 3, null, null, alive, 0, { bg });
+            r.filter(x => devOf(x) === g.k).forEach(x => add(x, 'устройство ' + (g.k.length > 12 ? g.k.slice(0, 12) + '…' : g.k)));
+        }
+        // заблокированы ли: записи блокировок с ником за полгода (до 25 аккаунтов)
+        const list = [...found.values()].sort((a, b) => b.via.size - a.via.size || b.n - a.n);
+        const blk = AdminView.resolve().filter(x => ['block', 'super'].includes(x.k) && x.id);
+        const since = new Date(Math.min(Date.parse(range.time__gte), Date.now() - 180 * 864e5)).toISOString();
+        for (const [i, g] of list.slice(0, 25).entries()) {
+            if (!alive()) return null;
+            say(`Связи: блокировки ${i + 1} из ${Math.min(25, list.length)}…`);
+            const rows = [];
+            for (const c of blk) rows.push(...(await Api.all({ category_id__exact: c.id, transaction_desc__ilike: `%${g.nick}%`, time__gte: since }, 2, null, null, alive, 0, { bg })));
+            g.banned = banState(rows, g.nick);
+            g.checked = true;
+        }
+        if (this.fgOk(gen, bg)) this.prog('');
+        return { nick, list, ips: topIps.length, devs: topDevs.length, blk: blk.map(x => x.name) };
+    },
+    renderLinks(box, d) {
+        if (!d) return;
+        this.report.links = d.list.map(g => `${g.nick}${g.banned ? ' (заблокирован)' : ''} — ${[...g.via].join(', ')}`);
+        const nb = d.list.filter(g => g.banned).length;
+        box.innerHTML = d.list.length
+            ? `<div class="sub" style="padding:6px 2px 8px">Проверено IP: ${d.ips}, устройств: ${d.devs}. Найдено аккаунтов: ${d.list.length}${nb ? `, из них заблокировано ${nb}` : ''}.${d.blk.length ? '' : ' Категории блокировок не найдены — пометок «заблокирован» не будет.'}</div>` +
+              d.list
+                  .map(
+                      g => `<div class="vdl-row${g.banned ? ' is-banned' : ''}"><div class="main"><div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>${
+                          g.banned
+                              ? `<span class="vdl-tag" style="--c:#8b8f9a" title="${U.esc(g.banned.desc.slice(0, 200))}">заблокирован ${U.esc(fmtDate(g.banned.t).split(',')[0])}${g.banned.until ? ' до ' + U.esc(fmtDate(g.banned.until).split(',')[0]) : ''}</span>`
+                              : g.checked
+                                ? '<span class="vdl-tag" style="--c:#2fbf71">не заблокирован</span>'
+                                : ''
+                      }${g.via.size > 1 ? `<span class="vdl-tag" style="--c:#f5a524">совпадений: ${g.via.size}</span>` : ''}${g.ids.size ? `<span class="vdl-tag">ID ${U.esc([...g.ids].join(', '))}</span>` : ''}</div><div class="sub">${U.esc([...g.via].join(' · '))} · последний вход ${fmtDate(g.last)}</div></div><div class="vdl-btns"><button class="btn" data-an="${U.esc(g.nick)}">${icon('search', 13)}Игрок</button></div></div>`
+                  )
+                  .join('')
+            : '<div class="vdl-row"><div class="main sub">С IP и устройств игрока за период других аккаунтов не было</div></div>';
+        box.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
+        box.querySelectorAll('[data-an]').forEach(b => (b.onclick = () => Panel.open('nick', b.dataset.an, { stack: true })));
+    },
+
+    // ---- «Наказания»: баны, муты, деморганы, варны, кики игрока из админских категорий ----
+    async loadPun(nick, base, gen, bg) {
+        const alive = () => gen === this._gen;
+        const since = new Date(Math.min(Date.parse(base.time__gte), Date.now() - 180 * 864e5)).toISOString();
+        const cats = AdminView.resolve().filter(x => ['act', 'block', 'super'].includes(x.k) && x.id);
+        const seen = new Set(),
+            rows = [];
+        for (const [i, c] of cats.entries()) {
+            for (const f of [{ transaction_desc__ilike: `%${nick}%` }, ...(c.k !== 'act' ? [{ player_name__exact: nick }] : [])]) {
+                if (!alive()) return null;
+                if (this.fgOk(gen, bg)) this.prog(`Наказания: ${c.name} (${i + 1}/${cats.length})…`);
+                const r = await Api.all({ category_id__exact: c.id, ...f, time__gte: since, time__lte: base.time__lte }, 6, null, null, alive, 0, { bg });
+                r.forEach(x => {
+                    const key = `${x.time}|${x.category_id}|${x.transaction_desc}`;
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    const txt = String(x.transaction_desc || '');
+                    const t = punType(txt);
+                    // наказание именно этому игроку: ник в тексте, а записал её не он сам (или запись на нём «Заблокирован администратором…»)
+                    const onHim = (nickIn(txt, nick) && !sameNick(x.player_name, nick)) || (sameNick(x.player_name, nick) && /заблокирован\s+администратор|получил\s+(бан|мут|варн|предупрежд)/i.test(txt));
+                    if (t && onHim) rows.push(Object.assign({}, x, { _t: t, _cat: c.name }));
+                });
+            }
+        }
+        if (this.fgOk(gen, bg)) this.prog('');
+        rows.sort((a, b) => new Date(b.time) - new Date(a.time));
+        return { nick, rows, since, cats: cats.map(x => x.name), banned: banState(rows, nick) };
+    },
+    renderPun(box, d) {
+        if (!d) return;
+        const by = new Map();
+        d.rows.forEach(r => by.set(r._t.k, (by.get(r._t.k) || 0) + 1));
+        this.report.pun = PUN_TYPES.filter(t => by.get(t.k)).map(t => `${t.name} — ${by.get(t.k)}`);
+        if (!d.cats.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Не найдены номера админских категорий — впиши их в «Админ-действия» → «Что считать»</div></div>');
+        box.innerHTML =
+            `<div class="vdl-row"><div class="main"><div class="ttl">${
+                d.banned
+                    ? `<span class="vdl-tag" style="--c:#e5484d">сейчас заблокирован${d.banned.until ? ' до ' + U.esc(fmtDate(d.banned.until)) : ''}</span>`
+                    : '<span class="vdl-tag" style="--c:#2fbf71">сейчас не заблокирован</span>'
+            }${PUN_TYPES.filter(t => by.get(t.k))
+                .map(t => `<span class="vdl-tag" style="--c:${t.c}">${t.name}: ${by.get(t.k)}</span>`)
+                .join('')}</div><div class="sub">с ${fmtDate(d.since).split(',')[0]} · искал в: ${U.esc(d.cats.join(', '))}</div></div></div>` +
+            (d.rows.length
+                ? d.rows
+                      .slice(0, 200)
+                      .map(
+                          r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:${r._t.c}">${r._t.name}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${!sameNick(r.player_name, d.nick) ? `<span class="sub" style="margin:0">выдал <span class="vdl-nick" data-nick="${U.esc(r.player_name)}">${U.esc(r.player_name)}</span></span>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(String(r.transaction_desc || '').slice(0, 220)))}</div></div></div>`
+                      )
+                      .join('')
+                : '<div class="vdl-row"><div class="main sub">Наказаний за этот срок не найдено</div></div>');
+        box.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
     },
     renderCats(box, d) {
         if (!d.rows.length) return (box.innerHTML = '<div class="vdl-row"><div class="main sub">Записей за период нет</div></div>');
@@ -2616,6 +2773,8 @@ const Panel = {
             if (r.trades != null) L.push(`Трейдов: ${r.trades}`);
             if (r.sus) L.push(`Подозрительных сообщений: ${r.sus}`);
             if (r.ac != null) L.push(`Античит: ${r.ac ? `${r.ac} ${plural(r.ac, 'срабатывание', 'срабатывания', 'срабатываний')}` : 'не срабатывал'}`);
+            if (r.pun) L.push(`Наказания: ${r.pun.length ? r.pun.join('; ') : 'нет'}`);
+            if (r.links && r.links.length) L.push('Связанные аккаунты: ' + r.links.join('; '));
             r.ips.slice(0, 15).forEach(g =>
                 L.push(`• ${g.k} — ${g.n} вх., ${fmtDate(g.first)}–${fmtDate(g.last)}${g.geo ? ` · ${[g.geo.country, g.geo.city, g.geo.isp].filter(Boolean).join(', ')}${g.geo.host ? ' (хостинг/VPN?)' : ''}` : ''}`)
             );
