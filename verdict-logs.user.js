@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.59
+// @version      1.2.60
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.59
+// @version      1.2.60
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.59';
+const VERSION = '1.2.60';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3663,6 +3663,7 @@ const Bots = {
 // сравнение двух игроков / админов: по нику, ID, IP или устройству
 const CompareView = {
     MODES: [['nick', 'Ник'], ['id', 'ID'], ['ip', 'IP'], ['dev', 'Устройство']],
+    STEP: 10,
     open() {
         if (this.scrim) return Layer.show(this.scrim);
         Layer.closeModals();
@@ -3791,7 +3792,7 @@ const CompareView = {
                 for (const n of nicks) {
                     if (!alive()) return ids;
                     this.prog(`Трейды ${label} (${n})…`, gen);
-                    const r = await Api.all({ player_name__exact: n, transaction_desc__ilike: '%TradeID%', ...range }, 6, null, null, alive);
+                    const r = await Api.all({ player_name__exact: n, transaction_desc__ilike: '%TradeID%', ...range }, 30, null, null, alive);
                     r.forEach(x => {
                         const m = String(x.transaction_desc || '').match(/TradeID:\s*(\d+)/);
                         if (m) ids.add(m[1]);
@@ -3802,11 +3803,12 @@ const CompareView = {
             const tA = await tradeIds(nA, 'первого');
             const tB = await tradeIds(nB, 'второго');
             if (!alive()) return;
-            const common = [...tA].filter(id => tB.has(id)).slice(0, 30);
+            // новые сверху (номер трейда растёт со временем); строки грузим порциями
+            const common = [...tA].filter(id => tB.has(id)).sort((a, b) => +b - +a);
             const trades = [];
-            for (const [i, id] of common.entries()) {
+            for (const [i, id] of common.slice(0, this.STEP).entries()) {
                 if (!alive()) return;
-                this.prog(`Трейд ${i + 1} из ${common.length}…`, gen);
+                this.prog(`Трейд ${i + 1} из ${Math.min(this.STEP, common.length)}…`, gen);
                 trades.push({ id, rows: await Panel.tradeRows(id) });
             }
             // передачи денег мимо трейда: записи одного, где он отдаёт другому
@@ -3825,7 +3827,7 @@ const CompareView = {
             }
             if (!alive()) return;
             this.prog('', gen);
-            this.render(out, { st, A, B, ipsA, ipsB, geo, tx, trades });
+            this.render(out, { st, A, B, ipsA, ipsB, geo, tx, trades, common, gen });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -3885,7 +3887,7 @@ const CompareView = {
         const money = tx.reduce((a, x) => a + rowMoney(x), 0);
         // трейды: кто что отдал, сумма деньгами, пометки «крупный» и «в одну сторону»
         const BIG = +Store.get('bigTrade', 1000000) || 1000000;
-        const trades = (d.trades || [])
+        const mkTrades = () => (d.trades || [])
             .filter(t => t.rows.length)
             .map(t => {
                 const txt = t.rows.map(r => String(r.transaction_desc || '')).join('\n');
@@ -3904,7 +3906,8 @@ const CompareView = {
                 };
             })
             .sort((a, b) => b.last - a.last);
-        const tradeSum = trades.filter(t => !t.cancel).reduce((a, t) => a + t.sum, 0);
+        let trades = mkTrades();
+        let tradeSum = trades.filter(t => !t.cancel).reduce((a, t) => a + t.sum, 0);
         this.report = { d, verdict, comIp, comDev, mainKm, nearest, tx, money, trades, tradeSum };
         const tradeRow = t => `<div class="vdl-row${t.big ? ' tr-big' : ''}"><div class="main"><div class="ttl">Трейд #${U.esc(t.id)}${t.ok ? '<span class="vdl-tag" style="--c:#2fbf71">состоялся</span>' : t.cancel ? '<span class="vdl-tag" style="--c:#8b8f9a">отменён</span>' : ''}${t.big ? `<span class="vdl-tag" style="--c:#e5484d">крупный: ${fmtNum(t.sum)}</span>` : t.sum ? `<span class="vdl-tag">${fmtNum(t.sum)}</span>` : ''}${t.oneWay ? `<span class="vdl-tag" style="--c:#f5a524" title="Отдавал только один, второй ничего не положил">отдал только ${U.esc(t.oneWay)}</span>` : ''}<span class="vdl-tag">${fmtDate(t.last)}</span></div>${t.rows
             .slice(0, 10)
@@ -3943,11 +3946,7 @@ const CompareView = {
                   ? `<div class="sec"><h4>Совпадения</h4><div class="card">${comIp.map(ip => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#f5a524">IP</span><span class="vdl-mono">${U.esc(ip)}</span></div><div class="sub">${place(ip)}</div></div><div class="vdl-btns"><button class="btn" data-ip="${U.esc(ip)}">IP</button></div></div>`).join('')}${comDev.map(dv => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#e5484d">устройство</span><span class="vdl-mono">${U.esc(dv)}</span></div></div></div>`).join('')}</div></div>`
                   : ''
           }
-          <div class="sec"><h4>Трейды между ними</h4><div class="card">${
-              trades.length
-                  ? `<div class="sub" style="padding:6px 2px">${trades.length} ${plural(trades.length, 'трейд', 'трейда', 'трейдов')}${tradeSum ? ` · деньгами ${fmtNum(tradeSum)}` : ''}${trades.some(t => t.big) ? ` · <b style="color:#e5484d">крупных: ${trades.filter(t => t.big).length}</b>` : ''}</div>` + trades.map(tradeRow).join('')
-                  : '<div class="vdl-row"><div class="main sub">Трейдов между ними за период нет</div></div>'
-          }</div></div>
+          <div class="sec"><h4>Трейды между ними</h4><div class="card" data-l="trades"></div></div>
           ${
               tx.length
                   ? `<div class="sec"><h4>Передачи денег без трейда</h4><div class="card"><div class="sub" style="padding:6px 2px">${tx.length} ${plural(tx.length, 'передача', 'передачи', 'передач')}${money ? ` · ${fmtNum(money)}` : ''}</div>${tx
@@ -3959,7 +3958,54 @@ const CompareView = {
           <div class="btns" style="margin-top:12px"><span style="flex:1"></span>${A.nicks[0] ? `<button class="btn" data-an="${U.esc(A.nicks[0].k)}">${icon('search', 13)}${U.esc(A.nicks[0].k)}</button>` : ''}${B.nicks[0] ? `<button class="btn" data-an="${U.esc(B.nicks[0].k)}">${icon('search', 13)}${U.esc(B.nicks[0].k)}</button>` : ''}<button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
         out.querySelectorAll('[data-an]').forEach(b => (b.onclick = () => Panel.open('nick', b.dataset.an, { stack: true })));
         out.querySelectorAll('[data-ip]').forEach(b => (b.onclick = () => Panel.open('ip', b.dataset.ip, { stack: true })));
-        out.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
+        // трейды: первые 10, дальше — «Загрузить ещё» / «Загрузить всё»
+        const tbox = out.querySelector('[data-l="trades"]');
+        const total = (d.common || []).length;
+        const drawTrades = () => {
+            trades = mkTrades();
+            tradeSum = trades.filter(t => !t.cancel).reduce((a, t) => a + t.sum, 0);
+            this.report.trades = trades;
+            this.report.tradeSum = tradeSum;
+            const left = total - (d.trades || []).length;
+            tbox.innerHTML = total
+                ? `<div class="sub" style="padding:6px 2px">${total} ${plural(total, 'трейд', 'трейда', 'трейдов')}${left > 0 ? ` · показаны ${trades.length}` : ''}${tradeSum ? ` · деньгами ${fmtNum(tradeSum)}${left > 0 ? ' (в показанных)' : ''}` : ''}${trades.some(t => t.big) ? ` · <b style="color:#e5484d">крупных: ${trades.filter(t => t.big).length}</b>` : ''}</div>` +
+                  trades.map(tradeRow).join('') +
+                  (left > 0 ? `<div class="btns" style="padding:8px 2px"><button class="btn" data-a="tmore">${icon('download', 13)}Загрузить ещё ${Math.min(this.STEP, left)}</button><button class="btn" data-a="tmore" data-all="1">${icon('download', 13)}Загрузить всё (${left})</button></div>` : '')
+                : '<div class="vdl-row"><div class="main sub">Трейдов между ними за период нет</div></div>';
+            tbox.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
+            tbox.querySelectorAll('[data-a="tmore"]').forEach(
+                b =>
+                    (b.onclick = async () => {
+                        if (this._tBusy) {
+                            // «Загрузить всё» идёт — повторный клик останавливает
+                            if (b.dataset.all) this._tStop = true;
+                            return;
+                        }
+                        this._tBusy = true;
+                        this._tStop = false;
+                        const all = !!b.dataset.all;
+                        b.lastChild.textContent = all ? 'Стоп' : 'Загружаю…';
+                        tbox.querySelectorAll('[data-a="tmore"]').forEach(x => x !== b && (x.disabled = true));
+                        const gen = d.gen;
+                        try {
+                            let n = 0;
+                            while ((d.trades || []).length < total && (all || n < this.STEP) && !this._tStop && gen === this._gen) {
+                                const id = d.common[d.trades.length];
+                                this.prog(`Трейд ${d.trades.length + 1} из ${total}…`, gen);
+                                d.trades.push({ id, rows: await Panel.tradeRows(id) });
+                                n++;
+                            }
+                        } catch (e) {
+                            toast('Не загрузилось: ' + e.message, 'err');
+                        } finally {
+                            this._tBusy = false;
+                            this.prog('', gen);
+                        }
+                        if (gen === this._gen && tbox.isConnected) drawTrades();
+                    })
+            );
+        };
+        drawTrades();
         out.querySelector('[data-a="copy"]').onclick = () => {
             const L = [
                 `Сравнение: ${who(A)} и ${who(B)} · за ${d.st.days} дн. · сервер ${Api.server()}`,
@@ -3968,7 +4014,7 @@ const CompareView = {
                 `Между основными IP: ${mainKm == null ? 'неизвестно' : mainKm === 0 ? 'один IP' : '≈' + mainKm + ' км'}${nearest ? `; ближайшие IP ${nearest.a} и ${nearest.b} — ≈${nearest.km} км` : ''}`,
                 `Разброс своих IP: первый ${spA ? '≈' + spA.km + ' км' : '—'}, второй ${spB ? '≈' + spB.km + ' км' : '—'}`,
                 ...[A, B].filter(x => x.adm).map(x => `Админ: ${admTxt(x)}`),
-                `Трейдов между ними: ${trades.length}${tradeSum ? `, деньгами ${fmtNum(tradeSum)}` : ''}${trades.some(t => t.big) ? `, крупных: ${trades.filter(t => t.big).map(t => '#' + t.id + ' (' + fmtNum(t.sum) + ')').join(', ')}` : ''}`,
+                `Трейдов между ними: ${total}${total > trades.length ? ` (загружено ${trades.length})` : ''}${tradeSum ? `, деньгами ${fmtNum(tradeSum)}` : ''}${trades.some(t => t.big) ? `, крупных: ${trades.filter(t => t.big).map(t => '#' + t.id + ' (' + fmtNum(t.sum) + ')').join(', ')}` : ''}`,
                 ...(tx.length ? [`Передач денег без трейда: ${tx.length}${money ? `, ${fmtNum(money)}` : ''}`] : [])
             ];
             navigator.clipboard.writeText(L.join('\n')).then(
