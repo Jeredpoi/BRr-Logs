@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.58
+// @version      1.2.59
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.58
+// @version      1.2.59
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.58';
+const VERSION = '1.2.59';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -648,6 +648,7 @@ const LOGS_UI_CSS = `
 .vdl-bar .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx-2); }
 .vdl-bar.vdl-tog { cursor: pointer; border-radius: 8px; }
 .vdl-catlist { max-height: 340px; overflow: auto; }
+.vdl-row.tr-big { box-shadow: inset 3px 0 0 #e5484d; }
 .vdl-catlist .vdl-mrow { gap: 10px; }
 .vdl-cmp-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .vdl-cmp-side .seg { flex-wrap: wrap; }
@@ -1167,6 +1168,22 @@ const numOf = v => {
     return Number.isFinite(n) ? n : NaN;
 };
 const amtOf = r => numOf(r.transaction_amount ?? r.amount);
+// текст строки трейда без «[TradeID: N]» и без ника в начале (ник и так стоит перед текстом)
+const tradeText = r => {
+    let t = String(r.transaction_desc || '').replace(/^\[TradeID:\s*\d+\]\s*/, '');
+    const n = String(r.player_name || '');
+    if (n && t.toLowerCase().startsWith(n.toLowerCase() + ' ')) t = t.slice(n.length + 1);
+    return moneyText(t);
+};
+// сколько денег в записи (по модулю): поле суммы, иначе «5 000 рублей» / «$5000» / «5000₽» в тексте
+const rowMoney = r => {
+    const a = amtOf(r);
+    if (Number.isFinite(a) && a) return Math.abs(a);
+    const t = String(r.transaction_desc || '');
+    const m = t.match(/(\d[\d\s.,]{0,15}\d|\d)\s*(?:руб|₽|р\.|\$|вирт|долл)/i) || t.match(/\$\s*(\d[\d\s.,]{0,15}\d|\d)/);
+    const n = m ? numOf(m[1]) : NaN;
+    return Number.isFinite(n) ? Math.abs(n) : 0;
+};
 const balOf = r => numOf(r.balance_after ?? r.player_balance_after);
 const fmtMoney = n => (n < 0 ? '−' : n > 0 ? '+' : '') + String(Math.abs(Math.round(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 const fmtNum = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
@@ -2606,7 +2623,7 @@ const Panel = {
     renderTrades(box, list) {
         this.report.trades = list.length;
         const me = String(list.nick || '').toLowerCase();
-        const clean = r => moneyText(String(r.transaction_desc || '').replace(/^\[TradeID:\s*\d+\]\s*/, ''));
+        const clean = tradeText;
         // строки трейда: «Ник: что сделал»; свои передачи — подсвечены
         const body = (g, rows) => {
             const others = [...new Set(rows.map(r => r.player_name).filter(n => n && n.toLowerCase() !== me))];
@@ -3766,16 +3783,40 @@ const CompareView = {
             const geo = new Map();
             await Promise.all([...new Set([...ipsA, ...ipsB].map(g => g.k))].map(ip => Geo.get(ip).then(x => geo.set(ip, x))));
             if (!alive()) return;
-            // передачи и трейды между ними: записи первого, где упомянут ник второго (и наоборот)
-            const tx = [];
             const nA = A.nicks.slice(0, 2).map(g => g.k),
                 nB = B.nicks.slice(0, 2).map(g => g.k);
+            // трейды между ними: номера трейдов, которые есть в записях обоих
+            const tradeIds = async (nicks, label) => {
+                const ids = new Set();
+                for (const n of nicks) {
+                    if (!alive()) return ids;
+                    this.prog(`Трейды ${label} (${n})…`, gen);
+                    const r = await Api.all({ player_name__exact: n, transaction_desc__ilike: '%TradeID%', ...range }, 6, null, null, alive);
+                    r.forEach(x => {
+                        const m = String(x.transaction_desc || '').match(/TradeID:\s*(\d+)/);
+                        if (m) ids.add(m[1]);
+                    });
+                }
+                return ids;
+            };
+            const tA = await tradeIds(nA, 'первого');
+            const tB = await tradeIds(nB, 'второго');
+            if (!alive()) return;
+            const common = [...tA].filter(id => tB.has(id)).slice(0, 30);
+            const trades = [];
+            for (const [i, id] of common.entries()) {
+                if (!alive()) return;
+                this.prog(`Трейд ${i + 1} из ${common.length}…`, gen);
+                trades.push({ id, rows: await Panel.tradeRows(id) });
+            }
+            // передачи денег мимо трейда: записи одного, где он отдаёт другому
+            const tx = [];
             for (const [from, to] of [...nA.flatMap(a => nB.map(b => [a, b])), ...nB.flatMap(b => nA.map(a => [b, a]))].slice(0, 8)) {
                 if (!alive()) return;
                 if (sameNick(from, to)) continue;
-                this.prog(`Ищу связи ${from} → ${to}…`, gen);
+                this.prog(`Передачи ${from} → ${to}…`, gen);
                 const r = await Api.all({ player_name__exact: from, transaction_desc__ilike: `%${to}%`, ...range }, 3, null, null, alive);
-                r.filter(x => nickIn(x.transaction_desc, to)).forEach(x => tx.push(Object.assign({}, x, { _from: from, _to: to })));
+                r.filter(x => nickIn(x.transaction_desc, to) && !/TradeID/i.test(x.transaction_desc) && GIVE_RE.test(String(x.transaction_desc || ''))).forEach(x => tx.push(Object.assign({}, x, { _from: from, _to: to })));
             }
             for (const [s0, t] of [[A, 'первый'], [B, 'второй']]) {
                 if (!alive()) return;
@@ -3784,7 +3825,7 @@ const CompareView = {
             }
             if (!alive()) return;
             this.prog('', gen);
-            this.render(out, { st, A, B, ipsA, ipsB, geo, tx });
+            this.render(out, { st, A, B, ipsA, ipsB, geo, tx, trades });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -3841,8 +3882,34 @@ const CompareView = {
             <div class="sub">ID: ${U.esc(s.ids.join(', ') || '—')} · IP: ${s.ips.length} · устройств: ${s.devs.length} · сессий: ${s.ses.length}</div>
             <div class="sub">${s.ips[0] ? `основной IP ${U.esc(s.ips[0].k)} — ${place(s.ips[0].k)}` : 'входов за период нет'}</div></div>`;
         const tx = d.tx.sort((x, y) => new Date(y.time) - new Date(x.time));
-        const money = tx.reduce((a, x) => a + (Number.isFinite(amtOf(x)) ? Math.abs(amtOf(x)) : 0), 0);
-        this.report = { d, verdict, comIp, comDev, mainKm, nearest, tx, money };
+        const money = tx.reduce((a, x) => a + rowMoney(x), 0);
+        // трейды: кто что отдал, сумма деньгами, пометки «крупный» и «в одну сторону»
+        const BIG = +Store.get('bigTrade', 1000000) || 1000000;
+        const trades = (d.trades || [])
+            .filter(t => t.rows.length)
+            .map(t => {
+                const txt = t.rows.map(r => String(r.transaction_desc || '')).join('\n');
+                const givers = new Set(t.rows.filter(r => GIVE_RE.test(String(r.transaction_desc || ''))).map(r => String(r.player_name || '')).filter(Boolean));
+                const people = new Set(t.rows.map(r => String(r.player_name || '')).filter(Boolean));
+                const sum = t.rows.reduce((a, r) => a + rowMoney(r), 0);
+                return {
+                    id: t.id,
+                    rows: t.rows,
+                    last: Math.max(...t.rows.map(r => new Date(r.time).getTime() || 0)),
+                    ok: /успешно\s+закончен/i.test(txt),
+                    cancel: /не\s+завершился|отмен/i.test(txt),
+                    sum,
+                    big: sum >= BIG,
+                    oneWay: givers.size === 1 && people.size > 1 ? [...givers][0] : ''
+                };
+            })
+            .sort((a, b) => b.last - a.last);
+        const tradeSum = trades.filter(t => !t.cancel).reduce((a, t) => a + t.sum, 0);
+        this.report = { d, verdict, comIp, comDev, mainKm, nearest, tx, money, trades, tradeSum };
+        const tradeRow = t => `<div class="vdl-row${t.big ? ' tr-big' : ''}"><div class="main"><div class="ttl">Трейд #${U.esc(t.id)}${t.ok ? '<span class="vdl-tag" style="--c:#2fbf71">состоялся</span>' : t.cancel ? '<span class="vdl-tag" style="--c:#8b8f9a">отменён</span>' : ''}${t.big ? `<span class="vdl-tag" style="--c:#e5484d">крупный: ${fmtNum(t.sum)}</span>` : t.sum ? `<span class="vdl-tag">${fmtNum(t.sum)}</span>` : ''}${t.oneWay ? `<span class="vdl-tag" style="--c:#f5a524" title="Отдавал только один, второй ничего не положил">отдал только ${U.esc(t.oneWay)}</span>` : ''}<span class="vdl-tag">${fmtDate(t.last)}</span></div>${t.rows
+            .slice(0, 10)
+            .map(r => `<div class="vdl-tline${GIVE_RE.test(String(r.transaction_desc || '')) ? ' give' : ''}"><b>${U.esc(r.player_name || '—')}</b> ${U.esc(tradeText(r))}</div>`)
+            .join('')}${t.rows.length > 10 ? `<div class="sub">… ещё ${t.rows.length - 10}</div>` : ''}</div><div class="vdl-btns"><button class="btn" data-tid="${U.esc(t.id)}">Открыть</button></div></div>`;
         out.innerHTML = `
           <div class="card" style="padding:12px 14px;margin-bottom:12px;border-color:${vc}66"><b style="color:${vc}">${U.esc(verdict)}</b></div>
           <div class="vdl-cmp-form" style="margin-bottom:12px">${card(A, 'Первый')}${card(B, 'Второй')}</div>
@@ -3876,18 +3943,23 @@ const CompareView = {
                   ? `<div class="sec"><h4>Совпадения</h4><div class="card">${comIp.map(ip => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#f5a524">IP</span><span class="vdl-mono">${U.esc(ip)}</span></div><div class="sub">${place(ip)}</div></div><div class="vdl-btns"><button class="btn" data-ip="${U.esc(ip)}">IP</button></div></div>`).join('')}${comDev.map(dv => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag" style="--c:#e5484d">устройство</span><span class="vdl-mono">${U.esc(dv)}</span></div></div></div>`).join('')}</div></div>`
                   : ''
           }
-          <div class="sec"><h4>Друг о друге в логах</h4><div class="card">${
-              tx.length
-                  ? `<div class="sub" style="padding:6px 2px">${tx.length} ${plural(tx.length, 'запись', 'записи', 'записей')}${money ? ` · деньгами ${fmtNum(money)}` : ''}</div>` +
-                    tx
-                        .slice(0, 40)
-                        .map(x => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(x))}</span><span class="sub" style="margin:0">${fmtDate(x.time)} · ${U.esc(x._from)} → ${U.esc(x._to)}</span>${Number.isFinite(amtOf(x)) ? `<b class="${amtOf(x) < 0 ? 'vdl-neg' : 'vdl-pos'}">${fmtMoney(amtOf(x))}</b>` : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(String(x.transaction_desc || '').slice(0, 200)))}</div></div></div>`)
-                        .join('')
-                  : '<div class="vdl-row"><div class="main sub">Нет</div></div>'
+          <div class="sec"><h4>Трейды между ними</h4><div class="card">${
+              trades.length
+                  ? `<div class="sub" style="padding:6px 2px">${trades.length} ${plural(trades.length, 'трейд', 'трейда', 'трейдов')}${tradeSum ? ` · деньгами ${fmtNum(tradeSum)}` : ''}${trades.some(t => t.big) ? ` · <b style="color:#e5484d">крупных: ${trades.filter(t => t.big).length}</b>` : ''}</div>` + trades.map(tradeRow).join('')
+                  : '<div class="vdl-row"><div class="main sub">Трейдов между ними за период нет</div></div>'
           }</div></div>
+          ${
+              tx.length
+                  ? `<div class="sec"><h4>Передачи денег без трейда</h4><div class="card"><div class="sub" style="padding:6px 2px">${tx.length} ${plural(tx.length, 'передача', 'передачи', 'передач')}${money ? ` · ${fmtNum(money)}` : ''}</div>${tx
+                        .slice(0, 40)
+                        .map(x => `<div class="vdl-row${rowMoney(x) >= BIG ? ' tr-big' : ''}"><div class="main"><div class="ttl"><span class="sub" style="margin:0">${fmtDate(x.time)} · ${U.esc(x._from)} → ${U.esc(x._to)}</span>${rowMoney(x) ? `<b class="${rowMoney(x) >= BIG ? 'vdl-neg' : ''}">${fmtNum(rowMoney(x))}</b>` : ''}${rowMoney(x) >= BIG ? '<span class="vdl-tag" style="--c:#e5484d">крупная</span>' : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(String(x.transaction_desc || '').slice(0, 200)))}</div></div></div>`)
+                        .join('')}</div></div>`
+                  : ''
+          }
           <div class="btns" style="margin-top:12px"><span style="flex:1"></span>${A.nicks[0] ? `<button class="btn" data-an="${U.esc(A.nicks[0].k)}">${icon('search', 13)}${U.esc(A.nicks[0].k)}</button>` : ''}${B.nicks[0] ? `<button class="btn" data-an="${U.esc(B.nicks[0].k)}">${icon('search', 13)}${U.esc(B.nicks[0].k)}</button>` : ''}<button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
         out.querySelectorAll('[data-an]').forEach(b => (b.onclick = () => Panel.open('nick', b.dataset.an, { stack: true })));
         out.querySelectorAll('[data-ip]').forEach(b => (b.onclick = () => Panel.open('ip', b.dataset.ip, { stack: true })));
+        out.querySelectorAll('[data-tid]').forEach(b => (b.onclick = () => TradeView.open(b.dataset.tid)));
         out.querySelector('[data-a="copy"]').onclick = () => {
             const L = [
                 `Сравнение: ${who(A)} и ${who(B)} · за ${d.st.days} дн. · сервер ${Api.server()}`,
@@ -3896,7 +3968,8 @@ const CompareView = {
                 `Между основными IP: ${mainKm == null ? 'неизвестно' : mainKm === 0 ? 'один IP' : '≈' + mainKm + ' км'}${nearest ? `; ближайшие IP ${nearest.a} и ${nearest.b} — ≈${nearest.km} км` : ''}`,
                 `Разброс своих IP: первый ${spA ? '≈' + spA.km + ' км' : '—'}, второй ${spB ? '≈' + spB.km + ' км' : '—'}`,
                 ...[A, B].filter(x => x.adm).map(x => `Админ: ${admTxt(x)}`),
-                `Записей друг о друге: ${tx.length}${money ? `, деньгами ${fmtNum(money)}` : ''}`
+                `Трейдов между ними: ${trades.length}${tradeSum ? `, деньгами ${fmtNum(tradeSum)}` : ''}${trades.some(t => t.big) ? `, крупных: ${trades.filter(t => t.big).map(t => '#' + t.id + ' (' + fmtNum(t.sum) + ')').join(', ')}` : ''}`,
+                ...(tx.length ? [`Передач денег без трейда: ${tx.length}${money ? `, ${fmtNum(money)}` : ''}`] : [])
             ];
             navigator.clipboard.writeText(L.join('\n')).then(
                 () => toast('Отчёт скопирован'),
