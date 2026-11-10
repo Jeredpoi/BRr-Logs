@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.60
+// @version      1.2.61
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.60
+// @version      1.2.61
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.60';
+const VERSION = '1.2.61';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -2936,7 +2936,7 @@ const ADMIN_CATS = [
 const ACT_TYPES = [
     { k: 'spec', name: 'Слежка', main: 1, re: /начал\s+следить\s+за/i },
     { k: 'specend', name: 'Выход со слежки', main: 1, re: /закончил\s+следить/i },
-    { k: 'close', name: 'Закрыл обращение', re: /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i },
+    { k: 'close', name: 'Закрыл репорт', re: /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i },
     { k: 'blockform', name: 'Блокировка по чужой форме', re: /заблокировал[^|]*\|\s*by\s/i },
     { k: 'block', name: 'Блокировка', main: 1, re: /заблокировал|забанил/i },
     { k: 'form', name: 'Создал форму наказания', re: /создал\s+форму\s+для\s+администрации/i },
@@ -2944,7 +2944,7 @@ const ACT_TYPES = [
     { k: 'unfreeze', name: 'Разморозка', main: 1, re: /разморозил/i },
     { k: 'repair', name: 'Починка машин', main: 1, re: /починил\s+транспорт|починил/i },
     { k: 'rmute', name: 'Мут репорта', re: /действие:\s*выдача\s+мута\s+репорта/i },
-    { k: 'repwork', name: 'Взял обращение', re: /тип:\s*в\s+работе/i },
+    { k: 'repwork', name: 'Взял репорт', re: /тип:\s*в\s+работе/i },
     { k: 'repmsg', name: 'Ответ в обращении', re: /тип:\s*сообщение/i },
     { k: 'pm', name: 'PM игроку', re: /^PM\s+для/i },
     { k: 'repclose', name: 'Обращение закрыто (мут/выход)', re: /тип:\s*(не\s+)?закрыта/i },
@@ -3159,8 +3159,8 @@ const AdminView = {
                 if (r.capped) more.push({ cat, params: { player_name__exact: nick, category_id__exact: cat.id, ...range }, next: r.next });
                 addRows(r, cat);
             }
-            // «Жалобы/Вопросы» — не админ-категория: куратор считает только категории с «Админ» в названии.
-            // Закрытия и муты репорта оттуда показываем справкой, в число не входят (иначе перебор на сотни)
+            // «Жалобы/Вопросы»: куратор считает «взял репорт» (Тип: в работе), «закрыл репорт» (закрыл обращение),
+            // мут репорта и PM (/pm ID); ответы в репорте — справкой. Если категорию отметили в «Что считать» целиком — считается вся
             let repInfo = null;
             const repCat = this.known().find(x => /жалоб/i.test(x.name)) || { id: '40' };
             if (repCat && !ready.some(c => String(c.id) === String(repCat.id))) {
@@ -3170,6 +3170,12 @@ const AdminView = {
                 const RM = /действие:\s*выдача\s+мута\s+репорта/i,
                     CL = /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i;
                 const T = x => String(x.transaction_desc || '');
+                const WK = /тип:\s*в\s+работе/i;
+                const PM = /^PM\s+для/i;
+                const rep = { k: 'rep', name: 'Жалобы/Вопросы: взял, закрыл, мут, PM', id: repCat.id };
+                addRows(r.filter(x => WK.test(T(x)) || CL.test(T(x)) || RM.test(T(x)) || PM.test(T(x))), rep);
+                cats.push(rep);
+                capped = capped || r.capped;
                 repInfo = {
                     all: r.length,
                     closes: r.filter(x => CL.test(T(x))).length,
@@ -3307,7 +3313,7 @@ const AdminView = {
                     .map(x => `<div class="vdl-bar vdl-tog${x.n ? '' : ' muted'}${x.off ? ' off' : ''}" data-tog="types:${x.k}" title="${x.off ? 'Не считается — нажми, чтобы вернуть' : 'Нажми, чтобы не считать'}"><span class="nm">${x.name}</span><span class="tr"><b style="width:${x.n && !x.off ? Math.max(3, Math.round((x.n / mx) * 100)) : 0}%"></b></span><span class="n">${x.n}</span></div>`)
                     .join('')}${
                     ri && ri.all
-                        ? `<div class="sub" style="padding:8px 2px 2px">Для справки, в число не входят (категория «Жалобы/Вопросы» не админская): закрыл обращений ${ri.closes}, мутов репорта ${ri.rmutes}, ответов ${ri.replies}, PM ${ri.pm}, «взял в работу» ${ri.work}; всего записей ${ri.all}.</div>`
+                        ? `<div class="sub" style="padding:8px 2px 2px">Из «Жалоб/Вопросов» в число вошли: взял репорт ${ri.work}, закрыл ${ri.closes}, мут репорта ${ri.rmutes}, PM ${ri.pm}.${ri.replies ? ` Не входят ответы в репорте: ${ri.replies}.` : ''}</div>`
                         : ''
                 }</div></div>`;
             })()}
