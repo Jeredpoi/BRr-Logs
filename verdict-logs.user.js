@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.61
+// @version      1.2.62
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.61
+// @version      1.2.62
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.61';
+const VERSION = '1.2.62';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -648,6 +648,36 @@ const LOGS_UI_CSS = `
 .vdl-bar .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx-2); }
 .vdl-bar.vdl-tog { cursor: pointer; border-radius: 8px; }
 .vdl-catlist { max-height: 340px; overflow: auto; }
+.vdl-af { display: flex; flex-direction: column; gap: 10px; padding: 12px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.025); }
+.vdl-af-row { display: flex; gap: 8px; }
+.vdl-af-nick { flex: 1; height: 38px; }
+.vdl-af-per { display: flex; flex-wrap: wrap; }
+.vdl-af-per button { flex: 1 0 auto; }
+.vdl-af-custom { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vdl-af-custom[hidden] { display: none; }
+.vdl-af-custom .inp { height: 34px; }
+.vdl-af-t { width: 96px; }
+.vdl-af-l { font-size: 12px; color: var(--tx-3); margin: 0 2px 0 6px; }
+.vdl-af-l:first-child { margin-left: 0; }
+.vdl-af-hint { font-size: 11.5px; color: var(--tx-3); margin-left: 6px; }
+.vdl-jr-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.vdl-jr-search { position: relative; flex: 1; min-width: 220px; display: flex; align-items: center; }
+.vdl-jr-search > svg { position: absolute; left: 11px; opacity: .55; pointer-events: none; }
+.vdl-jr-search .inp { width: 100%; height: 36px; padding-left: 32px; padding-right: 30px; }
+.vdl-jr-x { position: absolute; right: 6px; width: 24px; height: 24px; border: 0; border-radius: 6px; background: rgba(255,255,255,.08); color: var(--tx-2); cursor: pointer; display: grid; place-items: center; }
+.vdl-jr-x[hidden] { display: none; }
+.vdl-jr-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.vdl-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,.03); color: var(--tx-2); font: 600 12px/1 inherit; cursor: pointer; }
+.vdl-chip b { font-weight: 800; color: var(--tx-3); }
+.vdl-chip:hover { background: rgba(255,255,255,.07); }
+.vdl-chip.on { background: color-mix(in srgb, var(--acc) 22%, transparent); border-color: color-mix(in srgb, var(--acc) 55%, transparent); color: #fff; }
+.vdl-chip.on b { color: #fff; }
+.vdl-jr-info { padding: 0 2px 6px; }
+.vdl-jr-row[data-k="msg"] .vdl-tag { --c: #3aa0ff; }
+.vdl-jr-row[data-k="pun"] .vdl-tag { --c: #e5484d; }
+.vdl-jr-row[data-k="rep"] .vdl-tag { --c: #f5a524; }
+.vdl-jr-row mark { background: color-mix(in srgb, var(--acc) 45%, transparent); color: #fff; border-radius: 3px; padding: 0 1px; }
+@media (max-width: 700px) { .vdl-af-row { flex-direction: column; } .vdl-af-per button { flex: 1 0 30%; } }
 .vdl-row.tr-big { box-shadow: inset 3px 0 0 #e5484d; }
 .vdl-catlist .vdl-mrow { gap: 10px; }
 .vdl-cmp-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -3038,13 +3068,18 @@ const AdminView = {
               <div><div class="m-title">Админ-действия</div><div class="m-sub">Сервер ${U.esc(Api.server() || '?')} · время МСК</div></div>
               <span style="flex:1"></span><button class="btn" data-a="cfg">${icon('spark', 14)}Что считать</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
-              <div class="vdl-form">
-                <input class="inp" data-a="q" placeholder="Ник администратора" value="${U.esc(nick || last.nick || '')}">
-                <label class="vdl-date">с <input class="inp" type="date" data-a="from"></label>
-                <label class="vdl-date">по <input class="inp" type="date" data-a="to"></label>
-                <button class="btn pri" data-a="go">${icon('search', 14)}Посчитать</button>
+              <div class="vdl-af">
+                <div class="vdl-af-row">
+                  <input class="inp vdl-af-nick" data-a="q" placeholder="Ник администратора, например Ivan_Petrov" value="${U.esc(nick || last.nick || '')}">
+                  <button class="btn pri" data-a="go">${icon('search', 14)}Посчитать</button>
+                </div>
+                <div class="seg vdl-af-per">${P.map((x, i) => `<button data-p="${i}">${x[0]}</button>`).join('')}<button data-p="custom">Свой период</button></div>
+                <div class="vdl-af-custom" hidden>
+                  <span class="vdl-af-l">с</span><input class="inp" type="date" data-a="from"><input class="inp vdl-af-t" type="time" data-a="tfrom" title="С какого времени (МСК); пусто — с начала суток">
+                  <span class="vdl-af-l">по</span><input class="inp" type="date" data-a="to"><input class="inp vdl-af-t" type="time" data-a="tto" title="По какое время (МСК); пусто — до конца суток">
+                  <span class="vdl-af-hint">время МСК, можно оставить пустым</span>
+                </div>
               </div>
-              <div class="vdl-presets">${P.map((x, i) => `<button class="btn" data-p="${i}">${x[0]}</button>`).join('')}</div>
               <div class="vdl-prog"></div>
               <div class="vdl-out"></div>
             </div></div></div>`)
@@ -3056,19 +3091,34 @@ const AdminView = {
         $('[data-a="cfg"]').onclick = () => this.settings();
         const from = $('[data-a="from"]'),
             to = $('[data-a="to"]'),
-            q = $('[data-a="q"]');
+            tfrom = $('[data-a="tfrom"]'),
+            tto = $('[data-a="tto"]'),
+            q = $('[data-a="q"]'),
+            custom = $('.vdl-af-custom');
         // по умолчанию — сегодня
         from.value = P[0][1];
         to.value = P[0][2];
         from.max = to.max = P[0][1];
-        const mark = () => scrim.querySelectorAll('[data-p]').forEach(b => b.classList.toggle('on', P[+b.dataset.p][1] === from.value && P[+b.dataset.p][2] === to.value));
-        from.onchange = to.onchange = mark;
+        // подсвечен готовый период, если даты совпали и время не задано; иначе — «Свой период»
+        const mark = () => {
+            const hit = !tfrom.value && !tto.value ? P.findIndex(p => p[1] === from.value && p[2] === to.value) : -1;
+            scrim.querySelectorAll('[data-p]').forEach(b => b.classList.toggle('on', b.dataset.p === 'custom' ? hit < 0 : +b.dataset.p === hit));
+            if (hit < 0) custom.hidden = false;
+        };
+        [from, to, tfrom, tto].forEach(x => (x.onchange = mark));
         mark();
         scrim.querySelectorAll('[data-p]').forEach(b => {
             b.onclick = () => {
+                if (b.dataset.p === 'custom') {
+                    custom.hidden = !custom.hidden;
+                    if (!custom.hidden) tfrom.focus();
+                    return;
+                }
                 const p = P[+b.dataset.p];
                 from.value = p[1];
                 to.value = p[2];
+                tfrom.value = tto.value = '';
+                custom.hidden = true;
                 mark();
                 if (q.value.trim()) go();
             };
@@ -3090,7 +3140,10 @@ const AdminView = {
             if ((this.dayStart(b) - this.dayStart(a)) / 864e5 > 92) return this.msg('Период — не больше 3 месяцев');
             Store.set('adminLast', { nick: nk });
             this._nick = nk;
-            this.count(nk, a, b);
+            const ta = tfrom.value || '',
+                tb = tto.value || '';
+            if (a === b && ta && tb && ta > tb) return this.msg('Время «с» позже времени «по»');
+            this.count(nk, a, b, ta, tb);
         };
         $('[data-a="go"]').onclick = go;
         q.addEventListener('keydown', e => e.key === 'Enter' && go());
@@ -3106,7 +3159,12 @@ const AdminView = {
         if (this.scrim && gen === this._gen) this.scrim.querySelector('.vdl-prog').textContent = t;
     },
 
-    async count(nick, a, b) {
+    // «17:30» → миллисекунды от начала суток
+    hm(t) {
+        const m = String(t || '').match(/^(\d{1,2}):(\d{2})/);
+        return m ? (+m[1] * 60 + +m[2]) * 6e4 : null;
+    },
+    async count(nick, a, b, ta = '', tb = '') {
         // подсчёт из закрытого окна не мешает: он уже остановлен поколением
         if (this.busy && this._busyGen === this._gen) return toast('Подожди, подсчёт ещё идёт', 'info');
         this.busy = true;
@@ -3130,8 +3188,9 @@ const AdminView = {
             const cats = sel ? ready : cats0;
             if (!ready.length) throw new Error('не найдены номера категорий — впиши их в «Что считать»');
             // конец периода — не позже «сейчас»: новые записи во время листания не сдвигают страницы
-            const t0 = this.dayStart(a),
-                t1 = Math.min(this.dayStart(b) + 864e5 - 1, Date.now());
+            // время суток (МСК), если задано: с ta в первый день и по tb в последний
+            const t0 = this.dayStart(a) + (this.hm(ta) || 0),
+                t1 = Math.min(this.hm(tb) != null ? this.dayStart(b) + this.hm(tb) + 59999 : this.dayStart(b) + 864e5 - 1, Date.now());
             const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
             const own = [];
             let capped = false;
@@ -3186,7 +3245,7 @@ const AdminView = {
                 };
             }
             this.prog('', gen);
-            this.render(out, { nick, a, b, all: own, own, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
+            this.render(out, { nick, a, b, ta, tb, range, all: own, own, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -3280,9 +3339,9 @@ const AdminView = {
             <div class="k"><small>В среднем в день</small><b>${days.length ? String(+(own.length / days.length).toFixed(1)) : 0}</b></div>
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
-          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="amore" data-all="1" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить всё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}${d.noAccess && d.noAccess.length ? ` · <b style="color:#f5a524">нет доступа: ${d.noAccess.map(U.esc).join(', ')}</b> — эти категории не посчитаны` : ''}${times.length ? ` · записи с ${fmtDate(tMin)} по ${fmtDate(tMax)}` : ''}${outside ? ` · <b style="color:#f5a524">вне выбранных суток: ${outside}</b> (время сайта и периода расходятся — сообщи разработчику)` : ''}${cut ? ` · <b style="color:#f5a524">не считается по твоему выбору: ${cut}</b> (зачёркнутые строки ниже — нажми, чтобы вернуть)` : ''}</div>
+          <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.ta || d.tb ? ` · ${d.ta || '00:00'}–${d.tb || '23:59'} МСК` : ''}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="amore" data-all="1" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить всё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}${d.noAccess && d.noAccess.length ? ` · <b style="color:#f5a524">нет доступа: ${d.noAccess.map(U.esc).join(', ')}</b> — эти категории не посчитаны` : ''}${times.length ? ` · записи с ${fmtDate(tMin)} по ${fmtDate(tMax)}` : ''}${outside ? ` · <b style="color:#f5a524">вне выбранных суток: ${outside}</b> (время сайта и периода расходятся — сообщи разработчику)` : ''}${cut ? ` · <b style="color:#f5a524">не считается по твоему выбору: ${cut}</b> (зачёркнутые строки ниже — нажми, чтобы вернуть)` : ''}</div>
  ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
-          <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Список</button></div>
+          <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Журнал</button></div>
           <div data-at="cat">
             ${(() => {
                 // разбивка действий (без сообщений в админ-чатах) по видам
@@ -3344,9 +3403,15 @@ const AdminView = {
                         .join('')
                   : '<div class="vdl-row"><div class="main sub">В действиях нет ников игроков</div></div>'
           }</div></div></div>
-          <div data-at="list" hidden><div class="sec"><h4>Действия</h4>
-            <input class="inp vdl-filter" data-a="flt" placeholder="Найти: ник, слово…">
-            <div class="card" data-l="list"></div></div></div>
+          <div data-at="list" hidden>
+            <div class="vdl-jr-bar">
+              <div class="seg vdl-jr-src"><button data-src="own">Засчитанные</button><button data-src="all" title="Все записи админа за период — сообщения в любых чатах, действия, репорты">Всё от админа</button></div>
+              <div class="vdl-jr-search">${icon('search', 14)}<input class="inp" data-a="flt" placeholder="Поиск по тексту: слово, фраза, ник…"><button class="vdl-jr-x" data-a="fltx" title="Очистить" hidden>${icon('x', 12)}</button></div>
+            </div>
+            <div class="vdl-jr-chips" data-l="chips"></div>
+            <div class="sub vdl-jr-info" data-l="jinfo"></div>
+            <div class="card" data-l="list"></div>
+          </div>
           <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
         out.querySelectorAll('[data-tog]').forEach(
             el =>
@@ -3359,20 +3424,97 @@ const AdminView = {
                     if (sc) sc.scrollTop = top;
                 })
         );
-        // список действий с поиском
-        const sorted = own.slice().sort((x, y) => new Date(y.time) - new Date(x.time));
+        // ---- журнал: засчитанные или все записи админа, поиск по тексту, фильтр по видам ----
+        const J = (d._jr = d._jr || { src: 'own', q: '', kind: 'all', n: 100, allRows: null, allCapped: false });
         const listBox = out.querySelector('[data-l="list"]');
+        const fInp = out.querySelector('[data-a="flt"]');
+        fInp.value = J.q;
+        const KINDS = [
+            ['all', 'Всё'],
+            ['msg', 'Сообщения'],
+            ['act', 'Действия'],
+            ['pun', 'Наказания'],
+            ['rep', 'Репорты'],
+            ['conn', 'Входы']
+        ];
+        const kindOf = r => {
+            const cn = String(catName(r) || '');
+            const t = String(r.transaction_desc || '');
+            if (String(r.category_id) === '38' || /подключ|отключ/i.test(cn)) return 'conn';
+            if (/жалоб|вопрос/i.test(cn)) return /^PM\s+для/i.test(t) ? 'msg' : 'rep';
+            if (MSG_CAT.test(cn) || /^PM\s+для/i.test(t)) return 'msg';
+            const pt = punType(t);
+            if (pt) return 'pun';
+            return 'act';
+        };
+        const esc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const mark = (txt, q) => (q ? U.esc(txt).replace(new RegExp(esc(U.esc(q)), 'gi'), m => `<mark>${m}</mark>`) : U.esc(txt));
         const drawList = () => {
-            const f = out.querySelector('[data-a="flt"]').value.trim().toLowerCase();
-            const rows = f ? sorted.filter(r => `${r.transaction_desc || ''} ${nm(r.category_id)}`.toLowerCase().includes(f)) : sorted;
+            const base = (J.src === 'all' && J.allRows ? J.allRows : own).slice().sort((x, y) => new Date(y.time) - new Date(x.time));
+            const q = J.q.trim().toLowerCase();
+            const cnt = {};
+            base.forEach(r => (cnt[(r._k = r._k || kindOf(r))] = (cnt[r._k] || 0) + 1));
+            const byKind = J.kind === 'all' ? base : base.filter(r => r._k === J.kind);
+            const rows = q ? byKind.filter(r => `${r.transaction_desc || ''} ${catName(r)} ${r.player_name || ''}`.toLowerCase().includes(q)) : byKind;
+            out.querySelector('[data-l="chips"]').innerHTML = KINDS.map(([k, n]) => {
+                const c = k === 'all' ? base.length : cnt[k] || 0;
+                return k !== 'all' && !c ? '' : `<button class="vdl-chip${J.kind === k ? ' on' : ''}" data-jk="${k}">${n}<b>${c}</b></button>`;
+            }).join('');
+            out.querySelectorAll('[data-jk]').forEach(b => (b.onclick = () => ((J.kind = b.dataset.jk), (J.n = 100), drawList())));
+            out.querySelectorAll('[data-src]').forEach(b => b.classList.toggle('on', b.dataset.src === J.src));
+            out.querySelector('[data-a="fltx"]').hidden = !J.q;
+            out.querySelector('[data-l="jinfo"]').innerHTML =
+                J.src === 'all' && !J.allRows
+                    ? ''
+                    : `${q || J.kind !== 'all' ? `Найдено ${rows.length} из ${base.length}` : `${base.length} ${plural(base.length, 'запись', 'записи', 'записей')}`}${J.src === 'all' && J.allCapped ? ' · записей очень много — показаны не все, возьми период короче' : ''}`;
             listBox.innerHTML = rows.length
                 ? rows
-                      .slice(0, 300)
-                      .map(r => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(nm(r.category_id))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub vdl-desc">${U.esc(moneyText(r.transaction_desc))}</div></div></div>`)
-                      .join('') + (rows.length > 300 ? `<div class="sub" style="padding:8px 2px">Показаны 300 из ${rows.length}</div>` : '')
-                : '<div class="vdl-row"><div class="main sub">Ничего не нашлось</div></div>';
+                      .slice(0, J.n)
+                      .map(r => `<div class="vdl-row vdl-jr-row" data-k="${r._k}"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub vdl-desc">${mark(moneyText(r.transaction_desc), J.q.trim())}</div></div></div>`)
+                      .join('') + (rows.length > J.n ? `<div class="btns" style="padding:8px"><button class="btn" data-a="jmore">${icon('download', 13)}Показать ещё ${Math.min(100, rows.length - J.n)} (осталось ${rows.length - J.n})</button></div>` : '')
+                : `<div class="vdl-row"><div class="main sub">${J.src === 'all' && !J.allRows ? 'Загружаю все записи админа…' : 'Ничего не нашлось'}</div></div>`;
+            const jm = listBox.querySelector('[data-a="jmore"]');
+            if (jm) jm.onclick = () => ((J.n += 100), drawList());
         };
-        out.querySelector('[data-a="flt"]').oninput = U.debounce(drawList, 150);
+        // все записи админа за тот же период (любые категории) — по первому выбору «Всё от админа»
+        const loadAll = async () => {
+            if (J.allRows || J.loading) return;
+            J.loading = true;
+            const gen = this._gen;
+            try {
+                const r = await Api.all({ player_name__exact: nick, ...d.range }, 40, (pg, n) => this.prog(`Все записи ${nick}: страница ${pg}, записей ${n}…`, gen), null, () => gen === this._gen);
+                if (gen !== this._gen) return;
+                J.allRows = r;
+                J.allCapped = r.capped;
+            } catch (e) {
+                toast('Не загрузилось: ' + e.message, 'err');
+                J.src = 'own';
+            } finally {
+                J.loading = false;
+                this.prog('', gen);
+            }
+            if (listBox.isConnected) drawList();
+        };
+        out.querySelectorAll('[data-src]').forEach(
+            b =>
+                (b.onclick = () => {
+                    J.src = b.dataset.src;
+                    J.kind = 'all';
+                    J.n = 100;
+                    drawList();
+                    if (J.src === 'all') loadAll();
+                })
+        );
+        fInp.oninput = U.debounce(() => {
+            J.q = fInp.value;
+            J.n = 100;
+            drawList();
+        }, 150);
+        out.querySelector('[data-a="fltx"]').onclick = () => {
+            fInp.value = J.q = '';
+            drawList();
+            fInp.focus();
+        };
         drawList();
         const tabs = out.querySelector('[data-g="atab"]');
         const show = t => {
