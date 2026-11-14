@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.63
+// @version      1.2.64
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.63
+// @version      1.2.64
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.63';
+const VERSION = '1.2.64';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -800,6 +800,32 @@ input[type="checkbox"]:checked::after { transform: rotate(45deg) scale(1); }
   .vdl-sum .k:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .pane .btns { flex-wrap: wrap; row-gap: 8px; }
 }
+/* второй проход визуала */
+/* крупная сумма в трейде/передаче — заметный сплошной красный тег */
+.vdl-tag.big { background: #e5484d; color: #fff; border-color: #e5484d; font-weight: 800; }
+.vdl-row.tr-big { background: color-mix(in srgb, #e5484d 7%, transparent); border-radius: 8px; padding-left: 10px; margin: 3px 0; }
+/* причина античита в «За что» — до двух строк, полный текст в подсказке */
+.vdl-bar.pick .nm { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.3; }
+/* пояснения и подписи разделов вне строк — приглушённые, как подписи в строках */
+:where(.pane) .sub { font-size: 12px; color: var(--tx-3); }
+/* заголовок карточки вне строк (IP в окне IP) — жирный, как в строках */
+:where(.pane) .card > .ttl { font-weight: 700; font-size: 14px; color: var(--tx); }
+/* строка IP/устройства со скрытым «Кто ещё» — без лишней линии внизу карточки */
+.card > div:last-child > .vdl-row:has(+ .vdl-more[hidden]) { border-bottom: 0; }
+/* подсвеченные передачи — текст не прижат к цветной полосе */
+.vdl-row.tr-give, .vdl-row.m-give, .vdl-row.ac-aim, .vdl-row.ac-move, .vdl-row.ac-low { padding-left: 10px; }
+/* боты: ники всех строк на одной линии, а не только у подсвеченных */
+.vdl-botrow { padding-left: 10px; }
+/* фокус с клавиатуры виден на кнопках, вкладках и чипах */
+.btn:focus-visible, .seg button:focus-visible, .vdl-chip:focus-visible, .vdl-fchip:focus-visible, .icon-btn:focus-visible, .vdl-dd-it:focus-within { outline: 2px solid color-mix(in srgb, var(--acc) 70%, transparent); outline-offset: 1px; }
+/* ховер у невыбранных переключателей */
+.seg button:not(.on):hover { background: rgba(255,255,255,.05); color: var(--tx); }
+/* выпадающий список сортировки в фокусе — как поле ввода */
+select.inp:focus { border-color: var(--acc); }
+/* телефон: «Разработчику» в шапке — одной иконкой (подпись в подсказке), подзаголовок не рвётся на 4 строки */
+@media (max-width: 520px) { .m-head .btn[data-a="mail"] { font-size: 0; gap: 0; width: 34px; padding: 0; justify-content: center; } }
+/* телефон: в полосах названию больше места, чем полоске (не режется «Смотрел список а…») */
+@media (max-width: 700px) { .vdl-bar { grid-template-columns: minmax(0, 3fr) 2fr minmax(36px, auto); } }
 `;
 
 // время записи → строка с часовым поясом. Время без пояса — в поясе сервера: какой он, видно по ответу
@@ -2558,7 +2584,7 @@ const Panel = {
           <div class="sub" style="padding:10px 2px 4px">За что</div>
           <div data-l="bars">${kinds
               .slice(0, 8)
-              .map(g => `<div class="vdl-bar pick${acCls(g.lvl)}" data-k="${U.esc(g.k)}" title="Показать только это"><span class="nm">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
+              .map(g => `<div class="vdl-bar pick${acCls(g.lvl)}" data-k="${U.esc(g.k)}" title="${U.esc(g.k)} — показать только это"><span class="nm">${U.esc(g.k)}</span><span class="tr"><b style="width:${Math.max(3, Math.round((g.n / kmax) * 100))}%"></b></span><span class="n">${g.n}</span></div>`)
               .join('')}</div>
           <div class="vdl-ftools" style="margin-top:12px">
             <div class="vdl-dd" data-dd="kind"><button class="btn" data-a="dd"><span data-l="kl">Все причины</span>${icon('down', 13)}</button>
@@ -2702,7 +2728,13 @@ const Panel = {
             const t = rows.map(r => String(r.transaction_desc || '')).join('\n');
             return /успешно\s+закончен/i.test(t) ? '<span class="vdl-tag" style="--c:#2fbf71">состоялся</span>' : /не\s+завершился/i.test(t) ? '<span class="vdl-tag" style="--c:#8b8f9a">отменён</span>' : '';
         };
-        const row = g => `<div class="vdl-row${g.gave ? ' tr-give' : ''}" data-tr="${g.id}"><div class="main"><div class="ttl">Трейд #${g.id}${status(g.full || g.rows)}${g.gave ? '<span class="vdl-tag" style="--c:#f5a524">отдал</span>' : ''}<span class="vdl-tag">${fmtDate(g.last)}</span></div><div data-l="tb">${body(g, g.full || g.rows)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`;
+        // крупный трейд (деньгами от порога «bigTrade», как в «Сравнении») — красная полоса и сумма тегом
+        const BIG = +Store.get('bigTrade', 1000000) || 1000000;
+        const row = g => {
+            const sum = (g.full || g.rows).reduce((a, r) => a + rowMoney(r), 0);
+            const big = sum >= BIG;
+            return `<div class="vdl-row${big ? ' tr-big' : ''}${g.gave ? ' tr-give' : ''}" data-tr="${g.id}"><div class="main"><div class="ttl">Трейд #${g.id}${status(g.full || g.rows)}${big ? `<span class="vdl-tag big" style="--c:#e5484d">крупный: ${fmtNum(sum)}</span>` : ''}${g.gave ? '<span class="vdl-tag" style="--c:#f5a524">отдал</span>' : ''}<span class="vdl-tag">${fmtDate(g.last)}</span></div><div data-l="tb">${body(g, g.full || g.rows)}</div></div><div class="vdl-btns"><button class="btn" data-tid="${g.id}">${icon('eye', 13)}Открыть</button></div></div>`;
+        };
         box.innerHTML =
             (list.length ? list.map(row).join('') : '<div class="vdl-row"><div class="main sub">Трейдов за период нет</div></div>') +
             (list.capped ? `<div class="sub" style="padding:8px 2px">${list.length} ${plural(list.length, 'трейд', 'трейда', 'трейдов')} — ${Api.order === 'time' ? 'первые' : 'последние'} за период, есть ещё${this.moreBtn()}</div>` : '');
@@ -4085,7 +4117,7 @@ const CompareView = {
         let trades = mkTrades();
         let tradeSum = trades.filter(t => !t.cancel).reduce((a, t) => a + t.sum, 0);
         this.report = { d, verdict, comIp, comDev, mainKm, nearest, tx, money, trades, tradeSum };
-        const tradeRow = t => `<div class="vdl-row${t.big ? ' tr-big' : ''}"><div class="main"><div class="ttl">Трейд #${U.esc(t.id)}${t.ok ? '<span class="vdl-tag" style="--c:#2fbf71">состоялся</span>' : t.cancel ? '<span class="vdl-tag" style="--c:#8b8f9a">отменён</span>' : ''}${t.big ? `<span class="vdl-tag" style="--c:#e5484d">крупный: ${fmtNum(t.sum)}</span>` : t.sum ? `<span class="vdl-tag">${fmtNum(t.sum)}</span>` : ''}${t.oneWay ? `<span class="vdl-tag" style="--c:#f5a524" title="Отдавал только один, второй ничего не положил">отдал только ${U.esc(t.oneWay)}</span>` : ''}<span class="vdl-tag">${fmtDate(t.last)}</span></div>${t.rows
+        const tradeRow = t => `<div class="vdl-row${t.big ? ' tr-big' : ''}"><div class="main"><div class="ttl">Трейд #${U.esc(t.id)}${t.ok ? '<span class="vdl-tag" style="--c:#2fbf71">состоялся</span>' : t.cancel ? '<span class="vdl-tag" style="--c:#8b8f9a">отменён</span>' : ''}${t.big ? `<span class="vdl-tag big" style="--c:#e5484d">крупный: ${fmtNum(t.sum)}</span>` : t.sum ? `<span class="vdl-tag">${fmtNum(t.sum)}</span>` : ''}${t.oneWay ? `<span class="vdl-tag" style="--c:#f5a524" title="Отдавал только один, второй ничего не положил">отдал только ${U.esc(t.oneWay)}</span>` : ''}<span class="vdl-tag">${fmtDate(t.last)}</span></div>${t.rows
             .slice(0, 10)
             .map(r => `<div class="vdl-tline${GIVE_RE.test(String(r.transaction_desc || '')) ? ' give' : ''}"><b>${U.esc(r.player_name || '—')}</b> ${U.esc(tradeText(r))}</div>`)
             .join('')}${t.rows.length > 10 ? `<div class="sub">… ещё ${t.rows.length - 10}</div>` : ''}</div><div class="vdl-btns"><button class="btn" data-tid="${U.esc(t.id)}">${icon('eye', 13)}Открыть</button></div></div>`;
@@ -4127,7 +4159,7 @@ const CompareView = {
               tx.length
                   ? `<div class="sec"><h4>Передачи денег без трейда</h4><div class="card"><div class="sub" style="padding:6px 2px">${tx.length} ${plural(tx.length, 'передача', 'передачи', 'передач')}${money ? ` · ${fmtNum(money)}` : ''}</div>${tx
                         .slice(0, 40)
-                        .map(x => `<div class="vdl-row${rowMoney(x) >= BIG ? ' tr-big' : ''}"><div class="main"><div class="ttl"><span class="sub" style="margin:0">${fmtDate(x.time)} · ${U.esc(x._from)} → ${U.esc(x._to)}</span>${rowMoney(x) ? `<b class="${rowMoney(x) >= BIG ? 'vdl-neg' : ''}">${fmtNum(rowMoney(x))}</b>` : ''}${rowMoney(x) >= BIG ? '<span class="vdl-tag" style="--c:#e5484d">крупная</span>' : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(String(x.transaction_desc || '').slice(0, 200)))}</div></div></div>`)
+                        .map(x => `<div class="vdl-row${rowMoney(x) >= BIG ? ' tr-big' : ''}"><div class="main"><div class="ttl"><span class="sub" style="margin:0">${fmtDate(x.time)} · ${U.esc(x._from)} → ${U.esc(x._to)}</span>${rowMoney(x) ? `<b class="${rowMoney(x) >= BIG ? 'vdl-neg' : ''}">${fmtNum(rowMoney(x))}</b>` : ''}${rowMoney(x) >= BIG ? '<span class="vdl-tag big" style="--c:#e5484d">крупная</span>' : ''}</div><div class="sub vdl-desc">${U.esc(moneyText(String(x.transaction_desc || '').slice(0, 200)))}</div></div></div>`)
                         .join('')}</div></div>`
                   : ''
           }
@@ -4583,12 +4615,16 @@ const BotView = {
                         .join('')}</div></div>`
                   : ''
           }
-          <div class="vdl-sum">
-            <div class="k"><small>Похожи на ботов</small><b>${bots.length}</b></div>
-            <div class="k"><small>Писали рекламу</small><b>${arr.length}</b>${nBanned && !d.hideBan ? `<small style="letter-spacing:0;text-transform:none">из них заблокировано ${nBanned}</small>` : ''}</div>
-            <div class="k"><small>Сообщений</small><b>${nMsg}</b></div>
-            <div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>
-          </div>
+          ${(() => {
+              // сводка: карточки с нулём не показываем (нечего показывать — нет и карточки)
+              const ks = [
+                  bots.length ? `<div class="k"><small>Похожи на ботов</small><b>${bots.length}</b></div>` : '',
+                  arr.length ? `<div class="k"><small>Писали рекламу</small><b>${arr.length}</b>${nBanned && !d.hideBan ? `<small style="letter-spacing:0;text-transform:none">из них заблокировано ${nBanned}</small>` : ''}</div>` : '',
+                  nMsg ? `<div class="k"><small>Сообщений</small><b>${nMsg}</b></div>` : '',
+                  groups ? `<div class="k"><small>IP с ${c.minAcc}+ акк.</small><b>${groups}</b></div>` : ''
+              ].filter(Boolean);
+              return ks.length ? `<div class="vdl-sum">${ks.join('')}</div>` : '';
+          })()}
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(d.label)}${d.capped ? ' · сообщений очень много — проверены не все, возьми период короче' : ''}</div>
           ${d.blkInfo ? `<div class="sub" style="margin:-4px 2px 8px;font-size:11.5px">${U.esc(d.blkInfo)}</div>` : ''}
           ${d.arr.length ? `<div class="btns" style="margin:-2px 0 10px;gap:16px;align-items:center"><label class="vdl-chk" style="font-size:12.5px"><input type="checkbox" data-a="ban" ${d.hideBan ? 'checked' : ''}> Скрыть заблокированных (${nBanned})</label><button class="btn" data-a="chkban" title="Ещё раз проверить по логам, кто из найденных уже заблокирован">${icon('refresh', 13)}Проверить заблокированных</button>${nWeak ? `<label class="vdl-chk" style="font-size:12.5px" title="Одно слово вроде «тг» без @ника, ссылки и других признаков"><input type="checkbox" data-a="weak" ${d.showWeak ? 'checked' : ''}> Показать слабые совпадения (${nWeak})</label>` : ''}</div>` : ''}
