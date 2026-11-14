@@ -656,7 +656,7 @@ const LOGS_UI_CSS = `
 .vdl-af-custom { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .vdl-af-custom[hidden] { display: none; }
 .vdl-af-custom .inp { height: 34px; }
-.vdl-af-t { width: 96px; }
+.vdl-af-t { width: 124px; }
 .vdl-af-l { font-size: 12px; color: var(--tx-3); margin: 0 2px 0 6px; }
 .vdl-af-l:first-child { margin-left: 0; }
 .vdl-af-hint { font-size: 11.5px; color: var(--tx-3); margin-left: 6px; }
