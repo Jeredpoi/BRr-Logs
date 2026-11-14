@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.62
+// @version      1.2.63
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.62
+// @version      1.2.63
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.62';
+const VERSION = '1.2.63';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -95,6 +95,8 @@ const ICONS = {
     pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     users: '<circle cx="9" cy="9" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6"/><path d="M15.5 6.2a3 3 0 010 5.6M17.5 14.8c1.6.6 2.7 2 3 4.2"/>',
     bot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/><circle cx="12" cy="3.5" r="1"/>',
+    // «Проверить заблокированных» в «Поиске ботов» звал refresh, а иконки не было — пустое место в кнопке
+    refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
     spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>'
 };
 const icon = (n, s = 16) =>
@@ -772,6 +774,32 @@ input[type="checkbox"]:checked::after { transform: rotate(45deg) scale(1); }
 @media (max-width: 700px) { .vdl-sum, .vdl-money { grid-template-columns: repeat(2, 1fr); } .vdl-bar { grid-template-columns: 1fr 1fr 44px; } }
 .vdl-btns .btn { height: 28px; font-size: 12px; padding: 0 10px; }
 @media (max-width: 760px) { .vdl-sum { grid-template-columns: repeat(2, 1fr); } .vdl-row { grid-template-columns: 1fr; } .vdl-btns { justify-content: flex-start; } }
+/* правки визуала: пустая строка хода поиска не держит дыру над итогами */
+.vdl-prog:empty { min-height: 0; margin: 0 0 4px; }
+/* итоги: пятая карточка (ID игрока) не уходит одна на новую строку */
+.vdl-sum { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+/* суммы денег — главные числа вкладки «Доходы» */
+.vdl-money .k b { font-size: 17px; font-weight: 750; }
+/* подсвеченные строки передач не слипаются в один блок */
+.vdl-row.tr-give, .vdl-row.m-give { margin: 3px 0; }
+/* заголовок «Подозрительное в сообщениях» — как остальные заголовки разделов */
+.vdl-sus-h h4 { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--tx-3); }
+/* журнал админа: текст записи главнее времени — светлее и крупнее */
+.vdl-jr-row .vdl-desc { font-size: 12.5px; color: var(--tx-2); }
+/* предупреждение «не найден номер категории» */
+.vdl-warn { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border-color: color-mix(in srgb, #f5a524 45%, transparent); background: color-mix(in srgb, #f5a524 7%, transparent); }
+.vdl-warn > svg { flex: none; color: #f5a524; }
+.vdl-warn > span { flex: 1 1 260px; }
+.vdl-warn .btn { height: 28px; font-size: 12px; padding: 0 11px; }
+/* узкий экран: переключатели и вкладки переносятся, а не уезжают за край */
+@media (max-width: 700px) {
+  .pane .seg { flex-wrap: wrap; max-width: 100%; }
+  .vdl-tabs { flex-wrap: wrap; }
+  .vdl-tabs button { flex: 1 0 auto; padding: 0 10px; }
+  .vdl-af-nick { flex: none; }
+  .vdl-sum .k:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .pane .btns { flex-wrap: wrap; row-gap: 8px; }
+}
 `;
 
 // время записи → строка с часовым поясом. Время без пояса — в поясе сервера: какой он, видно по ответу
@@ -2299,12 +2327,12 @@ const Panel = {
         this.report.links = d.list.map(g => `${g.nick}${g.banned ? ' (заблокирован)' : ''} — ${[...g.via].join(', ')}`);
         const nb = d.list.filter(g => g.banned).length;
         box.innerHTML = d.list.length
-            ? `<div class="sub" style="padding:6px 2px 8px">Проверено IP: ${d.ips}, устройств: ${d.devs}. Найдено аккаунтов: ${d.list.length}${nb ? `, из них заблокировано ${nb}` : ''}.${d.blk.length ? '' : ' Категории блокировок не найдены — пометок «заблокирован» не будет.'}</div>` +
+            ? `<div class="sub" style="padding:6px 2px 8px">Проверено IP: ${d.ips}, устройств: ${d.devs}. Найдено аккаунтов: <b style="color:var(--tx)">${d.list.length}</b>${nb ? `, из них заблокировано <b class="vdl-neg">${nb}</b>` : ''}.${d.blk.length ? '' : ' Категории блокировок не найдены — пометок «заблокирован» не будет.'}</div>` +
               d.list
                   .map(
-                      g => `<div class="vdl-row${g.banned ? ' is-banned' : ''}"><div class="main"><div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>${
+                      g => `<div class="vdl-row"><div class="main"><div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>${
                           g.banned
-                              ? `<span class="vdl-tag" style="--c:#8b8f9a" title="${U.esc(g.banned.desc.slice(0, 200))}">заблокирован ${U.esc(fmtDate(g.banned.t).split(',')[0])}${g.banned.until ? ' до ' + U.esc(fmtDate(g.banned.until).split(',')[0]) : ''}</span>`
+                              ? `<span class="vdl-tag" style="--c:#e5484d" title="${U.esc(g.banned.desc.slice(0, 200))}">заблокирован ${U.esc(fmtDate(g.banned.t).split(',')[0])}${g.banned.until ? ' до ' + U.esc(fmtDate(g.banned.until).split(',')[0]) : ''}</span>`
                               : g.checked
                                 ? '<span class="vdl-tag" style="--c:#2fbf71">не заблокирован</span>'
                                 : ''
@@ -3340,7 +3368,7 @@ const AdminView = {
             <div class="k"><small>Игроков</small><b>${targets.length}</b></div>
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.ta || d.tb ? ` · ${d.ta || '00:00'}–${d.tb || '23:59'} МСК` : ''}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="amore" data-all="1" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить всё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}${d.noAccess && d.noAccess.length ? ` · <b style="color:#f5a524">нет доступа: ${d.noAccess.map(U.esc).join(', ')}</b> — эти категории не посчитаны` : ''}${times.length ? ` · записи с ${fmtDate(tMin)} по ${fmtDate(tMax)}` : ''}${outside ? ` · <b style="color:#f5a524">вне выбранных суток: ${outside}</b> (время сайта и периода расходятся — сообщи разработчику)` : ''}${cut ? ` · <b style="color:#f5a524">не считается по твоему выбору: ${cut}</b> (зачёркнутые строки ниже — нажми, чтобы вернуть)` : ''}</div>
- ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card" style="padding:12px 14px;margin-bottom:10px;border-color:#f5a52466">${icon('x', 13)} Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны. <button class="btn" data-a="cfg2" style="height:26px;margin-left:6px">Указать</button></div>` : ''}
+ ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card vdl-warn" style="padding:10px 12px 10px 14px;margin-bottom:10px">${icon('x', 14)}<span>Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны.</span><button class="btn" data-a="cfg2">Указать</button></div>` : ''}
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Журнал</button></div>
           <div data-at="cat">
             ${(() => {
@@ -4060,9 +4088,9 @@ const CompareView = {
         const tradeRow = t => `<div class="vdl-row${t.big ? ' tr-big' : ''}"><div class="main"><div class="ttl">Трейд #${U.esc(t.id)}${t.ok ? '<span class="vdl-tag" style="--c:#2fbf71">состоялся</span>' : t.cancel ? '<span class="vdl-tag" style="--c:#8b8f9a">отменён</span>' : ''}${t.big ? `<span class="vdl-tag" style="--c:#e5484d">крупный: ${fmtNum(t.sum)}</span>` : t.sum ? `<span class="vdl-tag">${fmtNum(t.sum)}</span>` : ''}${t.oneWay ? `<span class="vdl-tag" style="--c:#f5a524" title="Отдавал только один, второй ничего не положил">отдал только ${U.esc(t.oneWay)}</span>` : ''}<span class="vdl-tag">${fmtDate(t.last)}</span></div>${t.rows
             .slice(0, 10)
             .map(r => `<div class="vdl-tline${GIVE_RE.test(String(r.transaction_desc || '')) ? ' give' : ''}"><b>${U.esc(r.player_name || '—')}</b> ${U.esc(tradeText(r))}</div>`)
-            .join('')}${t.rows.length > 10 ? `<div class="sub">… ещё ${t.rows.length - 10}</div>` : ''}</div><div class="vdl-btns"><button class="btn" data-tid="${U.esc(t.id)}">Открыть</button></div></div>`;
+            .join('')}${t.rows.length > 10 ? `<div class="sub">… ещё ${t.rows.length - 10}</div>` : ''}</div><div class="vdl-btns"><button class="btn" data-tid="${U.esc(t.id)}">${icon('eye', 13)}Открыть</button></div></div>`;
         out.innerHTML = `
-          <div class="card" style="padding:12px 14px;margin-bottom:12px;border-color:${vc}66"><b style="color:${vc}">${U.esc(verdict)}</b></div>
+          <div class="card" style="padding:12px 14px;margin-bottom:12px;border-color:${vc}66;background:${vc}14;box-shadow:inset 3px 0 0 ${vc}"><b style="color:${vc};font-size:14px">${U.esc(verdict)}</b></div>
           <div class="vdl-cmp-form" style="margin-bottom:12px">${card(A, 'Первый')}${card(B, 'Второй')}</div>
           <div class="vdl-sum">
             <div class="k"><small>Общих IP</small><b>${comIp.length}</b></div>
