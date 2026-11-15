@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.64
+// @version      1.2.65
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.64
+// @version      1.2.65
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.64';
+const VERSION = '1.2.65';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -678,6 +678,9 @@ const LOGS_UI_CSS = `
 .vdl-jr-row[data-k="msg"] .vdl-tag { --c: #3aa0ff; }
 .vdl-jr-row[data-k="pun"] .vdl-tag { --c: #e5484d; }
 .vdl-jr-row[data-k="rep"] .vdl-tag { --c: #f5a524; }
+.vdl-jr-row[data-k="event"] .vdl-tag { --c: #c56bff; }
+.vdl-jr-row.viol { box-shadow: inset 3px 0 0 #e5484d; background: color-mix(in srgb, #e5484d 9%, transparent); }
+.vdl-viol-tag { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; color: #fff; background: #e5484d; }
 .vdl-jr-row mark { background: color-mix(in srgb, var(--acc) 45%, transparent); color: #fff; border-radius: 3px; padding: 0 1px; }
 @media (max-width: 700px) { .vdl-af-row { flex-direction: column; } .vdl-af-per button { flex: 1 0 30%; } }
 .vdl-row.tr-big { box-shadow: inset 3px 0 0 #e5484d; }
@@ -3304,8 +3307,16 @@ const AdminView = {
                     work: r.filter(x => /тип:\s*в\s+работе/i.test(T(x))).length
                 };
             }
+            // «Ивенты и квесты»: в счёт не идут, но в журнале — участие в ивентах в рабочее время помечается
+            let events = [];
+            const evCat = this.known().find(x => /ивент|квест/i.test(x.name)) || { id: '35' };
+            if (!ready.some(c => String(c.id) === String(evCat.id))) {
+                const r = await Api.all({ player_name__exact: nick, category_id__exact: evCat.id, ...range }, 20, (p, n) => this.prog(`Ивенты: страница ${p}, записей ${n}…`, gen), null, alive, 0, { strict: true }).catch(() => []);
+                if (!alive()) return;
+                if (!r.noAccess) events = r.filter(x => x.category_id == null || String(x.category_id) === String(evCat.id)).map(x => (x.category_id == null ? Object.assign({}, x, { category_id: evCat.id }) : x));
+            }
             this.prog('', gen);
-            this.render(out, { nick, a, b, ta, tb, range, all: own, own, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
+            this.render(out, { nick, a, b, ta, tb, range, all: own, own, events, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -3495,22 +3506,34 @@ const AdminView = {
             ['act', 'Действия'],
             ['pun', 'Наказания'],
             ['rep', 'Репорты'],
-            ['conn', 'Входы']
+            ['conn', 'Входы'],
+            ['event', 'Ивенты']
         ];
         const kindOf = r => {
             const cn = String(catName(r) || '');
             const t = String(r.transaction_desc || '');
             if (String(r.category_id) === '38' || /подключ|отключ/i.test(cn)) return 'conn';
+            if (isEvent(r)) return 'event';
             if (/жалоб|вопрос/i.test(cn)) return /^PM\s+для/i.test(t) ? 'msg' : 'rep';
             if (MSG_CAT.test(cn) || /^PM\s+для/i.test(t)) return 'msg';
             const pt = punType(t);
             if (pt) return 'pun';
             return 'act';
         };
+        // ивент в рабочее время админа (08:00–20:00 МСК) — нарушение
+        const isEvent = r => String(r.category_id) === '35' || /ивент|квест/i.test(String(catName(r) || ''));
+        const WORK = [8, 20];
+        const viol = r => {
+            if (!isEvent(r)) return false;
+            const t = new Date(r.time).getTime();
+            if (!Number.isFinite(t)) return false;
+            const h = new Date(t + 3 * 3600e3).getUTCHours();
+            return h >= WORK[0] && h < WORK[1];
+        };
         const esc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const mark = (txt, q) => (q ? U.esc(txt).replace(new RegExp(esc(U.esc(q)), 'gi'), m => `<mark>${m}</mark>`) : U.esc(txt));
         const drawList = () => {
-            const base = (J.src === 'all' && J.allRows ? J.allRows : own).slice().sort((x, y) => new Date(y.time) - new Date(x.time));
+            const base = (J.src === 'all' && J.allRows ? J.allRows : own.concat(d.events || [])).slice().sort((x, y) => new Date(y.time) - new Date(x.time));
             const q = J.q.trim().toLowerCase();
             const cnt = {};
             base.forEach(r => (cnt[(r._k = r._k || kindOf(r))] = (cnt[r._k] || 0) + 1));
@@ -3530,7 +3553,7 @@ const AdminView = {
             listBox.innerHTML = rows.length
                 ? rows
                       .slice(0, J.n)
-                      .map(r => `<div class="vdl-row vdl-jr-row" data-k="${r._k}"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span></div><div class="sub vdl-desc">${mark(moneyText(r.transaction_desc), J.q.trim())}</div></div></div>`)
+                      .map(r => `<div class="vdl-row vdl-jr-row${viol(r) ? ' viol' : ''}" data-k="${r._k}"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${viol(r) ? '<span class="vdl-viol-tag" title="Участие в ивенте с 08:00 до 20:00 МСК — рабочее время администратора">Ивент в рабочее время</span>' : ''}</div><div class="sub vdl-desc">${mark(moneyText(r.transaction_desc), J.q.trim())}</div></div></div>`)
                       .join('') + (rows.length > J.n ? `<div class="btns" style="padding:8px"><button class="btn" data-a="jmore">${icon('download', 13)}Показать ещё ${Math.min(100, rows.length - J.n)} (осталось ${rows.length - J.n})</button></div>` : '')
                 : `<div class="vdl-row"><div class="main sub">${J.src === 'all' && !J.allRows ? 'Загружаю все записи админа…' : 'Ничего не нашлось'}</div></div>`;
             const jm = listBox.querySelector('[data-a="jmore"]');
