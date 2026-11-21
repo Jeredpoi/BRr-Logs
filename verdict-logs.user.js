@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.69
+// @version      1.2.70
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.69
+// @version      1.2.70
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.69';
+const VERSION = '1.2.70';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -274,6 +274,76 @@ function paintNicks(root) {
     });
 }
 
+// поиск закончился, а окно закрыто или вкладка в фоне: уведомление и мягкий звук
+const Notify = {
+    // разрешение на уведомления и звук спрашиваем при первом клике в окнах скрипта (браузер требует действие человека)
+    prime() {
+        if (this._primed) return;
+        this._primed = true;
+        try {
+            if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+        } catch {
+            /* уведомления недоступны */
+        }
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (AC && !this.ac) this.ac = new AC();
+            if (this.ac && this.ac.state === 'suspended') this.ac.resume();
+        } catch {
+            /* без звука */
+        }
+    },
+    // три мягкие ноты вверх, около секунды, тихо
+    chime() {
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            const ac = this.ac || (this.ac = new AC());
+            if (ac.state === 'suspended') ac.resume();
+            const t0 = ac.currentTime + 0.05;
+            const master = ac.createGain();
+            master.gain.value = 0.16;
+            master.connect(ac.destination);
+            [523.25, 659.25, 783.99].forEach((f, i) => {
+                const t = t0 + i * 0.22;
+                [1, 2].forEach((mult, k) => {
+                    const o = ac.createOscillator(),
+                        g = ac.createGain();
+                    o.type = 'sine';
+                    o.frequency.value = f * mult;
+                    g.gain.setValueAtTime(0, t);
+                    g.gain.linearRampToValueAtTime(k ? 0.12 : 0.5, t + 0.03);
+                    g.gain.exponentialRampToValueAtTime(0.001, t + (i === 2 ? 1.3 : 0.8));
+                    o.connect(g).connect(master);
+                    o.start(t);
+                    o.stop(t + 1.4);
+                });
+            });
+        } catch {
+            /* звук недоступен */
+        }
+    },
+    // scrim — окно этого поиска: если оно открыто и вкладка на экране — человек и так видит результат
+    done(scrim, title, body) {
+        const watching = !document.hidden && scrim && scrim.isConnected && !scrim.hidden;
+        if (watching) return;
+        this.chime();
+        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+            try {
+                const n = new Notification(title, { body, tag: 'vdl-done', silent: true });
+                n.onclick = () => {
+                    window.focus();
+                    if (scrim) Layer.show(scrim);
+                    n.close();
+                };
+                return;
+            } catch {
+                /* ниже — сообщение на странице */
+            }
+        }
+        toast(`${title}: ${body}`, 'ok');
+    }
+};
+
 const Layer = {
     _root: null,
     root() {
@@ -293,6 +363,10 @@ const Layer = {
     },
     add(node) {
         this.el().appendChild(node);
+        if (!this._prime) {
+            this._prime = true;
+            this.root().addEventListener('pointerdown', () => Notify.prime(), { capture: true, once: true });
+        }
         return node;
     },
     // главные окна (Аналитика, Админ-действия, Боты) при закрытии прячутся: открыл снова — всё на месте
@@ -1796,6 +1870,7 @@ const Panel = {
         const p = (async () => {
             try {
                 await fn();
+                if (!box && !this.stale()) Notify.done(this.scrim, 'Аналитика готова', 'Отчёт по игроку загружен');
                 return true;
             } catch (e) {
                 if (this.stale()) return false;
@@ -3326,6 +3401,7 @@ const AdminView = {
             const spec = await this.specMsgs(nick, own, range, gen, alive).catch(() => []);
             if (!alive()) return;
             this.prog('', gen);
+            Notify.done(this.scrim, 'Админ-действия готовы', `${nick}: ${own.length} ${plural(own.length, 'запись', 'записи', 'записей')} за период`);
             this.render(out, { nick, a, b, ta, tb, range, all: own, own, events, spec, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
@@ -4172,6 +4248,7 @@ const CompareView = {
             if (!alive()) return;
             this.prog('', gen);
             this.render(out, { st, A, B, ipsA, ipsB, geo, tx, trades, common, gen });
+            Notify.done(this.scrim, 'Сравнение готово', 'Результат сравнения игроков загружен');
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -4573,6 +4650,7 @@ const BotView = {
             arr.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n);
             const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
             this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, hideBan: false, showWeak: false, blkInfo, range });
+            Notify.done(this.scrim, 'Поиск ботов готов', `${label}: найдено ${rows.length}`);
         } catch (e) {
             if (gen !== this._gen) return;
             this.prog('', gen);
