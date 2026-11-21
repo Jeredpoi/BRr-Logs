@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.68
+// @version      1.2.69
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.68
+// @version      1.2.69
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.68';
+const VERSION = '1.2.69';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -683,6 +683,9 @@ const LOGS_UI_CSS = `
 .vdl-jr-ord { flex: none; white-space: nowrap; }
 .vdl-jr-ord .vi { transition: transform .2s; }
 .vdl-jr-ord.asc .vi { transform: rotate(180deg); }
+.vdl-spec-tag.tp { background: #8b5cf6; }
+.vdl-jr-row.pl-hit { box-shadow: inset 3px 0 0 #2fbf71; background: color-mix(in srgb, #2fbf71 8%, transparent); }
+.vdl-jr-sep { padding: 10px 14px 6px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--tx-3); border-top: 1px solid var(--line); }
 .vdl-spec-tag { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; color: #fff; background: #3aa0ff; }
 .vdl-viol-tag { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; color: #fff; background: #e5484d; }
 .vdl-jr-row mark { background: color-mix(in srgb, var(--acc) 45%, transparent); color: #fff; border-radius: 3px; padding: 0 1px; }
@@ -3351,7 +3354,22 @@ const AdminView = {
             }
         });
         if (open) out.push(Object.assign(open, { b: Math.min(Date.now(), open.a + 3600e3) }));
-        return out.filter(x => Number.isFinite(x.a) && x.b >= x.a);
+        const spec = out.filter(x => Number.isFinite(x.a) && x.b >= x.a).map(x => Object.assign(x, { kind: 'spec' }));
+        // телепорт к игроку или игрока к себе: админ рядом с ним — 10 минут, или до следующей слежки/телепорта к другому
+        const tps = rows
+            .map(r => ({ t: T(r), m: String(r.transaction_desc || '').match(/телепортировал(?:ся\s+к|\s+к\s+себе)\s+(?:игрока\s+)?([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)/i) }))
+            .filter(x => x.m && Number.isFinite(x.t))
+            .sort((x, y) => x.t - y.t);
+        const starts = spec.map(x => x.a).concat(tps.map(x => x.t)).sort((x, y) => x - y);
+        const tp = tps.map(x => {
+            const next = starts.find(t => t > x.t);
+            return { a: x.t, b: Math.min(x.t + 600e3, next || Infinity), who: x.m[1], kind: 'tp' };
+        });
+        return spec.concat(tp);
+    },
+    // в какой момент админ был «с игроком»: слежка важнее телепорта
+    nearOf(rr, t) {
+        return rr.find(z => z.kind === 'spec' && t >= z.a && t <= z.b + 60e3) || rr.find(z => z.kind === 'tp' && t >= z.a && t <= z.b);
     },
     async specMsgs(nick, own, range, gen, alive) {
         const rr = this.specRanges(own);
@@ -3359,16 +3377,17 @@ const AdminView = {
         // чаты сайта (общий, RP, ask, семейный, ЛС…), кроме админ-чата и жалоб — они и так в журнале
         const chats = this.known().filter(c => MSG_CAT.test(c.name) && !/админ|жалоб|вопрос/i.test(c.name));
         if (!chats.length) return [];
-        const span = { time__gte: new Date(Math.max(Date.parse(range.time__gte), rr[0].a)).toISOString(), time__lte: new Date(Math.min(Date.parse(range.time__lte), rr[rr.length - 1].b + 60e3)).toISOString() };
+        const lo = Math.min(...rr.map(z => z.a)),
+            hi = Math.max(...rr.map(z => z.b));
+        const span = { time__gte: new Date(Math.max(Date.parse(range.time__gte), lo)).toISOString(), time__lte: new Date(Math.min(Date.parse(range.time__lte), hi + 60e3)).toISOString() };
         const out = [];
         for (const [i, c] of chats.entries()) {
-            const r = await Api.all({ player_name__exact: nick, category_id__exact: c.id, ...span }, 10, (pg, n) => this.prog(`Сообщения в слежке: ${c.name} (${i + 1}/${chats.length}), записей ${n}…`, gen), null, alive, 0, { strict: true }).catch(() => []);
+            const r = await Api.all({ player_name__exact: nick, category_id__exact: c.id, ...span }, 10, (pg, n) => this.prog(`Сообщения в слежке и после ТП: ${c.name} (${i + 1}/${chats.length}), записей ${n}…`, gen), null, alive, 0, { strict: true }).catch(() => []);
             if (!alive()) return [];
             if (r.noAccess) continue;
             r.forEach(x => {
-                const t = new Date(x.time).getTime();
-                const hit = rr.find(z => t >= z.a && t <= z.b + 60e3);
-                if (hit) out.push(Object.assign({}, x, { category_id: x.category_id == null ? c.id : x.category_id, _spec: hit.who }));
+                const hit = this.nearOf(rr, new Date(x.time).getTime());
+                if (hit) out.push(Object.assign({}, x, { category_id: x.category_id == null ? c.id : x.category_id, _spec: hit.who, _near: hit.kind }));
             });
         }
         return out;
@@ -3588,9 +3607,8 @@ const AdminView = {
                 const rr = this.specRanges(J.allRows);
                 J.allRows.forEach(x => {
                     if (!MSG_CAT.test(String(catName(x) || '')) || /админ|жалоб/i.test(String(catName(x) || ''))) return;
-                    const t = new Date(x.time).getTime();
-                    const hit = rr.find(z => t >= z.a && t <= z.b + 60e3);
-                    if (hit) x._spec = hit.who;
+                    const hit = this.nearOf(rr, new Date(x.time).getTime());
+                    if (hit) (x._spec = hit.who), (x._near = hit.kind);
                 });
             }
             // порядок: как на сайте логов — сначала новые, или как смотрит куратор — с начала дня
@@ -3609,8 +3627,10 @@ const AdminView = {
             const pl = (J.pl || '').trim().toLowerCase();
             const plRe = pl ? new RegExp(`(^|[^a-z0-9_])${pl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9_])`, 'i') : null;
             const withPl = r => (r._spec && r._spec.toLowerCase() === pl) || plRe.test(String(r.transaction_desc || ''));
-            const byPl = pl ? byKind.filter(withPl) : byKind;
-            const rows = q ? byPl.filter(r => `${r.transaction_desc || ''} ${catName(r)} ${r.player_name || ''}`.toLowerCase().includes(q)) : byPl;
+            const byQ = q ? byKind.filter(r => `${r.transaction_desc || ''} ${catName(r)} ${r.player_name || ''}`.toLowerCase().includes(q)) : byKind;
+            // с игроком — выделены и сверху, ниже — всё остальное, что админ делал
+            const hits = pl ? byQ.filter(withPl) : [];
+            const rows = pl ? hits.concat(byQ.filter(r => !hits.includes(r))) : byQ;
             out.querySelector('[data-l="chips"]').innerHTML = KINDS.map(([k, n]) => {
                 const c = k === 'all' ? base.length : cnt[k] || 0;
                 return k !== 'all' && !c ? '' : `<button class="vdl-chip${J.kind === k ? ' on' : ''}" data-jk="${k}">${n}<b>${c}</b></button>`;
@@ -3621,11 +3641,11 @@ const AdminView = {
             out.querySelector('[data-l="jinfo"]').innerHTML =
                 J.src === 'all' && !J.allRows
                     ? ''
-                    : `${pl ? `С игроком ${U.esc(J.pl.trim())}: ${rows.length} ${plural(rows.length, 'запись', 'записи', 'записей')}${rows.some(r => r._spec) ? `, из них в спеке за ним — ${rows.filter(r => r._spec).length}` : ''} · ` : ''}${q || J.kind !== 'all' || pl ? `Найдено ${rows.length} из ${base.length}` : `${base.length} ${plural(base.length, 'запись', 'записи', 'записей')}`}${J.src === 'all' && J.allCapped ? ' · записей очень много — показаны не все, возьми период короче' : ''}`;
+                    : `${pl ? `С игроком ${U.esc(J.pl.trim())}: ${hits.length} ${plural(hits.length, 'запись', 'записи', 'записей')}${hits.some(r => r._near === 'spec') ? ` · в спеке за ним — ${hits.filter(r => r._near === 'spec').length}` : ''}${hits.some(r => r._near === 'tp') ? ` · рядом после ТП — ${hits.filter(r => r._near === 'tp').length}` : ''} — сверху, ниже остальные ${rows.length - hits.length} · ` : ''}${q || J.kind !== 'all' ? `Найдено ${rows.length} из ${base.length}` : `${base.length} ${plural(base.length, 'запись', 'записи', 'записей')}`}${J.src === 'all' && J.allCapped ? ' · записей очень много — показаны не все, возьми период короче' : ''}`;
             listBox.innerHTML = rows.length
                 ? rows
                       .slice(0, J.n)
-                      .map(r => `<div class="vdl-row vdl-jr-row${viol(r) ? ' viol' : ''}" data-k="${r._k}"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${viol(r) ? '<span class="vdl-viol-tag" title="Участие в ивенте с 08:00 до 20:00 МСК — рабочее время администратора">Ивент в рабочее время</span>' : ''}${r._spec ? `<span class="vdl-spec-tag" title="Написано, пока админ следил за этим игроком">в спеке за ${U.esc(r._spec)}</span>` : ''}</div><div class="sub vdl-desc">${mark(moneyText(r.transaction_desc), J.q.trim())}</div></div></div>`)
+                      .map((r, i) => `${pl && i === hits.length && hits.length ? '<div class="vdl-jr-sep">Остальные записи админа</div>' : ''}<div class="vdl-row vdl-jr-row${viol(r) ? ' viol' : ''}${i < hits.length ? ' pl-hit' : ''}" data-k="${r._k}"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${viol(r) ? '<span class="vdl-viol-tag" title="Участие в ивенте с 08:00 до 20:00 МСК — рабочее время администратора">Ивент в рабочее время</span>' : ''}${r._spec ? (r._near === 'tp' ? `<span class="vdl-spec-tag tp" title="Написано в течение 10 минут после телепорта к этому игроку (или его к себе) — админ был рядом с ним">рядом с ${U.esc(r._spec)} (после ТП)</span>` : `<span class="vdl-spec-tag" title="Написано, пока админ следил за этим игроком">в спеке за ${U.esc(r._spec)}</span>`) : ''}</div><div class="sub vdl-desc">${mark(moneyText(r.transaction_desc), J.q.trim())}</div></div></div>`)
                       .join('') + (rows.length > J.n ? `<div class="btns" style="padding:8px"><button class="btn" data-a="jmore">${icon('download', 13)}Показать ещё ${Math.min(100, rows.length - J.n)} (осталось ${rows.length - J.n})</button></div>` : '')
                 : `<div class="vdl-row"><div class="main sub">${J.src === 'all' && !J.allRows ? 'Загружаю все записи админа…' : 'Ничего не нашлось'}</div></div>`;
             const jm = listBox.querySelector('[data-a="jmore"]');
