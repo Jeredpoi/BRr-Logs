@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.67
+// @version      1.2.68
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.67
+// @version      1.2.68
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.67';
+const VERSION = '1.2.68';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3526,6 +3526,7 @@ const AdminView = {
               <div class="seg vdl-jr-src"><button data-src="own">Засчитанные</button><button data-src="all" title="Все записи админа за период — сообщения в любых чатах, действия, репорты">Всё от админа</button></div>
               <button class="btn vdl-jr-ord" data-a="jord" title="Порядок записей в журнале"></button>
               <div class="vdl-jr-search">${icon('search', 14)}<input class="inp" data-a="flt" placeholder="Поиск по тексту: слово, фраза, ник…"><button class="vdl-jr-x" data-a="fltx" title="Очистить" hidden>${icon('x', 12)}</button></div>
+              <div class="vdl-jr-search vdl-jr-pl" title="Всё, что админ делал с этим игроком: действия и наказания, ЛС и PM, репорты, и что писал, пока следил за ним">${icon('users', 14)}<input class="inp" data-a="pl" placeholder="С игроком: Nick_Name"><button class="vdl-jr-x" data-a="plx" title="Очистить" hidden>${icon('x', 12)}</button></div>
             </div>
             <div class="vdl-jr-chips" data-l="chips"></div>
             <div class="sub vdl-jr-info" data-l="jinfo"></div>
@@ -3604,7 +3605,12 @@ const AdminView = {
             const cnt = {};
             base.forEach(r => (cnt[(r._k = r._k || kindOf(r))] = (cnt[r._k] || 0) + 1));
             const byKind = J.kind === 'all' ? base : base.filter(r => r._k === J.kind);
-            const rows = q ? byKind.filter(r => `${r.transaction_desc || ''} ${catName(r)} ${r.player_name || ''}`.toLowerCase().includes(q)) : byKind;
+            // взаимодействие с игроком: его ник в тексте записи (действие, наказание, ЛС, PM, репорт) или запись сделана, пока админ следил за ним
+            const pl = (J.pl || '').trim().toLowerCase();
+            const plRe = pl ? new RegExp(`(^|[^a-z0-9_])${pl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9_])`, 'i') : null;
+            const withPl = r => (r._spec && r._spec.toLowerCase() === pl) || plRe.test(String(r.transaction_desc || ''));
+            const byPl = pl ? byKind.filter(withPl) : byKind;
+            const rows = q ? byPl.filter(r => `${r.transaction_desc || ''} ${catName(r)} ${r.player_name || ''}`.toLowerCase().includes(q)) : byPl;
             out.querySelector('[data-l="chips"]').innerHTML = KINDS.map(([k, n]) => {
                 const c = k === 'all' ? base.length : cnt[k] || 0;
                 return k !== 'all' && !c ? '' : `<button class="vdl-chip${J.kind === k ? ' on' : ''}" data-jk="${k}">${n}<b>${c}</b></button>`;
@@ -3615,7 +3621,7 @@ const AdminView = {
             out.querySelector('[data-l="jinfo"]').innerHTML =
                 J.src === 'all' && !J.allRows
                     ? ''
-                    : `${q || J.kind !== 'all' ? `Найдено ${rows.length} из ${base.length}` : `${base.length} ${plural(base.length, 'запись', 'записи', 'записей')}`}${J.src === 'all' && J.allCapped ? ' · записей очень много — показаны не все, возьми период короче' : ''}`;
+                    : `${pl ? `С игроком ${U.esc(J.pl.trim())}: ${rows.length} ${plural(rows.length, 'запись', 'записи', 'записей')}${rows.some(r => r._spec) ? `, из них в спеке за ним — ${rows.filter(r => r._spec).length}` : ''} · ` : ''}${q || J.kind !== 'all' || pl ? `Найдено ${rows.length} из ${base.length}` : `${base.length} ${plural(base.length, 'запись', 'записи', 'записей')}`}${J.src === 'all' && J.allCapped ? ' · записей очень много — показаны не все, возьми период короче' : ''}`;
             listBox.innerHTML = rows.length
                 ? rows
                       .slice(0, J.n)
@@ -3659,6 +3665,22 @@ const AdminView = {
             J.n = 100;
             drawList();
         }, 150);
+        const plInp = out.querySelector('[data-a="pl"]');
+        plInp.value = J.pl || '';
+        const plSync = () => (out.querySelector('[data-a="plx"]').hidden = !J.pl);
+        plSync();
+        plInp.oninput = U.debounce(() => {
+            J.pl = plInp.value.replace(/\s+/g, '');
+            J.n = 100;
+            plSync();
+            drawList();
+        }, 200);
+        out.querySelector('[data-a="plx"]').onclick = () => {
+            plInp.value = J.pl = '';
+            plSync();
+            drawList();
+            plInp.focus();
+        };
         out.querySelector('[data-a="jord"]').onclick = () => {
             Store.set('jrAsc', !Store.get('jrAsc', false));
             J.n = 100;
