@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.70
+// @version      1.2.71
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.70
+// @version      1.2.71
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.70';
+const VERSION = '1.2.71';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -757,6 +757,18 @@ const LOGS_UI_CSS = `
 .vdl-jr-ord { flex: none; white-space: nowrap; }
 .vdl-jr-ord .vi { transition: transform .2s; }
 .vdl-jr-ord.asc .vi { transform: rotate(180deg); }
+.vdl-jr-wrap.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 12px; align-items: start; }
+@media (max-width: 860px) { .vdl-jr-wrap.two { grid-template-columns: 1fr; } .vdl-jr-wrap.two .vdl-dlg { order: -1; } }
+.vdl-dlg { position: sticky; top: 0; max-height: 70vh; overflow: auto; border-radius: 14px; border: 1px solid var(--line); background: color-mix(in srgb, var(--bg-2, #12141a) 92%, transparent); padding: 0 0 10px; scrollbar-width: thin; }
+.vdl-dlg-h { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 11px 14px; font-weight: 700; font-size: 13px; background: inherit; border-bottom: 1px solid var(--line); }
+.vdl-dlg-sec { margin: 12px 14px 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tx-3); }
+.vdl-dlg-cmp { position: static; max-height: 60vh; margin-top: 14px; }
+.vdl-msg { display: flex; flex-direction: column; margin: 4px 14px; max-width: 86%; }
+.vdl-msg.me { margin-left: auto; align-items: flex-end; }
+.vdl-msg-b { padding: 7px 11px; border-radius: 14px; font-size: 12.5px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+.vdl-msg.he .vdl-msg-b { background: rgba(255,255,255,.07); border-bottom-left-radius: 4px; }
+.vdl-msg.me .vdl-msg-b { background: color-mix(in srgb, var(--acc) 28%, transparent); border-bottom-right-radius: 4px; }
+.vdl-msg-m { margin-top: 3px; font-size: 10.5px; color: var(--tx-3); }
 .vdl-spec-tag.tp { background: #8b5cf6; }
 .vdl-jr-row.pl-hit { box-shadow: inset 3px 0 0 #2fbf71; background: color-mix(in srgb, #2fbf71 8%, transparent); }
 .vdl-jr-sep { padding: 10px 14px 6px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--tx-3); border-top: 1px solid var(--line); }
@@ -3625,7 +3637,7 @@ const AdminView = {
             </div>
             <div class="vdl-jr-chips" data-l="chips"></div>
             <div class="sub vdl-jr-info" data-l="jinfo"></div>
-            <div class="card" data-l="list"></div>
+            <div class="vdl-jr-wrap"><div class="card" data-l="list"></div><div class="vdl-dlg" data-l="dlg" hidden></div></div>
           </div>
           <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
         out.querySelectorAll('[data-tog]').forEach(
@@ -3726,6 +3738,79 @@ const AdminView = {
                 : `<div class="vdl-row"><div class="main sub">${J.src === 'all' && !J.allRows ? 'Загружаю все записи админа…' : 'Ничего не нашлось'}</div></div>`;
             const jm = listBox.querySelector('[data-a="jmore"]');
             if (jm) jm.onclick = () => ((J.n += 100), drawList());
+            drawDlg();
+        };
+        // переписка с игроком: её и его сообщения в чатах за окна контакта (слежка за ним, рядом после ТП)
+        const dlgBox = out.querySelector('[data-l="dlg"]');
+        J.dlg = J.dlg || {};
+        const drawDlg = () => {
+            const pl = (J.pl || '').trim();
+            const key = pl.toLowerCase();
+            const wrap = out.querySelector('.vdl-jr-wrap');
+            const src = J.src === 'all' && J.allRows ? J.allRows : own.concat(d.spec || []);
+            const rr = pl ? this.specRanges(src).filter(z => z.who.toLowerCase() === key) : [];
+            if (!rr.length) {
+                dlgBox.hidden = true;
+                wrap.classList.remove('two');
+                return;
+            }
+            dlgBox.hidden = false;
+            wrap.classList.add('two');
+            const C = J.dlg[key];
+            if (!C) {
+                J.dlg[key] = { loading: true };
+                dlgBox.innerHTML = `<div class="vdl-dlg-h">${icon('users', 14)}Переписка с ${U.esc(pl)}</div><div class="sub" style="padding:12px">Загружаю его сообщения за время контактов…</div>`;
+                const chats = this.known().filter(c => MSG_CAT.test(c.name) && !/админ|жалоб|вопрос/i.test(c.name));
+                const lo = Math.min(...rr.map(z => z.a)),
+                    hi = Math.max(...rr.map(z => z.b)) + 60e3;
+                const gen = this._gen;
+                (async () => {
+                    const his = [];
+                    for (const c of chats) {
+                        const r = await Api.all({ player_name__exact: pl, category_id__exact: c.id, time__gte: new Date(lo).toISOString(), time__lte: new Date(hi).toISOString() }, 6, null, null, () => gen === this._gen, 0, { strict: true }).catch(() => []);
+                        if (gen !== this._gen) return;
+                        if (!r.noAccess) r.forEach(x => his.push(Object.assign({}, x, { category_id: x.category_id == null ? c.id : x.category_id })));
+                    }
+                    J.dlg[key] = { his };
+                    if (dlgBox.isConnected && (J.pl || '').trim().toLowerCase() === key) drawDlg();
+                })();
+                return;
+            }
+            if (C.loading) return;
+            const T = x => new Date(x.time).getTime();
+            const inR = (z, t) => t >= z.a && t <= z.b + 60e3;
+            // её сообщения — из журнала (чаты в окнах контакта), его — подгруженные; всё строго по времени
+            const hers = src.filter(r => r._spec && r._spec.toLowerCase() === key && MSG_CAT.test(String(catName(r) || '')));
+            const blocks = rr
+                .slice()
+                .sort((x, y) => x.a - y.a)
+                .map(z => {
+                    const msgs = hers
+                        .filter(r => inR(z, T(r)))
+                        .map(r => ({ r, me: true }))
+                        .concat(C.his.filter(r => inR(z, T(r))).map(r => ({ r, me: false })))
+                        .sort((x, y) => T(x.r) - T(y.r));
+                    return { z, msgs };
+                })
+                .filter(b => b.msgs.length);
+            const hm = t => new Date(t + 3 * 3600e3).toISOString().slice(11, 16);
+            const both = blocks.reduce((n, b) => n + (b.msgs.some(m => m.me) && b.msgs.some(m => !m.me) ? 1 : 0), 0);
+            dlgBox.innerHTML =
+                `<div class="vdl-dlg-h">${icon('users', 14)}Переписка с ${U.esc(pl)}<span class="sub" style="margin:0 0 0 auto">${blocks.length ? `${blocks.length} ${plural(blocks.length, 'контакт', 'контакта', 'контактов')}${both ? ` · писали оба — ${both}` : ''}` : ''}</span></div>` +
+                (blocks.length
+                    ? blocks
+                          .map(
+                              ({ z, msgs }) =>
+                                  `<div class="vdl-dlg-sec">${z.kind === 'spec' ? 'Слежка' : 'Рядом после ТП'} · ${fmtDate(new Date(z.a).toISOString())} – ${hm(z.b)}</div>` +
+                                  msgs
+                                      .map(
+                                          ({ r, me }) =>
+                                              `<div class="vdl-msg ${me ? 'me' : 'he'}"><div class="vdl-msg-b">${U.esc(String(r.transaction_desc || ''))}</div><div class="vdl-msg-m">${me ? U.esc(nick) : U.esc(pl)} · ${hm(T(r))} · ${U.esc(catName(r))}</div></div>`
+                                      )
+                                      .join('')
+                          )
+                          .join('')
+                    : `<div class="sub" style="padding:12px">За время контактов ни она, ни он в чатах не писали</div>`);
         };
         // все записи админа за тот же период (любые категории) — по первому выбору «Всё от админа»
         const loadAll = async () => {
@@ -4183,6 +4268,79 @@ const CompareView = {
             ses: sessionsOf(rows)
         };
     },
+    // переписка двоих: прямые сообщения друг другу (ЛС, ник в тексте) и, если один из них админ, их сообщения за время
+    // его слежки за вторым или рядом после телепорта
+    async dialog(a, b, range, gen, alive) {
+        const items = [];
+        const seen = new Set();
+        const push = (r, side, why) => {
+            const k = `${r.time}|${r.player_name}|${r.transaction_desc}`;
+            if (seen.has(k)) return;
+            seen.add(k);
+            items.push({ r, side, why });
+        };
+        const isMsg = r => MSG_CAT.test(String(catName(r) || '')) && !/админ-?\s*(?:чат|действ)/i.test(String(catName(r) || ''));
+        for (const [from, to, side] of [
+            [a, b, 'A'],
+            [b, a, 'B']
+        ]) {
+            if (!alive()) return null;
+            this.prog(`Переписка: сообщения ${from} с упоминанием ${to}…`, gen);
+            const r = await Api.all({ player_name__exact: from, transaction_desc__ilike: `%${to}%`, ...range }, 4, null, null, alive).catch(() => []);
+            r.filter(x => isMsg(x) && nickIn(x.transaction_desc, to)).forEach(x => push(x, side, 'direct'));
+        }
+        // окна контакта: админ-действия одного со вторым (слежка, телепорт)
+        const act = (AdminView.known().find(c => /админ.{0,3}действ/i.test(c.name)) || { id: '41' }).id;
+        const ranges = [];
+        for (const [adm, pl, side] of [
+            [a, b, 'A'],
+            [b, a, 'B']
+        ]) {
+            if (!alive()) return null;
+            this.prog(`Переписка: слежка и телепорты ${adm} → ${pl}…`, gen);
+            const r = await Api.all({ player_name__exact: adm, category_id__exact: act, transaction_desc__ilike: `%${pl}%`, ...range }, 4, null, null, alive).catch(() => []);
+            AdminView.specRanges(r)
+                .filter(z => sameNick(z.who, pl))
+                .forEach(z => ranges.push(Object.assign({}, z, { adm: side })));
+        }
+        if (ranges.length) {
+            const chats = AdminView.known().filter(c => MSG_CAT.test(c.name) && !/админ|жалоб|вопрос/i.test(c.name));
+            const lo = Math.min(...ranges.map(z => z.a)),
+                hi = Math.max(...ranges.map(z => z.b)) + 60e3;
+            const span = { time__gte: new Date(lo).toISOString(), time__lte: new Date(hi).toISOString() };
+            for (const [n, side] of [
+                [a, 'A'],
+                [b, 'B']
+            ])
+                for (const c of chats) {
+                    if (!alive()) return null;
+                    this.prog(`Переписка: ${n} в «${c.name}» за время контактов…`, gen);
+                    const r = await Api.all({ player_name__exact: n, category_id__exact: c.id, ...span }, 4, null, null, alive, 0, { strict: true }).catch(() => []);
+                    if (r.noAccess) continue;
+                    r.forEach(x => {
+                        const t = new Date(x.time).getTime();
+                        const z = AdminView.nearOf(ranges, t);
+                        if (z) push(x.category_id == null ? Object.assign({}, x, { category_id: c.id }) : x, side, z.kind);
+                    });
+                }
+        }
+        if (!items.length) return null;
+        items.sort((x, y) => new Date(x.r.time) - new Date(y.r.time));
+        return { a, b, items, ranges };
+    },
+    dlgCard(d) {
+        const hm = t => fmtDate(t);
+        const why = { direct: 'лично', spec: 'в спеке', tp: 'рядом после ТП' };
+        const both = d.items.some(x => x.side === 'A') && d.items.some(x => x.side === 'B');
+        const el = U.h(`<div class="vdl-dlg vdl-dlg-cmp"><div class="vdl-dlg-h">${icon('users', 14)}Переписка ${U.esc(d.a)} и ${U.esc(d.b)}<span class="sub" style="margin:0 0 0 auto">${d.items.length} ${plural(d.items.length, 'сообщение', 'сообщения', 'сообщений')}${both ? ' · писали оба' : ''}${d.ranges.length ? ` · контактов ${d.ranges.length}` : ''}</span></div>
+          ${d.items
+              .map(
+                  ({ r, side, why: w }) =>
+                      `<div class="vdl-msg ${side === 'B' ? 'me' : 'he'}"><div class="vdl-msg-b">${U.esc(String(r.transaction_desc || ''))}</div><div class="vdl-msg-m">${U.esc(r.player_name || (side === 'A' ? d.a : d.b))} · ${hm(r.time)} · ${U.esc(catName(r))} · <b>${why[w]}</b></div></div>`
+              )
+              .join('')}</div>`);
+        return el;
+    },
     async run(st) {
         if (this.busy && this._busyGen === this._gen) return toast('Подожди, сравнение ещё идёт', 'info');
         this.busy = true;
@@ -4246,8 +4404,14 @@ const CompareView = {
                 s0.adm = await this.adminToday(s0.nicks.map(g => g.k).concat(st['m' + (s0 === A ? 'a' : 'b')] === 'nick' ? [s0.q] : []).filter((x, i, a) => a.findIndex(y => sameNick(x, y)) === i), gen);
             }
             if (!alive()) return;
+            // ники для переписки: по входам, а если входов нет — тот, что вписали в поле
+            const dA = nA[0] || (st.ma === 'nick' ? st.qa : ''),
+                dB = nB[0] || (st.mb === 'nick' ? st.qb : '');
+            const dlg = dA && dB && !sameNick(dA, dB) ? await this.dialog(dA, dB, range, gen, alive) : null;
+            if (!alive()) return;
             this.prog('', gen);
             this.render(out, { st, A, B, ipsA, ipsB, geo, tx, trades, common, gen });
+            if (dlg) out.appendChild(this.dlgCard(dlg));
             Notify.done(this.scrim, 'Сравнение готово', 'Результат сравнения игроков загружен');
         } catch (e) {
             if (!alive()) return;
