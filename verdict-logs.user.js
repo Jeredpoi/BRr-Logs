@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.66
+// @version      1.2.67
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.66
+// @version      1.2.67
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.66';
+const VERSION = '1.2.67';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -680,6 +680,10 @@ const LOGS_UI_CSS = `
 .vdl-jr-row[data-k="rep"] .vdl-tag { --c: #f5a524; }
 .vdl-jr-row[data-k="event"] .vdl-tag { --c: #c56bff; }
 .vdl-jr-row.viol { box-shadow: inset 3px 0 0 #e5484d; background: color-mix(in srgb, #e5484d 9%, transparent); }
+.vdl-jr-ord { flex: none; white-space: nowrap; }
+.vdl-jr-ord .vi { transition: transform .2s; }
+.vdl-jr-ord.asc .vi { transform: rotate(180deg); }
+.vdl-spec-tag { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; color: #fff; background: #3aa0ff; }
 .vdl-viol-tag { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; color: #fff; background: #e5484d; }
 .vdl-jr-row mark { background: color-mix(in srgb, var(--acc) 45%, transparent); color: #fff; border-radius: 3px; padding: 0 1px; }
 @media (max-width: 700px) { .vdl-af-row { flex-direction: column; } .vdl-af-per button { flex: 1 0 30%; } }
@@ -3315,8 +3319,11 @@ const AdminView = {
                 if (!alive()) return;
                 if (!r.noAccess) events = r.filter(x => x.category_id == null || String(x.category_id) === String(evCat.id)).map(x => (x.category_id == null ? Object.assign({}, x, { category_id: evCat.id }) : x));
             }
+            // слежка: что админ писал в чатах, пока следил за игроком («Начал следить за X» → «Закончил следить»)
+            const spec = await this.specMsgs(nick, own, range, gen, alive).catch(() => []);
+            if (!alive()) return;
             this.prog('', gen);
-            this.render(out, { nick, a, b, ta, tb, range, all: own, own, events, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
+            this.render(out, { nick, a, b, ta, tb, range, all: own, own, events, spec, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -3326,6 +3333,46 @@ const AdminView = {
         }
     },
 
+    // периоды слежки по записям админ-действий; без «Закончил» — до следующей слежки, но не дольше часа
+    specRanges(rows) {
+        const T = r => new Date(r.time).getTime();
+        const list = rows.filter(r => /следить/i.test(String(r.transaction_desc || ''))).sort((x, y) => T(x) - T(y));
+        const out = [];
+        let open = null;
+        list.forEach(r => {
+            const t = String(r.transaction_desc || '');
+            const m = t.match(/начал\s+следить\s+за\s+(?:игроком\s+)?([A-Za-z0-9_]+)/i);
+            if (m) {
+                if (open) out.push(Object.assign(open, { b: Math.min(T(r), open.a + 3600e3) }));
+                open = { a: T(r), who: m[1] };
+            } else if (/закончил\s+следить/i.test(t) && open) {
+                out.push(Object.assign(open, { b: T(r) }));
+                open = null;
+            }
+        });
+        if (open) out.push(Object.assign(open, { b: Math.min(Date.now(), open.a + 3600e3) }));
+        return out.filter(x => Number.isFinite(x.a) && x.b >= x.a);
+    },
+    async specMsgs(nick, own, range, gen, alive) {
+        const rr = this.specRanges(own);
+        if (!rr.length) return [];
+        // чаты сайта (общий, RP, ask, семейный, ЛС…), кроме админ-чата и жалоб — они и так в журнале
+        const chats = this.known().filter(c => MSG_CAT.test(c.name) && !/админ|жалоб|вопрос/i.test(c.name));
+        if (!chats.length) return [];
+        const span = { time__gte: new Date(Math.max(Date.parse(range.time__gte), rr[0].a)).toISOString(), time__lte: new Date(Math.min(Date.parse(range.time__lte), rr[rr.length - 1].b + 60e3)).toISOString() };
+        const out = [];
+        for (const [i, c] of chats.entries()) {
+            const r = await Api.all({ player_name__exact: nick, category_id__exact: c.id, ...span }, 10, (pg, n) => this.prog(`Сообщения в слежке: ${c.name} (${i + 1}/${chats.length}), записей ${n}…`, gen), null, alive, 0, { strict: true }).catch(() => []);
+            if (!alive()) return [];
+            if (r.noAccess) continue;
+            r.forEach(x => {
+                const t = new Date(x.time).getTime();
+                const hit = rr.find(z => t >= z.a && t <= z.b + 60e3);
+                if (hit) out.push(Object.assign({}, x, { category_id: x.category_id == null ? c.id : x.category_id, _spec: hit.who }));
+            });
+        }
+        return out;
+    },
     // что куратор исключил кликом по строке: { cats: ['chat'], types: ['auth'] }
     off() {
         const o = Store.get('adminOff', {}) || {};
@@ -3477,6 +3524,7 @@ const AdminView = {
           <div data-at="list" hidden>
             <div class="vdl-jr-bar">
               <div class="seg vdl-jr-src"><button data-src="own">Засчитанные</button><button data-src="all" title="Все записи админа за период — сообщения в любых чатах, действия, репорты">Всё от админа</button></div>
+              <button class="btn vdl-jr-ord" data-a="jord" title="Порядок записей в журнале"></button>
               <div class="vdl-jr-search">${icon('search', 14)}<input class="inp" data-a="flt" placeholder="Поиск по тексту: слово, фраза, ник…"><button class="vdl-jr-x" data-a="fltx" title="Очистить" hidden>${icon('x', 12)}</button></div>
             </div>
             <div class="vdl-jr-chips" data-l="chips"></div>
@@ -3533,7 +3581,25 @@ const AdminView = {
         const esc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const mark = (txt, q) => (q ? U.esc(txt).replace(new RegExp(esc(U.esc(q)), 'gi'), m => `<mark>${m}</mark>`) : U.esc(txt));
         const drawList = () => {
-            const base = (J.src === 'all' && J.allRows ? J.allRows : own.concat(d.events || [])).slice().sort((x, y) => new Date(y.time) - new Date(x.time));
+            // в «Всё от админа» те же сообщения в слежке приходят сами — помечаем их по периодам слежки
+            if (J.src === 'all' && J.allRows && !J._specMarked) {
+                J._specMarked = true;
+                const rr = this.specRanges(J.allRows);
+                J.allRows.forEach(x => {
+                    if (!MSG_CAT.test(String(catName(x) || '')) || /админ|жалоб/i.test(String(catName(x) || ''))) return;
+                    const t = new Date(x.time).getTime();
+                    const hit = rr.find(z => t >= z.a && t <= z.b + 60e3);
+                    if (hit) x._spec = hit.who;
+                });
+            }
+            // порядок: как на сайте логов — сначала новые, или как смотрит куратор — с начала дня
+            const asc = Store.get('jrAsc', false);
+            const base = (J.src === 'all' && J.allRows ? J.allRows : own.concat(d.events || [], d.spec || [])).slice().sort((x, y) => (asc ? 1 : -1) * (new Date(x.time) - new Date(y.time)));
+            const ob = out.querySelector('[data-a="jord"]');
+            if (ob) {
+                ob.innerHTML = `${icon('down', 13)}${asc ? 'Сначала старые' : 'Сначала новые'}`;
+                ob.classList.toggle('asc', asc);
+            }
             const q = J.q.trim().toLowerCase();
             const cnt = {};
             base.forEach(r => (cnt[(r._k = r._k || kindOf(r))] = (cnt[r._k] || 0) + 1));
@@ -3553,7 +3619,7 @@ const AdminView = {
             listBox.innerHTML = rows.length
                 ? rows
                       .slice(0, J.n)
-                      .map(r => `<div class="vdl-row vdl-jr-row${viol(r) ? ' viol' : ''}" data-k="${r._k}"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${viol(r) ? '<span class="vdl-viol-tag" title="Участие в ивенте с 08:00 до 20:00 МСК — рабочее время администратора">Ивент в рабочее время</span>' : ''}</div><div class="sub vdl-desc">${mark(moneyText(r.transaction_desc), J.q.trim())}</div></div></div>`)
+                      .map(r => `<div class="vdl-row vdl-jr-row${viol(r) ? ' viol' : ''}" data-k="${r._k}"><div class="main"><div class="ttl"><span class="vdl-tag">${U.esc(catName(r))}</span><span class="sub" style="margin:0">${fmtDate(r.time)}</span>${viol(r) ? '<span class="vdl-viol-tag" title="Участие в ивенте с 08:00 до 20:00 МСК — рабочее время администратора">Ивент в рабочее время</span>' : ''}${r._spec ? `<span class="vdl-spec-tag" title="Написано, пока админ следил за этим игроком">в спеке за ${U.esc(r._spec)}</span>` : ''}</div><div class="sub vdl-desc">${mark(moneyText(r.transaction_desc), J.q.trim())}</div></div></div>`)
                       .join('') + (rows.length > J.n ? `<div class="btns" style="padding:8px"><button class="btn" data-a="jmore">${icon('download', 13)}Показать ещё ${Math.min(100, rows.length - J.n)} (осталось ${rows.length - J.n})</button></div>` : '')
                 : `<div class="vdl-row"><div class="main sub">${J.src === 'all' && !J.allRows ? 'Загружаю все записи админа…' : 'Ничего не нашлось'}</div></div>`;
             const jm = listBox.querySelector('[data-a="jmore"]');
@@ -3593,6 +3659,11 @@ const AdminView = {
             J.n = 100;
             drawList();
         }, 150);
+        out.querySelector('[data-a="jord"]').onclick = () => {
+            Store.set('jrAsc', !Store.get('jrAsc', false));
+            J.n = 100;
+            drawList();
+        };
         out.querySelector('[data-a="fltx"]').onclick = () => {
             fInp.value = J.q = '';
             drawList();
