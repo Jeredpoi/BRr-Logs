@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.72
+// @version      1.2.73
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.72
+// @version      1.2.73
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.72';
+const VERSION = '1.2.73';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -760,7 +760,10 @@ const LOGS_UI_CSS = `
 .vdl-jr-wrap.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 12px; align-items: start; }
 @media (max-width: 860px) { .vdl-jr-wrap.two { grid-template-columns: 1fr; } .vdl-jr-wrap.two .vdl-dlg { order: -1; } }
 .vdl-dlg { position: sticky; top: 0; max-height: 70vh; overflow: auto; border-radius: 14px; border: 1px solid var(--line); background: color-mix(in srgb, var(--bg-2, #12141a) 92%, transparent); padding: 0 0 10px; scrollbar-width: thin; }
-.vdl-dlg-h { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 11px 14px; font-weight: 700; font-size: 13px; background: inherit; border-bottom: 1px solid var(--line); }
+.vdl-dlg-h { position: sticky; top: 0; z-index: 2; display: flex; flex-direction: column; gap: 3px; padding: 10px 14px; background: #14161c; border-bottom: 1px solid var(--line); box-shadow: 0 6px 14px -8px rgba(0,0,0,.8); }
+.vdl-dlg-t { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vdl-dlg-t b { font-weight: 750; }
+.vdl-dlg-s { font-size: 11px; color: var(--tx-3); }
 .vdl-dlg-sec { margin: 12px 14px 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tx-3); }
 .vdl-dlg-cmp { position: static; max-height: 60vh; margin-top: 14px; }
 .vdl-msg { display: flex; flex-direction: column; margin: 4px 14px; max-width: 86%; }
@@ -3455,10 +3458,26 @@ const AdminView = {
         });
         return spec.concat(tp);
     },
+    // контакты с одним игроком подряд (слежка, телепорты с перерывом меньше 2 минут) — один контакт
+    mergeRanges(rr) {
+        const out = [];
+        rr.slice()
+            .sort((x, y) => x.a - y.a)
+            .forEach(z => {
+                const last = out[out.length - 1];
+                if (last && z.a <= last.b + 120e3) {
+                    last.b = Math.max(last.b, z.b + (z.kind === 'spec' ? 15e3 : 0));
+                    last.kinds.add(z.kind);
+                } else out.push({ a: z.a, b: z.b + (z.kind === 'spec' ? 15e3 : 0), kinds: new Set([z.kind]) });
+            });
+        return out;
+    },
     // в какой момент админ был «с игроком»: слежка важнее телепорта
     nearOf(rr, t) {
         // 15 с запаса — только на расхождение времени в записях; дальше админ уже мог писать другому
-        return rr.find(z => z.kind === 'spec' && t >= z.a && t <= z.b + 15e3) || rr.find(z => z.kind === 'tp' && t >= z.a && t <= z.b);
+        // подходит несколько (следит за одним, а к себе телепортировал другого) — последний по времени контакт
+        const hit = rr.filter(z => t >= z.a && t <= z.b + (z.kind === 'spec' ? 15e3 : 0));
+        return hit.length ? hit.reduce((x, y) => (y.a > x.a ? y : x)) : null;
     },
     async specMsgs(nick, own, range, gen, alive, counted = new Set()) {
         const rr = this.specRanges(own);
@@ -3786,12 +3805,10 @@ const AdminView = {
             }
             if (C.loading) return;
             const T = x => new Date(x.time).getTime();
-            const inR = (z, t) => t >= z.a && t <= z.b + (z.kind === 'spec' ? 15e3 : 0);
+            const inR = (z, t) => t >= z.a && t <= z.b;
             // её сообщения — из журнала (чаты в окнах контакта), его — подгруженные; всё строго по времени
             const hers = src.filter(r => r._spec && r._spec.toLowerCase() === key && MSG_CAT.test(String(catName(r) || '')));
-            const blocks = rr
-                .slice()
-                .sort((x, y) => x.a - y.a)
+            const blocks = this.mergeRanges(rr)
                 .map(z => {
                     const msgs = hers
                         .filter(r => inR(z, T(r)))
@@ -3804,12 +3821,12 @@ const AdminView = {
             const hm = t => new Date(t + 3 * 3600e3).toISOString().slice(11, 16);
             const both = blocks.reduce((n, b) => n + (b.msgs.some(m => m.me) && b.msgs.some(m => !m.me) ? 1 : 0), 0);
             dlgBox.innerHTML =
-                `<div class="vdl-dlg-h">${icon('users', 14)}Переписка с ${U.esc(pl)}<span class="sub" style="margin:0 0 0 auto">${blocks.length ? `${blocks.length} ${plural(blocks.length, 'контакт', 'контакта', 'контактов')}${both ? ` · писали оба — ${both}` : ''}` : ''}</span></div>` +
+                `<div class="vdl-dlg-h"><div class="vdl-dlg-t">${icon('users', 14)}<span>Переписка с <b>${U.esc(pl)}</b></span></div>${blocks.length ? `<div class="vdl-dlg-s">${blocks.length} ${plural(blocks.length, 'контакт', 'контакта', 'контактов')} · ${blocks.reduce((n, b) => n + b.msgs.length, 0)} сообщ.${both ? ` · писали оба — в ${both}` : ''}</div>` : ''}</div>` +
                 (blocks.length
                     ? blocks
                           .map(
                               ({ z, msgs }) =>
-                                  `<div class="vdl-dlg-sec">${z.kind === 'spec' ? 'Слежка' : 'Рядом после ТП'} · ${fmtDate(new Date(z.a).toISOString())} – ${hm(z.b)}</div>` +
+                                  `<div class="vdl-dlg-sec">${z.kinds.has('spec') && z.kinds.has('tp') ? 'Слежка и рядом после ТП' : z.kinds.has('spec') ? 'Слежка' : 'Рядом после ТП'} · ${fmtDate(new Date(z.a).toISOString())} – ${hm(z.b)}</div>` +
                                   msgs
                                       .map(
                                           ({ r, me }) =>
@@ -4340,7 +4357,7 @@ const CompareView = {
         const hm = t => fmtDate(t);
         const why = { direct: 'лично', spec: 'в спеке', tp: 'рядом после ТП' };
         const both = d.items.some(x => x.side === 'A') && d.items.some(x => x.side === 'B');
-        const el = U.h(`<div class="vdl-dlg vdl-dlg-cmp"><div class="vdl-dlg-h">${icon('users', 14)}Переписка ${U.esc(d.a)} и ${U.esc(d.b)}<span class="sub" style="margin:0 0 0 auto">${d.items.length} ${plural(d.items.length, 'сообщение', 'сообщения', 'сообщений')}${both ? ' · писали оба' : ''}${d.ranges.length ? ` · контактов ${d.ranges.length}` : ''}</span></div>
+        const el = U.h(`<div class="vdl-dlg vdl-dlg-cmp"><div class="vdl-dlg-h"><div class="vdl-dlg-t">${icon('users', 14)}<span>Переписка <b>${U.esc(d.a)}</b> и <b>${U.esc(d.b)}</b></span></div><div class="vdl-dlg-s">${d.items.length} ${plural(d.items.length, 'сообщение', 'сообщения', 'сообщений')}${both ? ' · писали оба' : ''}${d.ranges.length ? ` · контактов ${AdminView.mergeRanges(d.ranges).length}` : ''}</div></div>
           ${d.items
               .map(
                   ({ r, side, why: w }) =>
