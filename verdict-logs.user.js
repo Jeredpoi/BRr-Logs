@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.71
+// @version      1.2.72
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.71
+// @version      1.2.72
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.71';
+const VERSION = '1.2.72';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3410,7 +3410,7 @@ const AdminView = {
                 if (!r.noAccess) events = r.filter(x => x.category_id == null || String(x.category_id) === String(evCat.id)).map(x => (x.category_id == null ? Object.assign({}, x, { category_id: evCat.id }) : x));
             }
             // слежка: что админ писал в чатах, пока следил за игроком («Начал следить за X» → «Закончил следить»)
-            const spec = await this.specMsgs(nick, own, range, gen, alive).catch(() => []);
+            const spec = await this.specMsgs(nick, own, range, gen, alive, new Set(ready.map(c => String(c.id)))).catch(() => []);
             if (!alive()) return;
             this.prog('', gen);
             Notify.done(this.scrim, 'Админ-действия готовы', `${nick}: ${own.length} ${plural(own.length, 'запись', 'записи', 'записей')} за период`);
@@ -3457,13 +3457,21 @@ const AdminView = {
     },
     // в какой момент админ был «с игроком»: слежка важнее телепорта
     nearOf(rr, t) {
-        return rr.find(z => z.kind === 'spec' && t >= z.a && t <= z.b + 60e3) || rr.find(z => z.kind === 'tp' && t >= z.a && t <= z.b);
+        // 15 с запаса — только на расхождение времени в записях; дальше админ уже мог писать другому
+        return rr.find(z => z.kind === 'spec' && t >= z.a && t <= z.b + 15e3) || rr.find(z => z.kind === 'tp' && t >= z.a && t <= z.b);
     },
-    async specMsgs(nick, own, range, gen, alive) {
+    async specMsgs(nick, own, range, gen, alive, counted = new Set()) {
         const rr = this.specRanges(own);
         if (!rr.length) return [];
         // чаты сайта (общий, RP, ask, семейный, ЛС…), кроме админ-чата и жалоб — они и так в журнале
-        const chats = this.known().filter(c => MSG_CAT.test(c.name) && !/админ|жалоб|вопрос/i.test(c.name));
+        // чаты, уже отмеченные в «Что считать», есть в журнале и так — их не подгружаем, чтобы не было дублей
+        const chats = this.known().filter(c => MSG_CAT.test(c.name) && !/админ|жалоб|вопрос/i.test(c.name) && !counted.has(String(c.id)));
+        // засчитанные сообщения из чатов тоже помечаем, если написаны в слежке или после ТП
+        own.forEach(x => {
+            if (!counted.has(String(x.category_id)) || !MSG_CAT.test(String(catName(x) || '')) || /админ|жалоб/i.test(String(catName(x) || ''))) return;
+            const hit = this.nearOf(rr, new Date(x.time).getTime());
+            if (hit) (x._spec = hit.who), (x._near = hit.kind);
+        });
         if (!chats.length) return [];
         const lo = Math.min(...rr.map(z => z.a)),
             hi = Math.max(...rr.map(z => z.b));
@@ -3778,7 +3786,7 @@ const AdminView = {
             }
             if (C.loading) return;
             const T = x => new Date(x.time).getTime();
-            const inR = (z, t) => t >= z.a && t <= z.b + 60e3;
+            const inR = (z, t) => t >= z.a && t <= z.b + (z.kind === 'spec' ? 15e3 : 0);
             // её сообщения — из журнала (чаты в окнах контакта), его — подгруженные; всё строго по времени
             const hers = src.filter(r => r._spec && r._spec.toLowerCase() === key && MSG_CAT.test(String(catName(r) || '')));
             const blocks = rr
