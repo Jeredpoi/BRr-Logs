@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.76
+// @version      1.2.77
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.76
+// @version      1.2.77
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.76';
+const VERSION = '1.2.77';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3404,10 +3404,13 @@ const AdminView = {
                     // запись сайта могла прийти без номера категории — проставляем тот, по которому искали
                     own.push(r.category_id == null ? Object.assign({}, r, { category_id: cat.id }) : r);
                 });
+            // ВРЕМЕННО: подробный лог подсчёта для сверки с официальным числом
+            const dbg = { req: [], repAll: null, at: Date.now() };
             for (const [i, cat] of ready.entries()) {
                 const step = `${cat.name} (${i + 1}/${ready.length})`;
                 // как считает куратор: фильтр сайта «ник + категория» за период — число записей
                 const r = await Api.all({ player_name__exact: nick, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}: страница ${p}, записей ${n}…`, gen), null, alive, 0, { strict: true });
+                dbg.req.push({ cat: cat.name, id: cat.id, n: r.length, capped: !!r.capped, noAccess: !!r.noAccess, wrongCat: r.filter(x => x.category_id != null && String(x.category_id) !== String(cat.id)).length });
                 // нет доступа к категории у этой учётной записи — считаем остальные и пишем об этом
                 if (r.noAccess) {
                     noAccess.push(cat.name);
@@ -3426,6 +3429,8 @@ const AdminView = {
                 // все записи админа в жалобах за период: считаются закрытия и муты репорта, остальное — для справки
                 const r = await Api.all({ player_name__exact: nick, category_id__exact: repCat.id, ...range }, 60, (p, n) => this.prog(`Жалобы/вопросы: страница ${p}, записей ${n}…`, gen), null, alive, 0, { strict: true });
                 if (!alive()) return;
+                dbg.req.push({ cat: 'Жалобы/Вопросы', id: repCat.id, n: r.length, capped: !!r.capped, noAccess: !!r.noAccess, wrongCat: 0 });
+                dbg.repAll = r;
                 const RM = /действие:\s*выдача\s+мута\s+репорта/i,
                     CL = /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i;
                 const T = x => String(x.transaction_desc || '');
@@ -3457,7 +3462,7 @@ const AdminView = {
             if (!alive()) return;
             this.prog('', gen);
             Notify.done(this.scrim, 'Админ-действия готовы', `${nick}: ${own.length} ${plural(own.length, 'запись', 'записи', 'записей')} за период`);
-            this.render(out, { nick, a, b, ta, tb, range, all: own, own, events, spec, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
+            this.render(out, { dbg, nick, a, b, ta, tb, range, all: own, own, events, spec, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -3546,6 +3551,64 @@ const AdminView = {
             });
         }
         return out;
+    },
+    // ВРЕМЕННО: файл с разбором подсчёта — что загружено, что засчитано, по какому правилу, что нет и почему
+    dbgLog(d, own, off) {
+        const msk = t => new Date(new Date(t).getTime() + 3 * 3600e3).toISOString().replace('T', ' ').slice(0, 19);
+        const name = k => (COUNT_TYPES.find(x => x.k === k) || {}).name || k;
+        const p0 = this.dayStart(d.a) + (this.hm(d.ta) || 0),
+            p1 = this.hm(d.tb) != null ? this.dayStart(d.b) + this.hm(d.tb) + 59999 : this.dayStart(d.b) + 864e5 - 1;
+        const key = r => `${r.time}|${r.category_id}|${r.player_name}|${r.transaction_desc}`;
+        const seenK = new Map();
+        d.own.forEach(r => seenK.set(key(r), (seenK.get(key(r)) || 0) + 1));
+        const L = [];
+        L.push('VERDICT Логи — подробный лог подсчёта админ-действий');
+        L.push(`Админ: ${d.nick}`);
+        L.push(`Период: ${d.a} ${d.ta || '00:00'} — ${d.b} ${d.tb || '23:59'} МСК (запрос к сайту: ${d.range.time__gte} — ${d.range.time__lte} UTC)`);
+        L.push(`Сервер: ${Api.server() || '?'} · выгружено ${msk(Date.now())} МСК · версия скрипта ${typeof GM_info !== 'undefined' ? GM_info.script.version : '?'}`);
+        L.push('');
+        L.push(`ИТОГО ЗАСЧИТАНО: ${own.length}`);
+        L.push('');
+        L.push('ЗАПРОСЫ К САЙТУ (категория — записей; обрезано = упёрлись в предел страниц):');
+        d.dbg.req.forEach(q => L.push(`  ${q.cat} [#${q.id}] — ${q.n}${q.capped ? ' · ОБРЕЗАНО' : ''}${q.noAccess ? ' · НЕТ ДОСТУПА' : ''}${q.wrongCat ? ` · пришло из другой категории: ${q.wrongCat} (отброшены)` : ''}`));
+        L.push('');
+        L.push('ПО ВИДАМ (засчитано):');
+        COUNT_TYPES.forEach(t => {
+            const n = d.own.filter(r => r._cnt === t.k).length;
+            if (n) L.push(`  ${t.name}: ${n}${off.types.has(t.k) ? ' — ВЫКЛЮЧЕНО куратором, не в итоге' : ''}`);
+        });
+        const notC = d.own.filter(r => !r._cnt);
+        const outP = d.own.filter(r => {
+            const t = new Date(r.time).getTime();
+            return t < p0 || t > p1;
+        });
+        const dups = [...seenK.values()].filter(n => n > 1).reduce((a, n) => a + n - 1, 0);
+        L.push('');
+        L.push(`НЕ ЗАСЧИТАНО (загружено, но вид не из списка): ${notC.length}`);
+        L.push(`ПОВТОРЫ (одинаковые время, категория, ник и текст; засчитаны каждый раз, как на сайте): ${dups}`);
+        L.push(`ВНЕ ПЕРИОДА (время записи не попадает в выбранный период): ${outP.length}`);
+        if (d.dbg.repAll) {
+            const rest = d.dbg.repAll.filter(x => !COUNT_REP.test(String(x.transaction_desc || '')));
+            L.push(`ЖАЛОБЫ/ВОПРОСЫ: всего ${d.dbg.repAll.length}, засчитано (взял/закрыл/мут/PM) ${d.dbg.repAll.length - rest.length}, не засчитано ${rest.length}`);
+        }
+        L.push('');
+        L.push('ВСЕ ЗАПИСИ (табуляция; можно открыть в Excel):');
+        L.push(['время МСК', 'категория', '№ кат.', 'считается', 'вид', 'почему', 'повтор', 'вне периода', 'текст'].join('\t'));
+        const rows = d.own.concat(d.dbg.repAll ? d.dbg.repAll.filter(x => !COUNT_REP.test(String(x.transaction_desc || ''))).map(x => Object.assign({}, x, { _repOut: true })) : []);
+        rows.sort((x, y) => new Date(x.time) - new Date(y.time)).forEach(r => {
+            const t = new Date(r.time).getTime();
+            const counted = !r._repOut && r._cnt && !off.types.has(r._cnt);
+            const why = r._repOut ? 'жалобы: не взял/закрыл/мут/PM (ответ в репорте и т.п.)' : !r._cnt ? 'вид не из списка' : off.types.has(r._cnt) ? 'вид выключен куратором' : r._cnt === 'chat' ? 'сообщение в админ-чате' : r._cnt === 'reports' ? 'работа с жалобами' : 'совпало с видом по тексту';
+            L.push([msk(r.time), catName(r), r.category_id, counted ? 'да' : 'нет', r._repOut ? '' : r._cnt ? name(r._cnt) : '', why, (seenK.get(key(r)) || 0) > 1 ? 'да' : '', t < p0 || t > p1 ? 'да' : '', String(r.transaction_desc || '').replace(/\s+/g, ' ')].join('\t'));
+        });
+        const blob = new Blob(['\ufeff' + L.join('\r\n')], { type: 'text/plain;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `verdict-count_${d.nick}_${d.a}_${d.b}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => (URL.revokeObjectURL(a.href), a.remove()), 1000);
+        toast('Лог подсчёта скачан');
     },
     // что куратор исключил кликом по строке: { cats: ['chat'], types: ['auth'] }
     off() {
@@ -3710,7 +3773,10 @@ const AdminView = {
             <div class="sub vdl-jr-info" data-l="jinfo"></div>
             <div class="vdl-jr-wrap"><div class="card" data-l="list"></div><div class="vdl-dlg" data-l="dlg" hidden></div></div>
           </div>
-          <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
+          <div class="btns" style="margin-top:12px"><span style="flex:1"></span>${d.dbg ? `<button class="btn" data-a="dbglog" title="Подробно: каждая запись — считается или нет и почему">${icon('download', 14)}Скачать лог подсчёта</button>` : ''}<button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
+        // ВРЕМЕННО: выгрузка подробного лога подсчёта
+        const dl = out.querySelector('[data-a="dbglog"]');
+        if (dl) dl.onclick = () => this.dbgLog(d, own, off);
         out.querySelectorAll('[data-tog]').forEach(
             el =>
                 (el.onclick = () => {
@@ -4683,19 +4749,21 @@ const BotView = {
     RANGES: [
         ['1 час', () => [Date.now() - 3600e3, Date.now()]],
         ['3 часа', () => [Date.now() - 3 * 3600e3, Date.now()]],
-        ['6 часов', () => [Date.now() - 6 * 3600e3, Date.now()]],
         ['Сегодня', () => [AdminView.dayStart(AdminView.mskDay(Date.now())), Date.now()]],
         ['Вчера', () => {
             const s = AdminView.dayStart(AdminView.mskDay(Date.now()));
             return [s - 864e5, s - 1];
         }],
-        ['24 часа', () => [Date.now() - 864e5, Date.now()]]
+        ['7 дней', () => [AdminView.dayStart(AdminView.mskDay(Date.now() - 6 * 864e5)), Date.now()]],
+        ['30 дней', () => [AdminView.dayStart(AdminView.mskDay(Date.now() - 29 * 864e5)), Date.now()]]
     ],
     open() {
         if (this.scrim) return Layer.show(this.scrim);
         Layer.closeModals();
         this._gen = (this._gen || 0) + 1;
-        const sel = Math.min(this.RANGES.length - 1, Math.max(0, +Store.get('botRange', 3) || 0));
+        const saved = Store.get('botRange2', 2);
+        const sel = saved === 'custom' ? 'custom' : Math.min(this.RANGES.length - 1, Math.max(0, +saved || 0));
+        const today = AdminView.mskDay(Date.now());
         const scrim = (this.scrim = Layer.add(
             U.h(`<div class="scrim"><div class="modal vdl">
             <div class="m-head"><span class="vic" style="--c:#f5a524;width:34px;height:34px;border-radius:10px">${icon('bot', 16)}</span>
@@ -4703,9 +4771,14 @@ const BotView = {
               <span style="flex:1"></span><button class="btn" data-a="cfg">${icon('spark', 14)}Что ловить</button><button class="icon-btn" data-a="x">${icon('x')}</button></div>
             <div class="pane">
               <div class="vdl-form">
-                <div class="seg" data-g="rng">${this.RANGES.map((r, i) => `<button data-v="${i}" class="${i === sel ? 'on' : ''}">${r[0]}</button>`).join('')}</div>
+                <div class="seg" data-g="rng">${this.RANGES.map((r, i) => `<button data-v="${i}" class="${i === sel ? 'on' : ''}">${r[0]}</button>`).join('')}<button data-v="custom" class="${sel === 'custom' ? 'on' : ''}">Свой период</button></div>
                 <span style="flex:1"></span>
                 <button class="btn pri" data-a="go">${icon('search', 14)}Искать</button>
+              </div>
+              <div class="vdl-af-custom" data-l="bcustom"${sel === 'custom' ? '' : ' hidden'} style="margin-bottom:10px">
+                <span class="vdl-af-l">с</span><input class="inp" type="date" data-a="bfrom" value="${today}" max="${today}"><input class="inp vdl-af-t" type="time" data-a="btfrom">
+                <span class="vdl-af-l">по</span><input class="inp" type="date" data-a="bto" value="${today}" max="${today}"><input class="inp vdl-af-t" type="time" data-a="btto">
+                <span class="vdl-af-hint">время МСК, можно оставить пустым</span>
               </div>
               <div class="vdl-prog"></div>
               <div class="vdl-out"></div>
@@ -4716,15 +4789,34 @@ const BotView = {
         scrim.addEventListener('mousedown', e => e.target === scrim && close());
         scrim.querySelector('[data-a="cfg"]').onclick = () => this.settings();
         let r = sel;
+        const custom = scrim.querySelector('[data-l="bcustom"]');
         scrim.querySelectorAll('[data-g="rng"] button').forEach(
             b =>
                 (b.onclick = () => {
-                    r = +b.dataset.v;
-                    Store.set('botRange', r);
+                    r = b.dataset.v === 'custom' ? 'custom' : +b.dataset.v;
+                    Store.set('botRange2', r);
+                    custom.hidden = r !== 'custom';
                     scrim.querySelectorAll('[data-g="rng"] button').forEach(x => x.classList.toggle('on', x === b));
                 })
         );
-        scrim.querySelector('[data-a="go"]').onclick = () => this.search(this.RANGES[r]);
+        // свой период: даты и время МСК, как в админ-действиях
+        const customRange = () => {
+            const v = k => scrim.querySelector(`[data-a="${k}"]`).value;
+            let a = v('bfrom'),
+                b = v('bto');
+            if (!a || !b) return null;
+            if (a > b) [a, b] = [b, a];
+            const t0 = AdminView.dayStart(a) + (AdminView.hm(v('btfrom')) || 0);
+            const t1 = Math.min(AdminView.hm(v('btto')) != null ? AdminView.dayStart(b) + AdminView.hm(v('btto')) + 59999 : AdminView.dayStart(b) + 864e5 - 1, Date.now());
+            const ru = x => x.split('-').reverse().join('.');
+            return [`${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${v('btfrom') || v('btto') ? ` · ${v('btfrom') || '00:00'}–${v('btto') || '23:59'} МСК` : ''}`, () => [t0, t1]];
+        };
+        scrim.querySelector('[data-a="go"]').onclick = () => {
+            if (r !== 'custom') return this.search(this.RANGES[r]);
+            const cr = customRange();
+            if (!cr) return toast('Выбери даты', 'err');
+            this.search(cr);
+        };
         CatLearn.discover().catch(() => {});
     },
     prog(t, gen) {
