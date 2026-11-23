@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.77
+// @version      1.2.78
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.77
+// @version      1.2.78
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.77';
+const VERSION = '1.2.78';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3164,7 +3164,7 @@ const actType = t => ACT_TYPES.find(x => x.re.test(t)) || null;
 const COUNT_TYPES = [
     { k: 'chat', name: 'Админ чат' },
     { k: 'reports', name: 'Работа с жалобами' },
-    { k: 'perm', name: 'Пермбан', re: /навсегда\s+заблокировал|пермбан|перманентн/i },
+    { k: 'perm', name: 'Пермбан', re: /навсегда\s+(?:\S+\s+)?заблокировал|пермбан|перманентн/i },
     { k: 'unlockadm', name: 'Разблокировка возможности админа', re: /разблокировал\S*\s+(?:возможност|функци|админ|команд)|вернул\S*\s+возможност/i },
     { k: 'unban', name: 'Разблокировка игрока', re: /разблокировал|разбанил/i },
     { k: 'block', name: 'Блокировка игрока', re: /заблокировал|забанил/i },
