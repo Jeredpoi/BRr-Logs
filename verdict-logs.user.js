@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.73
+// @version      1.2.74
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.73
+// @version      1.2.74
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.73';
+const VERSION = '1.2.74';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -772,6 +772,8 @@ const LOGS_UI_CSS = `
 .vdl-msg.he .vdl-msg-b { background: rgba(255,255,255,.07); border-bottom-left-radius: 4px; }
 .vdl-msg.me .vdl-msg-b { background: color-mix(in srgb, var(--acc) 28%, transparent); border-bottom-right-radius: 4px; }
 .vdl-msg-m { margin-top: 3px; font-size: 10.5px; color: var(--tx-3); }
+.vdl-idchip { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font: 700 10.5px/1.6 ui-monospace, monospace; color: #cfe3ff; background: rgba(58,160,255,.14); border: 1px solid rgba(58,160,255,.4); cursor: copy; }
+.vdl-idchip:hover { background: rgba(58,160,255,.28); }
 .vdl-spec-tag.tp { background: #8b5cf6; }
 .vdl-jr-row.pl-hit { box-shadow: inset 3px 0 0 #2fbf71; background: color-mix(in srgb, #2fbf71 8%, transparent); }
 .vdl-jr-sep { padding: 10px 14px 6px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--tx-3); border-top: 1px solid var(--line); }
@@ -3156,6 +3158,35 @@ const ACT_TYPES = [
     { k: 'tpmenu', name: 'Меню телепортов', re: /меню\s+телепортов/i }
 ];
 const actType = t => ACT_TYPES.find(x => x.re.test(t)) || null;
+// что дашборды считают админ-действием — только это идёт в число; порядок важен (первое совпадение)
+const DASH_TYPES = [
+    { k: 'chat', name: 'Админ чат' },
+    { k: 'reports', name: 'Работа с жалобами' },
+    { k: 'perm', name: 'Пермбан', re: /навсегда\s+заблокировал|пермбан|перманентн/i },
+    { k: 'unlockadm', name: 'Разблокировка возможности админа', re: /разблокировал\S*\s+(?:возможност|функци|админ|команд)|вернул\S*\s+возможност/i },
+    { k: 'unban', name: 'Разблокировка игрока', re: /разблокировал|разбанил/i },
+    { k: 'block', name: 'Блокировка игрока', re: /заблокировал|забанил/i },
+    { k: 'agm', name: 'Агм', re: /(?:^|[^a-zа-яё])(?:a?gm|агм)(?![a-zа-яё])|бессмерти/i },
+    { k: 'mute', name: 'Мут игроку', re: /выдал\S*\s+мут|замутил/i },
+    { k: 'unfreeze', name: 'Разморозка игрока', re: /разморозил/i },
+    { k: 'freeze', name: 'Заморозил игрока', re: /заморозил/i },
+    { k: 'respawnall', name: 'Респавн всего транспорта', re: /(?:респавн|зареспавнил|заспавнил)\S*\s+(?:весь|всего|всех|все)\s/i },
+    { k: 'respawncar', name: 'Респавн транспорта игрока', re: /(?:респавн|зареспавнил|заспавнил)\S*\s+(?:транспорт|авто|машин)/i },
+    { k: 'createcar', name: 'Создание транспорта', re: /создал\S*\s+(?:\S+\s+){0,2}(?:транспорт|авто|машин)/i },
+    { k: 'spawn', name: 'Заспавнил игрока', re: /заспавнил/i },
+    { k: 'tpmenu', name: 'Использование меню телепорта', re: /меню\s+телепорт/i },
+    { k: 'slap', name: 'Слап', re: /подбросил|слапнул|(?:^|[^a-z])slap/i },
+    { k: 'get', name: 'Получение инфы об имуществе игрока (/get)', re: /имуществ|(?:^|\s)\/get(?:\s|$)/i },
+    { k: 'repair', name: 'Починка транспорта', re: /починил/i },
+    { k: 'adminlist', name: 'Просмотр администрации', re: /список\s+администрации|администраци\S*\s+онлайн/i },
+    { k: 'stats', name: 'Просмотр статистики игрока', re: /статистик/i },
+    { k: 'spec', name: 'Слежка', re: /начал\s+следить/i },
+    { k: 'removeap', name: 'Снятие с АП', re: /снял\S*\s+(?:\S+\s+){0,2}(?:с\s+)?(?:должности\s+)?(?:агент|ап)(?![а-яё])|снят\S*\s+с\s+ап(?![а-яё])/i },
+    { k: 'tp', name: 'Телепорт к игроку/к себе', re: /телепортировал(?:ся)?\s+к\s+(?!себе\s+авто)/i },
+    { k: 'setint', name: 'Установка интерьера, скина, здоровья', re: /интерьер|скин|здоровь/i }
+];
+// «Работа с жалобами» — из «Жалоб/Вопросов»: взял, закрыл, мут репорта, PM; ответ в репорте не в счёт
+const DASH_REP = /тип:\s*в\s+работе|закрыл\s+обращение|выдача\s+мута\s+репорта|^PM\s+для/i;
 const AdminView = {
     // номера категорий, вписанные вручную: { act: '70', … }
     ids() {
@@ -3343,9 +3374,8 @@ const AdminView = {
             const ids0 = new Set();
             let ready = cats0.filter(c => c.id && !ids0.has(c.id) && ids0.add(c.id));
             // категории, отмеченные вручную в «Что считать» (любые с сайта) — вместо набора по умолчанию
-            const sel = this.selected();
-            if (sel) ready = sel.map(id => this.catOf(id, cats0));
-            const cats = sel ? ready : cats0;
+            // считается по списку дашбордов — выбор категорий больше не нужен
+            const cats = cats0;
             if (!ready.length) throw new Error('не найдены номера категорий — впиши их в «Что считать»');
             // конец периода — не позже «сейчас»: новые записи во время листания не сдвигают страницы
             // время суток (МСК), если задано: с ta в первый день и по tb в последний
@@ -3524,10 +3554,21 @@ const AdminView = {
         const kOfId = new Map(list.filter(c => c.id).map(c => [String(c.id), c.k]));
         const catK = r => kOfId.get(String(r.category_id)) || '';
         // вид действия есть только у записей не из чатов
-        const typeK = r => (catK(r) && !/chat/.test(catK(r)) ? (actType(String(r.transaction_desc || '')) || { k: 'other' }).k : '');
-        const typeOk = r => !off.types.has(typeK(r));
-        const own = d.own.filter(r => !off.cats.has(catK(r)) && typeOk(r));
-        const cut = d.own.length - own.length;
+        // вид по списку дашбордов: админ-чат — по категории, жалобы — по типу записи, остальное — по тексту действия
+        const dashK = r => {
+            const ck = catK(r),
+                t = String(r.transaction_desc || '');
+            if (/chat/.test(ck)) return 'chat';
+            if (ck === 'rep' || /жалоб|вопрос/i.test(String(catName(r) || ''))) return DASH_REP.test(t) ? 'reports' : '';
+            const hit = DASH_TYPES.find(x => x.re && x.re.test(t));
+            return hit ? hit.k : '';
+        };
+        d.own.forEach(r => (r._dash = dashK(r)));
+        const typeK = r => r._dash || 'other';
+        const typeOk = r => !!r._dash && !off.types.has(r._dash);
+        const own = d.own.filter(typeOk);
+        const notDash = d.own.filter(r => !r._dash);
+        const cut = d.own.filter(r => r._dash && off.types.has(r._dash)).length;
         // контроль периода: записи, время которых не попало в выбранные сутки (МСК)
         const p0 = this.dayStart(a),
             p1 = this.dayStart(b) + 864e5;
@@ -3593,46 +3634,39 @@ const AdminView = {
           </div>
           <div class="muted" style="font-size:12px;margin:-4px 0 10px">${U.esc(nick)} · ${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${d.ta || d.tb ? ` · ${d.ta || '00:00'}–${d.tb || '23:59'} МСК` : ''}${d.capped ? ` · записей очень много — посчитаны не все <button class="btn" data-a="amore" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить ещё</button><button class="btn" data-a="amore" data-all="1" style="height:24px;margin-left:4px">${icon('download', 12)}Загрузить всё</button>` : ''}${dups ? ` · <b style="color:#f5a524">повторов: ${dups}</b> (одинаковые время, категория и текст)` : ''}${d.noAccess && d.noAccess.length ? ` · <b style="color:#f5a524">нет доступа: ${d.noAccess.map(U.esc).join(', ')}</b> — эти категории не посчитаны` : ''}${times.length ? ` · записи с ${fmtDate(tMin)} по ${fmtDate(tMax)}` : ''}${outside ? ` · <b style="color:#f5a524">вне выбранных суток: ${outside}</b> (время сайта и периода расходятся — сообщи разработчику)` : ''}${cut ? ` · <b style="color:#f5a524">не считается по твоему выбору: ${cut}</b> (зачёркнутые строки ниже — нажми, чтобы вернуть)` : ''}</div>
  ${missing.filter(c => this.ids()[c.k] !== '-').length ? `<div class="card vdl-warn" style="padding:10px 12px 10px 14px;margin-bottom:10px">${icon('x', 14)}<span>Не найден номер: ${missing.filter(c => this.ids()[c.k] !== '-').map(c => `«${U.esc(c.name)}»`).join(', ')} — эти категории не посчитаны.</span><button class="btn" data-a="cfg2">Указать</button></div>` : ''}
-          <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Категории</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Журнал</button></div>
+          <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Виды</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Журнал</button></div>
           <div data-at="cat">
             ${(() => {
-                // разбивка действий (без сообщений в админ-чатах) по видам
-                // все действия включённых категорий; исключённые виды остаются в списке зачёркнутыми
-                const acts = d.own.filter(r => actIds.has(String(r.category_id)) && !off.cats.has(catK(r)));
-                if (!acts.length) return '';
-                const per = ACT_TYPES.map(t => ({ t, n: 0 }));
-                let other = 0;
-                acts.forEach(r => {
-                    const t = actType(String(r.transaction_desc || ''));
-                    if (t) per.find(x => x.t === t).n++;
-                    else other++;
-                });
-                const rows = per
-                    .filter(x => x.n)
-                    .map(x => ({ k: x.t.k, name: x.t.name, n: x.n }))
-                    .concat(other ? [{ k: 'other', name: 'Другие действия', n: other }] : [])
-                    .map(x => Object.assign(x, { off: off.types.has(x.k) }));
+                // как в дашбордах: только виды из списка; нажатием вид можно не считать
+                const per = DASH_TYPES.map(t => ({ k: t.k, name: t.name, n: d.own.filter(r => r._dash === t.k).length })).map(x => Object.assign(x, { off: off.types.has(x.k) }));
+                const rows = per.filter(x => x.n || x.off);
                 const mx = Math.max(1, ...rows.filter(x => !x.off).map(x => x.n));
-                const counted = rows.filter(x => !x.off).reduce((s0, x) => s0 + x.n, 0);
-                // должность — из последнего «Авторизовался как …»
-                const auth = acts
+                const auth = d.own
                     .filter(r => /авторизовался\s+как/i.test(String(r.transaction_desc || '')))
                     .sort((x, y) => new Date(y.time) - new Date(x.time))[0];
                 const role = auth ? String(auth.transaction_desc).replace(/^.*авторизовался\s+как\s*/i, '').trim() : '';
-                const ri = d.repInfo;
-                return `<div class="sec"><h4>Действия по видам · ${counted} без сообщений в чатах${role ? ` · ${U.esc(role)}` : ''}</h4><div class="sub" style="padding:0 2px 6px">Нажми на строку, чтобы не считать этот вид (или категорию ниже) — число пересчитается, выбор запомнится.</div><div class="card">${rows
-                    .map(x => `<div class="vdl-bar vdl-tog${x.n ? '' : ' muted'}${x.off ? ' off' : ''}" data-tog="types:${x.k}" title="${x.off ? 'Не считается — нажми, чтобы вернуть' : 'Нажми, чтобы не считать'}"><span class="nm">${x.name}</span><span class="tr"><b style="width:${x.n && !x.off ? Math.max(3, Math.round((x.n / mx) * 100)) : 0}%"></b></span><span class="n">${x.n}</span></div>`)
-                    .join('')}${
-                    ri && ri.all
-                        ? `<div class="sub" style="padding:8px 2px 2px">Из «Жалоб/Вопросов» в число вошли: взял репорт ${ri.work}, закрыл ${ri.closes}, мут репорта ${ri.rmutes}, PM ${ri.pm}.${ri.replies ? ` Не входят ответы в репорте: ${ri.replies}.` : ''}</div>`
+                // что не входит в список: сгруппировано по началу текста — видно, если формулировка сайта не распознана
+                const groups = new Map();
+                notDash.forEach(r => {
+                    const k = String(r.transaction_desc || '').replace(/[A-Za-z0-9_]+\[acc[^\]]*\]|\b[A-Z][a-z]+_[A-Za-z0-9_]+|\d+/g, '…').split(/\s+/).slice(0, 4).join(' ');
+                    const g = groups.get(k) || { k, n: 0, ex: r.transaction_desc };
+                    g.n++;
+                    groups.set(k, g);
+                });
+                const ng = [...groups.values()].sort((x, y) => y.n - x.n);
+                return `<div class="sec"><h4>Действия по видам${role ? ` · ${U.esc(role)}` : ''}</h4><div class="card">${
+                    rows.length
+                        ? rows.map(x => `<div class="vdl-bar vdl-tog${x.off ? ' off' : ''}" data-tog="types:${x.k}" title="${x.off ? 'Не считается — нажми, чтобы вернуть' : 'Нажми, чтобы не считать'}"><span class="nm">${x.name}</span><span class="tr"><b style="width:${x.n && !x.off ? Math.max(3, Math.round((x.n / mx) * 100)) : 0}%"></b></span><span class="n">${x.n}</span></div>`).join('')
+                        : '<div class="vdl-row"><div class="main sub">Админ-действий за период нет</div></div>'
+                }</div></div>${
+                    ng.length
+                        ? `<details class="sec vdl-nodash"><summary><h4 style="display:inline">Не входит в список дашбордов · ${notDash.length}</h4></summary><div class="card">${ng
+                              .slice(0, 40)
+                              .map(g => `<div class="vdl-bar muted" title="${U.esc(String(g.ex || ''))}"><span class="nm">${U.esc(g.k)}</span><span class="tr"></span><span class="n">${g.n}</span></div>`)
+                              .join('')}</div></details>`
                         : ''
-                }</div></div>`;
+                }`;
             })()}
-            <div class="sec"><h4>По категориям</h4><div class="card">${
-                cats.some(g => g.n || g.off)
-                    ? cats.filter(g => g.n || g.off).map(g => `<div class="vdl-bar vdl-tog${g.n ? '' : ' muted'}${g.off ? ' off' : ''}" data-tog="cats:${g.ck}" title="${g.off ? 'Не считается — нажми, чтобы вернуть' : 'Нажми, чтобы не считать эту категорию'}"><span class="nm">${U.esc(nm(g.k))}</span><span class="tr"><b style="width:${g.n && !g.off ? Math.max(3, Math.round((g.n / cmax) * 100)) : 0}%"></b></span><span class="n">${g.n}</span></div>`).join('')
-                    : '<div class="vdl-row"><div class="main sub">Админ-действий за период нет</div></div>'
-            }</div></div>
           </div>
           <div data-at="day" hidden>
             ${own.length ? `<div class="sec"><h4>Часы активности</h4><div class="card">${H.html}<div class="sub" style="padding:0 2px 8px">Чаще всего — ${String(H.peak).padStart(2, '0')}:00–${String(H.peak).padStart(2, '0')}:59 МСК</div></div></div>` : ''}
@@ -3843,7 +3877,7 @@ const AdminView = {
             J.loading = true;
             const gen = this._gen;
             try {
-                const r = await Api.all({ player_name__exact: nick, ...d.range }, 40, (pg, n) => this.prog(`Все записи ${nick}: страница ${pg}, записей ${n}…`, gen), null, () => gen === this._gen);
+                const r = await Api.all({ player_name__exact: nick, ...d.range }, 500, (pg, n) => this.prog(`Все записи ${nick}: страница ${pg}, записей ${n}…`, gen), null, () => gen === this._gen);
                 if (gen !== this._gen) return;
                 J.allRows = r;
                 J.allCapped = r.capped;
@@ -4727,7 +4761,7 @@ const BotView = {
                 // чатов много — одним запросом пошире (лишнее отбросит фильтр чатов)
                 for (const ch of chats.length && chats.length <= 3 ? chats : [null]) {
                     // «@ник» ищем без @ (сайт ищет и так), лишнее отсеет проверка на @
-                    const r = await Api.all({ transaction_desc__ilike: `%${p.replace(/^@/, '')}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range }, ch ? 5 : 10, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
+                    const r = await Api.all({ transaction_desc__ilike: `%${p.replace(/^@/, '')}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range }, 500, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
                     if (!alive()) return;
                     capped = capped || r.capped;
                     take(r, ch && ch.id);
@@ -4736,7 +4770,7 @@ const BotView = {
             // 2) похожие написания — читаем чаты целиком
             if (c.fuzzy) {
                 for (const ch of chats) {
-                    const r = await Api.all({ category_id__exact: ch.id, ...range }, 10, (pg, n) => this.prog(`${ch.name}: страница ${pg}, записей ${n}…`, gen), null, alive);
+                    const r = await Api.all({ category_id__exact: ch.id, ...range }, 500, (pg, n) => this.prog(`${ch.name}: страница ${pg}, записей ${n}…`, gen), null, alive);
                     if (!alive()) return;
                     capped = capped || r.capped;
                     take(r, ch.id);
@@ -5037,7 +5071,7 @@ const BotView = {
                   ? pageRows
                         .map(
                             g => `<div class="vdl-row vdl-botrow ${g.banned ? 'is-banned' : g.bot ? 'is-bot' : ''}"><div class="main">
-                      <div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>
+                      <div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>${g.id != null && g.id !== '' ? `<button class="vdl-idchip" data-id="${U.esc(String(g.id))}" title="Игровой ID — ник можно сменить, ID нет. Нажми, чтобы скопировать">ID ${U.esc(String(g.id))}</button>` : ''}
                         ${g.banned ? `<span class="vdl-tag" style="--c:#8b8f9a" title="${U.esc(fmtDate(g.banned.t) + ' — ' + g.banned.desc.slice(0, 160))}">заблокирован ${U.esc(fmtDate(g.banned.t).split(',')[0])}${g.banned.until ? ' до ' + U.esc(fmtDate(g.banned.until).split(',')[0]) : ''}</span>` : g.bot ? '<span class="vdl-tag" style="--c:#e5484d">похож на бота</span>' : ''}
                         ${g.level != null ? `<span class="vdl-tag" style="--c:${g.level <= c.level ? '#e5484d' : '#8b8f9a'}">ур. ${g.level}</span>` : ''}
                         ${[...g.ips].slice(0, 2).map(ip => `<span class="vdl-tag" style="--c:${ips.get(ip).size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}${ips.get(ip).size > 1 ? ` · ${ips.get(ip).size} акк.` : ''}</span>`).join('')}
@@ -5100,6 +5134,16 @@ const BotView = {
                 }
             };
         out.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
+        out.querySelectorAll('.vdl-idchip').forEach(
+            el =>
+                (el.onclick = e => {
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(el.dataset.id).then(
+                        () => toast('ID скопирован: ' + el.dataset.id),
+                        () => toast('Не удалось скопировать', 'err')
+                    );
+                })
+        );
         out.querySelectorAll('[data-an]').forEach(b => (b.onclick = () => Panel.open('nick', b.dataset.an, { stack: true })));
         out.querySelectorAll('[data-ip]').forEach(b => (b.onclick = () => Panel.open('ip', b.dataset.ip, { stack: true })));
         const copy = (list, what) =>
