@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.75
+// @version      1.2.76
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.75
+// @version      1.2.76
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.75';
+const VERSION = '1.2.76';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -773,6 +773,8 @@ const LOGS_UI_CSS = `
 .vdl-msg.me .vdl-msg-b { background: color-mix(in srgb, var(--acc) 28%, transparent); border-bottom-right-radius: 4px; }
 .vdl-msg-m { margin-top: 3px; font-size: 10.5px; color: var(--tx-3); }
 .vdl-idchip { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font: 700 10.5px/1.6 ui-monospace, monospace; color: #cfe3ff; background: rgba(58,160,255,.14); border: 1px solid rgba(58,160,255,.4); cursor: copy; }
+.vdl-botcmd { margin-left: 4px; padding: 1px 7px; color: #ffd9a8; background: rgba(245,165,36,.14); border-color: rgba(245,165,36,.45); }
+.vdl-botcmd:hover { background: rgba(245,165,36,.28) !important; }
 .vdl-idchip:hover { background: rgba(58,160,255,.28); }
 .vdl-spec-tag.tp { background: #8b5cf6; }
 .vdl-jr-row.pl-hit { box-shadow: inset 3px 0 0 #2fbf71; background: color-mix(in srgb, #2fbf71 8%, transparent); }
@@ -5079,7 +5081,7 @@ const BotView = {
                   ? pageRows
                         .map(
                             g => `<div class="vdl-row vdl-botrow ${g.banned ? 'is-banned' : g.bot ? 'is-bot' : ''}"><div class="main">
-                      <div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>${g.id != null && g.id !== '' ? `<button class="vdl-idchip" data-id="${U.esc(String(g.id))}" title="Игровой ID — ник можно сменить, ID нет. Нажми, чтобы скопировать">ID ${U.esc(String(g.id))}</button>` : ''}
+                      <div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>${g.id != null && g.id !== '' ? `<button class="vdl-idchip" data-id="${U.esc(String(g.id))}" title="Игровой ID — ник можно сменить, ID нет. Нажми, чтобы скопировать">ID ${U.esc(String(g.id))}</button><button class="vdl-idchip vdl-botcmd" data-cmd="/bot ${U.esc(String(g.id))}" title="Скопировать команду /bot ${U.esc(String(g.id))}">/bot</button>` : ''}
                         ${g.banned ? `<span class="vdl-tag" style="--c:#8b8f9a" title="${U.esc(fmtDate(g.banned.t) + ' — ' + g.banned.desc.slice(0, 160))}">заблокирован ${U.esc(fmtDate(g.banned.t).split(',')[0])}${g.banned.until ? ' до ' + U.esc(fmtDate(g.banned.until).split(',')[0]) : ''}</span>` : g.bot ? '<span class="vdl-tag" style="--c:#e5484d">похож на бота</span>' : ''}
                         ${g.level != null ? `<span class="vdl-tag" style="--c:${g.level <= c.level ? '#e5484d' : '#8b8f9a'}">ур. ${g.level}</span>` : ''}
                         ${[...g.ips].slice(0, 2).map(ip => `<span class="vdl-tag" style="--c:${ips.get(ip).size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}${ips.get(ip).size > 1 ? ` · ${ips.get(ip).size} акк.` : ''}</span>`).join('')}
@@ -5146,8 +5148,9 @@ const BotView = {
             el =>
                 (el.onclick = e => {
                     e.stopPropagation();
-                    navigator.clipboard.writeText(el.dataset.id).then(
-                        () => toast('ID скопирован: ' + el.dataset.id),
+                    const v = el.dataset.cmd || el.dataset.id;
+                    navigator.clipboard.writeText(v).then(
+                        () => toast((el.dataset.cmd ? 'Команда скопирована: ' : 'ID скопирован: ') + v),
                         () => toast('Не удалось скопировать', 'err')
                     );
                 })
