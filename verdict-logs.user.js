@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.78
+// @version      1.2.79
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.78
+// @version      1.2.79
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.78';
+const VERSION = '1.2.79';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3190,13 +3190,13 @@ const COUNT_TYPES = [
     { k: 'stats', name: 'Просмотр статистики игрока', re: /статистик/i },
     { k: 'spec', name: 'Слежка', re: /начал\s+следить/i },
     { k: 'removeap', name: 'Снятие с АП', re: /снял\S*\s+(?:\S+\s+){0,2}(?:с\s+)?(?:должности\s+)?(?:агент|ап)(?![а-яё])|снят\S*\s+с\s+ап(?![а-яё])/i },
-    { k: 'tp', name: 'Телепорт к игроку/к себе', re: /телепортировал(?:ся)?\s+к\s+(?!себе\s+авто)/i },
+    { k: 'tp', name: 'Телепорт', re: /телепортировал(?:ся)?\s+к\s/i },
     { k: 'setint', name: 'Установка интерьера, скина, здоровья', re: /интерьер|скин|здоровь/i },
     // любое другое админ-наказание тоже считается
     { k: 'pun', name: 'Другие наказания', re: { test: t => !!punType(t) } }
 ];
-// «Работа с жалобами» — из «Жалоб/Вопросов»: взял, закрыл, мут репорта, PM; ответ в репорте не в счёт
-const COUNT_REP = /тип:\s*в\s+работе|закрыл\s+обращение|выдача\s+мута\s+репорта|^PM\s+для/i;
+// «Работа с жалобами» — из «Жалоб/Вопросов»: только «закрыл обращение» и PM игроку; взял в работу, мут репорта и ответы — не в счёт
+const COUNT_REP = /закрыл\s+обращение|^PM\s+для/i;
 const AdminView = {
     // номера категорий, вписанные вручную: { act: '70', … }
     ids() {
@@ -3436,8 +3436,8 @@ const AdminView = {
                 const T = x => String(x.transaction_desc || '');
                 const WK = /тип:\s*в\s+работе/i;
                 const PM = /^PM\s+для/i;
-                const rep = { k: 'rep', name: 'Жалобы/Вопросы: взял, закрыл, мут, PM', id: repCat.id };
-                addRows(r.filter(x => WK.test(T(x)) || CL.test(T(x)) || RM.test(T(x)) || PM.test(T(x))), rep);
+                const rep = { k: 'rep', name: 'Жалобы/Вопросы: закрыл, PM', id: repCat.id };
+                addRows(r.filter(x => CL.test(T(x)) || PM.test(T(x))), rep);
                 cats.push(rep);
                 capped = capped || r.capped;
                 repInfo = {
@@ -3589,7 +3589,7 @@ const AdminView = {
         L.push(`ВНЕ ПЕРИОДА (время записи не попадает в выбранный период): ${outP.length}`);
         if (d.dbg.repAll) {
             const rest = d.dbg.repAll.filter(x => !COUNT_REP.test(String(x.transaction_desc || '')));
-            L.push(`ЖАЛОБЫ/ВОПРОСЫ: всего ${d.dbg.repAll.length}, засчитано (взял/закрыл/мут/PM) ${d.dbg.repAll.length - rest.length}, не засчитано ${rest.length}`);
+            L.push(`ЖАЛОБЫ/ВОПРОСЫ: всего ${d.dbg.repAll.length}, засчитано (закрыл/PM) ${d.dbg.repAll.length - rest.length}, не засчитано ${rest.length}`);
         }
         L.push('');
         L.push('ВСЕ ЗАПИСИ (табуляция; можно открыть в Excel):');
@@ -3598,7 +3598,7 @@ const AdminView = {
         rows.sort((x, y) => new Date(x.time) - new Date(y.time)).forEach(r => {
             const t = new Date(r.time).getTime();
             const counted = !r._repOut && r._cnt && !off.types.has(r._cnt);
-            const why = r._repOut ? 'жалобы: не взял/закрыл/мут/PM (ответ в репорте и т.п.)' : !r._cnt ? 'вид не из списка' : off.types.has(r._cnt) ? 'вид выключен куратором' : r._cnt === 'chat' ? 'сообщение в админ-чате' : r._cnt === 'reports' ? 'работа с жалобами' : 'совпало с видом по тексту';
+            const why = r._repOut ? 'жалобы: не закрыл/PM (взял в работу, мут репорта, ответ и т.п.)' : !r._cnt ? 'вид не из списка' : off.types.has(r._cnt) ? 'вид выключен куратором' : r._cnt === 'chat' ? 'сообщение в админ-чате' : r._cnt === 'reports' ? 'работа с жалобами' : 'совпало с видом по тексту';
             L.push([msk(r.time), catName(r), r.category_id, counted ? 'да' : 'нет', r._repOut ? '' : r._cnt ? name(r._cnt) : '', why, (seenK.get(key(r)) || 0) > 1 ? 'да' : '', t < p0 || t > p1 ? 'да' : '', String(r.transaction_desc || '').replace(/\s+/g, ' ')].join('\t'));
         });
         const blob = new Blob(['\ufeff' + L.join('\r\n')], { type: 'text/plain;charset=utf-8' });
