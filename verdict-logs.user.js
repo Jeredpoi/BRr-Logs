@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.79
+// @version      1.2.80
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.79
+// @version      1.2.80
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.79';
+const VERSION = '1.2.80';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -4833,6 +4833,7 @@ const BotView = {
         const c = Bots.cfg();
         Bots.reset();
         const list = Bots.phrases(c);
+        const started = performance.now();
         try {
             if (!list.length) throw new Error('список фраз пуст — добавь их в «Что ловить»');
             const [t0, t1] = get();
@@ -4859,11 +4860,16 @@ const BotView = {
                 });
             // 1) точные фразы — поиском сайта
             // по каждому выбранному чату: иначе частые слова («бесплатно») забивают лимит системными записями
-            for (const [i, p] of list.entries()) {
+            // фраза, в которой целиком есть другая фраза списка, ничего нового поиском не даст — её не ищем отдельно
+            // (её совпадения и так придут с короткой и проверятся по всем фразам);
+            // «похожие написания» читают чаты целиком — тогда поиск по фразам не нужен вовсе
+            const lowQ = p => p.replace(/^@/, '').toLowerCase();
+            const queries = c.fuzzy ? [] : list.filter(p => !list.some(q => q !== p && lowQ(q).length < lowQ(p).length && lowQ(p).includes(lowQ(q))));
+            for (const [i, p] of queries.entries()) {
                 // чатов много — одним запросом пошире (лишнее отбросит фильтр чатов)
                 for (const ch of chats.length && chats.length <= 3 ? chats : [null]) {
                     // «@ник» ищем без @ (сайт ищет и так), лишнее отсеет проверка на @
-                    const r = await Api.all({ transaction_desc__ilike: `%${p.replace(/^@/, '')}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range }, 500, (pg, n) => this.prog(`«${p}» (${i + 1}/${list.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
+                    const r = await Api.all({ transaction_desc__ilike: `%${p.replace(/^@/, '')}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range }, 500, (pg, n) => this.prog(`«${p}» (${i + 1}/${queries.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
                     if (!alive()) return;
                     capped = capped || r.capped;
                     take(r, ch && ch.id);
@@ -4928,13 +4934,18 @@ const BotView = {
             // уровни: последний вход/выход с «Уровень: N» — сначала у тех, кто рекламирует @ник или пишет с общего IP
             if (c.levels) {
                 let fails = 0;
-                const top = arr
-                    .filter(g => !g.banned)
-                    .filter(g => g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3)
-                    .concat(arr.filter(g => !g.banned && !(g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3)))
-                    .slice(0, 80);
+                // уровень — только у тех, кто похож на бота (реклама @ника, общий IP, несколько фраз или сообщений):
+                // у случайного игрока с одним словом уровень ничего не решает, а каждый запрос — ещё ~1,3 с
+                const top = arr.filter(g => !g.banned && (g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3)).slice(0, 30);
+                Bots._lvl = Bots._lvl || new Map();
                 for (const [i, g] of top.entries()) {
                     if (!alive()) return;
+                    // уже узнавали в этой вкладке за последний час — не спрашиваем снова
+                    const lc = Bots._lvl.get(g.nick.toLowerCase());
+                    if (lc && Date.now() - lc.at < 3600e3) {
+                        g.level = lc.v;
+                        continue;
+                    }
                     this.prog(`Проверяю уровень аккаунтов: ${i + 1} из ${top.length}…`, gen);
                     try {
                         // свежие входы: при сортировке «сначала старые» первая страница — давние записи, поэтому окно короче
@@ -4947,6 +4958,7 @@ const BotView = {
                             .map(x => String(x.transaction_desc || '').match(/ровень\D{0,3}(\d+)/i))
                             .find(Boolean);
                         g.level = m ? +m[1] : null;
+                        Bots._lvl.set(g.nick.toLowerCase(), { v: g.level, at: Date.now() });
                         fails = 0;
                     } catch (e) {
                         g.level = null;
@@ -4974,7 +4986,8 @@ const BotView = {
             });
             arr.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n);
             const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
-            this.render(out, { label, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, hideBan: false, showWeak: false, blkInfo, range });
+            const took = Math.round((performance.now() - started) / 1000);
+            this.render(out, { label: `${label} · поиск занял ${took >= 60 ? `${Math.floor(took / 60)} мин ${took % 60} с` : `${took} с`}`, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, hideBan: false, showWeak: false, blkInfo, range });
             Notify.done(this.scrim, 'Поиск ботов готов', `${label}: найдено ${rows.length}`);
         } catch (e) {
             if (gen !== this._gen) return;
