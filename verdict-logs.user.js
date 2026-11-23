@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.74
+// @version      1.2.75
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.74
+// @version      1.2.75
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.74';
+const VERSION = '1.2.75';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3158,8 +3158,8 @@ const ACT_TYPES = [
     { k: 'tpmenu', name: 'Меню телепортов', re: /меню\s+телепортов/i }
 ];
 const actType = t => ACT_TYPES.find(x => x.re.test(t)) || null;
-// что дашборды считают админ-действием — только это идёт в число; порядок важен (первое совпадение)
-const DASH_TYPES = [
+// что считается админ-действием — только это идёт в число; порядок важен (первое совпадение)
+const COUNT_TYPES = [
     { k: 'chat', name: 'Админ чат' },
     { k: 'reports', name: 'Работа с жалобами' },
     { k: 'perm', name: 'Пермбан', re: /навсегда\s+заблокировал|пермбан|перманентн/i },
@@ -3167,7 +3167,13 @@ const DASH_TYPES = [
     { k: 'unban', name: 'Разблокировка игрока', re: /разблокировал|разбанил/i },
     { k: 'block', name: 'Блокировка игрока', re: /заблокировал|забанил/i },
     { k: 'agm', name: 'Агм', re: /(?:^|[^a-zа-яё])(?:a?gm|агм)(?![a-zа-яё])|бессмерти/i },
-    { k: 'mute', name: 'Мут игроку', re: /выдал\S*\s+мут|замутил/i },
+    { k: 'unmute', name: 'Снятие мута', re: /размут|снял\S*\s+мут/i },
+    { k: 'unjail', name: 'Выпуск из деморгана', re: /выпустил|освободил\s+из/i },
+    { k: 'unwarn', name: 'Снятие предупреждения', re: /снял\S*\s+(?:предупрежд|варн)/i },
+    { k: 'mute', name: 'Мут игроку', re: /выдал\S*\s+мут|замутил|заглушил/i },
+    { k: 'jail', name: 'Деморган', re: /деморган|посадил\s+в\s+тюрьм/i },
+    { k: 'warn', name: 'Предупреждение', re: /предупрежд|варн/i },
+    { k: 'kick', name: 'Кик', re: /кикнул/i },
     { k: 'unfreeze', name: 'Разморозка игрока', re: /разморозил/i },
     { k: 'freeze', name: 'Заморозил игрока', re: /заморозил/i },
     { k: 'respawnall', name: 'Респавн всего транспорта', re: /(?:респавн|зареспавнил|заспавнил)\S*\s+(?:весь|всего|всех|все)\s/i },
@@ -3183,10 +3189,12 @@ const DASH_TYPES = [
     { k: 'spec', name: 'Слежка', re: /начал\s+следить/i },
     { k: 'removeap', name: 'Снятие с АП', re: /снял\S*\s+(?:\S+\s+){0,2}(?:с\s+)?(?:должности\s+)?(?:агент|ап)(?![а-яё])|снят\S*\s+с\s+ап(?![а-яё])/i },
     { k: 'tp', name: 'Телепорт к игроку/к себе', re: /телепортировал(?:ся)?\s+к\s+(?!себе\s+авто)/i },
-    { k: 'setint', name: 'Установка интерьера, скина, здоровья', re: /интерьер|скин|здоровь/i }
+    { k: 'setint', name: 'Установка интерьера, скина, здоровья', re: /интерьер|скин|здоровь/i },
+    // любое другое админ-наказание тоже считается
+    { k: 'pun', name: 'Другие наказания', re: { test: t => !!punType(t) } }
 ];
 // «Работа с жалобами» — из «Жалоб/Вопросов»: взял, закрыл, мут репорта, PM; ответ в репорте не в счёт
-const DASH_REP = /тип:\s*в\s+работе|закрыл\s+обращение|выдача\s+мута\s+репорта|^PM\s+для/i;
+const COUNT_REP = /тип:\s*в\s+работе|закрыл\s+обращение|выдача\s+мута\s+репорта|^PM\s+для/i;
 const AdminView = {
     // номера категорий, вписанные вручную: { act: '70', … }
     ids() {
@@ -3374,7 +3382,7 @@ const AdminView = {
             const ids0 = new Set();
             let ready = cats0.filter(c => c.id && !ids0.has(c.id) && ids0.add(c.id));
             // категории, отмеченные вручную в «Что считать» (любые с сайта) — вместо набора по умолчанию
-            // считается по списку дашбордов — выбор категорий больше не нужен
+            // считается по списку видов — выбор категорий больше не нужен
             const cats = cats0;
             if (!ready.length) throw new Error('не найдены номера категорий — впиши их в «Что считать»');
             // конец периода — не позже «сейчас»: новые записи во время листания не сдвигают страницы
@@ -3554,21 +3562,21 @@ const AdminView = {
         const kOfId = new Map(list.filter(c => c.id).map(c => [String(c.id), c.k]));
         const catK = r => kOfId.get(String(r.category_id)) || '';
         // вид действия есть только у записей не из чатов
-        // вид по списку дашбордов: админ-чат — по категории, жалобы — по типу записи, остальное — по тексту действия
-        const dashK = r => {
+        // вид действия: админ-чат — по категории, жалобы — по типу записи, остальное — по тексту действия
+        const cntK = r => {
             const ck = catK(r),
                 t = String(r.transaction_desc || '');
             if (/chat/.test(ck)) return 'chat';
-            if (ck === 'rep' || /жалоб|вопрос/i.test(String(catName(r) || ''))) return DASH_REP.test(t) ? 'reports' : '';
-            const hit = DASH_TYPES.find(x => x.re && x.re.test(t));
+            if (ck === 'rep' || /жалоб|вопрос/i.test(String(catName(r) || ''))) return COUNT_REP.test(t) ? 'reports' : '';
+            const hit = COUNT_TYPES.find(x => x.re && x.re.test(t));
             return hit ? hit.k : '';
         };
-        d.own.forEach(r => (r._dash = dashK(r)));
-        const typeK = r => r._dash || 'other';
-        const typeOk = r => !!r._dash && !off.types.has(r._dash);
+        d.own.forEach(r => (r._cnt = cntK(r)));
+        const typeK = r => r._cnt || 'other';
+        const typeOk = r => !!r._cnt && !off.types.has(r._cnt);
         const own = d.own.filter(typeOk);
-        const notDash = d.own.filter(r => !r._dash);
-        const cut = d.own.filter(r => r._dash && off.types.has(r._dash)).length;
+        const notCnt = d.own.filter(r => !r._cnt);
+        const cut = d.own.filter(r => r._cnt && off.types.has(r._cnt)).length;
         // контроль периода: записи, время которых не попало в выбранные сутки (МСК)
         const p0 = this.dayStart(a),
             p1 = this.dayStart(b) + 864e5;
@@ -3637,8 +3645,8 @@ const AdminView = {
           <div class="seg vdl-tabs" data-g="atab"><button data-v="cat">${icon('spark', 13)}Виды</button><button data-v="day">${icon('download', 13)}По дням</button><button data-v="who">${icon('shield', 13)}Игроки</button><button data-v="list">${icon('eye', 13)}Журнал</button></div>
           <div data-at="cat">
             ${(() => {
-                // как в дашбордах: только виды из списка; нажатием вид можно не считать
-                const per = DASH_TYPES.map(t => ({ k: t.k, name: t.name, n: d.own.filter(r => r._dash === t.k).length })).map(x => Object.assign(x, { off: off.types.has(x.k) }));
+                // только виды из списка; нажатием вид можно не считать
+                const per = COUNT_TYPES.map(t => ({ k: t.k, name: t.name, n: d.own.filter(r => r._cnt === t.k).length })).map(x => Object.assign(x, { off: off.types.has(x.k) }));
                 const rows = per.filter(x => x.n || x.off);
                 const mx = Math.max(1, ...rows.filter(x => !x.off).map(x => x.n));
                 const auth = d.own
@@ -3647,7 +3655,7 @@ const AdminView = {
                 const role = auth ? String(auth.transaction_desc).replace(/^.*авторизовался\s+как\s*/i, '').trim() : '';
                 // что не входит в список: сгруппировано по началу текста — видно, если формулировка сайта не распознана
                 const groups = new Map();
-                notDash.forEach(r => {
+                notCnt.forEach(r => {
                     const k = String(r.transaction_desc || '').replace(/[A-Za-z0-9_]+\[acc[^\]]*\]|\b[A-Z][a-z]+_[A-Za-z0-9_]+|\d+/g, '…').split(/\s+/).slice(0, 4).join(' ');
                     const g = groups.get(k) || { k, n: 0, ex: r.transaction_desc };
                     g.n++;
@@ -3660,7 +3668,7 @@ const AdminView = {
                         : '<div class="vdl-row"><div class="main sub">Админ-действий за период нет</div></div>'
                 }</div></div>${
                     ng.length
-                        ? `<details class="sec vdl-nodash"><summary><h4 style="display:inline">Не входит в список дашбордов · ${notDash.length}</h4></summary><div class="card">${ng
+                        ? `<details class="sec vdl-nocount"><summary><h4 style="display:inline">Не считается · ${notCnt.length}</h4></summary><div class="card">${ng
                               .slice(0, 40)
                               .map(g => `<div class="vdl-bar muted" title="${U.esc(String(g.ex || ''))}"><span class="nm">${U.esc(g.k)}</span><span class="tr"></span><span class="n">${g.n}</span></div>`)
                               .join('')}</div></details>`
