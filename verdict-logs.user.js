@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.82
+// @version      1.2.83
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.82
+// @version      1.2.83
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.82';
+const VERSION = '1.2.83';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -1749,6 +1749,15 @@ function sessionsOf(rows) {
     return out.reverse();
 }
 
+// кнопка запуска на время поиска становится красной «Прервать»
+function runBtn(scrim, run, label) {
+    const b = scrim && scrim.querySelector('[data-a="go"]');
+    if (!b) return;
+    b.dataset.label = b.dataset.label || label || b.textContent.trim();
+    b.dataset.run = run ? '1' : '';
+    b.classList.toggle('danger', !!run);
+    b.innerHTML = run ? `${icon('x', 14)}Прервать` : `${icon('search', 14)}${U.esc(b.dataset.label)}`;
+}
 const Panel = {
     // stack — поверх текущего окна (Админ-действия, Боты): закрыл — вернулся к нему
     open(mode, value = '', opts = {}) {
@@ -1836,7 +1845,14 @@ const Panel = {
         setMode(mode || 'nick');
         setDays(this.days);
         q.value = value;
-        const go = () => {
+        const go = e => {
+            // «Прервать»: проверка останавливается на следующей странице
+            if (e && e.currentTarget && e.currentTarget.dataset && e.currentTarget.dataset.run && this.busy) {
+                this._gen = (this._gen || 0) + 1;
+                runBtn(this.scrim, false, 'Проверить');
+                if (this.scrim) this.scrim.querySelector('.vdl-prog').textContent = '';
+                return toast('Проверка прервана', 'info');
+            }
             const v = q.value.trim();
             if (!v) return q.focus();
             if (this.mode === 'nick') this.byNick(v);
@@ -1885,6 +1901,7 @@ const Panel = {
         if (!box) this._gen = (this._gen || 0) + 1;
         this.busy = true;
         this._runGen = this._gen;
+        if (!box) runBtn(this.scrim, true, 'Проверить');
         // новая проверка — прежний отчёт убираем сразу, чтобы по нему не кликали, пока грузится новый
         if (!box) this.out('');
         const p = (async () => {
@@ -1902,7 +1919,10 @@ const Panel = {
                 } else this.out(`<div class="card" style="padding:14px">${msg}</div>`);
                 return false;
             } finally {
-                if (this._running === p) this.busy = false;
+                if (this._running === p) {
+                    this.busy = false;
+                    runBtn(this.scrim, false, 'Проверить');
+                }
             }
         })();
         this._running = p;
@@ -3325,7 +3345,14 @@ const AdminView = {
                 if (q.value.trim()) go();
             };
         });
-        const go = () => {
+        const go = e => {
+            if (e && e.currentTarget && e.currentTarget.dataset && e.currentTarget.dataset.run && this.busy) {
+                this._gen = (this._gen || 0) + 1;
+                this.busy = false;
+                runBtn(this.scrim, false, 'Посчитать');
+                this.scrim.querySelector('.vdl-prog').textContent = '';
+                return toast('Подсчёт прерван', 'info');
+            }
             const nk = q.value.trim();
             if (!/^[A-Za-z0-9]+_[A-Za-z0-9]+$/.test(nk)) return this.msg('Впиши ник администратора: Имя_Фамилия');
             if (!from.value || !to.value) return this.msg('Выбери даты');
@@ -3371,6 +3398,7 @@ const AdminView = {
         if (this.busy && this._busyGen === this._gen) return toast('Подожди, подсчёт ещё идёт', 'info');
         this.busy = true;
         const gen = (this._busyGen = this._gen);
+        runBtn(this.scrim, true, 'Посчитать');
         const alive = () => gen === this._gen;
         const out = this.scrim.querySelector('.vdl-out');
         out.innerHTML = '';
@@ -3464,7 +3492,10 @@ const AdminView = {
             this.prog('', gen);
             this.msg('Не получилось: ' + e.message);
         } finally {
-            if (this._busyGen === gen) this.busy = false;
+            if (this._busyGen === gen) {
+                this.busy = false;
+                runBtn(this.scrim, false, 'Посчитать');
+            }
         }
     },
 
@@ -4268,7 +4299,14 @@ const CompareView = {
         scrim.querySelectorAll('.seg').forEach(g =>
             g.querySelectorAll('button').forEach(b => (b.onclick = () => g.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b))))
         );
-        const go = () => {
+        const go = e => {
+            if (e && e.currentTarget && e.currentTarget.dataset && e.currentTarget.dataset.run && this.busy) {
+                this._gen = (this._gen || 0) + 1;
+                this.busy = false;
+                runBtn(scrim, false, 'Сравнить');
+                scrim.querySelector('.vdl-prog').textContent = '';
+                return toast('Сравнение прервано', 'info');
+            }
             const val = g => (scrim.querySelector(`[data-g="${g}"] .on`) || {}).dataset;
             const st = { ma: val('ma').v, mb: val('mb').v, qa: scrim.querySelector('[data-a="qa"]').value.trim(), qb: scrim.querySelector('[data-a="qb"]').value.trim(), days: +val('days').v };
             if (!st.qa || !st.qb) return toast('Впиши обоих', 'err');
@@ -4415,6 +4453,7 @@ const CompareView = {
         if (this.busy && this._busyGen === this._gen) return toast('Подожди, сравнение ещё идёт', 'info');
         this.busy = true;
         const gen = (this._busyGen = this._gen);
+        runBtn(this.scrim, true, 'Сравнить');
         const alive = () => gen === this._gen;
         const out = this.scrim.querySelector('.vdl-out');
         out.innerHTML = '';
@@ -4488,7 +4527,10 @@ const CompareView = {
             this.prog('', gen);
             out.innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(e.message)}</div>`;
         } finally {
-            if (this._busyGen === gen) this.busy = false;
+            if (this._busyGen === gen) {
+                this.busy = false;
+                runBtn(this.scrim, false, 'Сравнить');
+            }
         }
     },
     render(out, d) {
@@ -4779,11 +4821,7 @@ const BotView = {
     },
     // «Искать» ↔ «Прервать» на той же кнопке
     goBtn(run) {
-        const b = this.scrim && this.scrim.querySelector('[data-a="go"]');
-        if (!b) return;
-        b.dataset.run = run ? '1' : '';
-        b.classList.toggle('danger', !!run);
-        b.innerHTML = run ? `${icon('x', 14)}Прервать` : `${icon('search', 14)}Искать`;
+        runBtn(this.scrim, run, 'Искать');
     },
     stop() {
         this._gen++;
