@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.83
+// @version      1.2.84
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.83
+// @version      1.2.84
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.83';
+const VERSION = '1.2.84';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -4829,376 +4829,414 @@ const BotView = {
         this.goBtn(false);
         if (this._log) this._log.push('— прервано —');
         if (this.scrim) this.scrim.querySelector('.vdl-prog').textContent = '';
+        // что уже загружено — показываем; листание продолжит с того же места
+        const S = this._scan;
+        if (S && S.rows.length) {
+            S.loading = false;
+            S.again = false;
+            this.analyze(S);
+            this.show(S, true);
+        }
         toast('Поиск прерван', 'info');
     },
+    // поиск порциями: сначала столько, чтобы хватило на 3 страницы списка; дальше — по мере листания
     async search([label, get]) {
         if (this.busy && this._busyGen === this._gen) return toast('Подожди, поиск ещё идёт', 'info');
-        this.busy = true;
-        const gen = (this._busyGen = this._gen);
-        const alive = () => gen === this._gen;
-        let capped = false;
         const out = this.scrim.querySelector('.vdl-out');
         out.innerHTML = '';
+        const fail = m => (out.innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(m)}</div>`);
         const c = Bots.cfg();
         Bots.reset();
         const list = Bots.phrases(c);
+        if (!list.length) return fail('список фраз пуст — добавь их в «Что ловить»');
+        const chats = Bots.chats(c);
+        if (!chats.length && Array.isArray(c.chats) && Bots.allChats().length) return fail('не выбран ни один чат — отметь их в «Что ловить»');
+        if (!chats.length) toast('Категории чатов ещё не известны — ищу во всех записях', 'info');
+        const [t0, t1] = get();
+        const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
         const started = performance.now();
-        const self = this;
         const L = (this._log = Object.assign([], { t0: started, last: started }));
         L.push(`Поиск ботов: ${label} · фраз ${list.length} · похожие написания: ${c.fuzzy ? 'да' : 'нет'} · уровни: ${c.levels ? 'да' : 'нет'} · заблокированные: ${c.hideBanned ? 'да' : 'нет'}`);
+        // запросы к сайту — «курсоры»: продолжаются с того места, где остановились
+        // фраза, в которой целиком есть другая фраза списка, ничего нового поиском не даст;
+        // «похожие написания» читают чаты целиком — тогда поиск по фразам не нужен
+        const lowQ = p => p.replace(/^@/, '').toLowerCase();
+        const cursors = [];
+        if (c.fuzzy) chats.forEach(ch => cursors.push({ params: { category_id__exact: ch.id, ...range }, cat: ch.id, name: ch.name, next: 0, done: false }));
+        else
+            list
+                .filter(p => !list.some(q => q !== p && lowQ(q).length < lowQ(p).length && lowQ(p).includes(lowQ(q))))
+                // чатов много — одним запросом пошире (лишнее отбросит фильтр чатов); «@ник» ищем без @
+                .forEach(p =>
+                    (chats.length && chats.length <= 3 ? chats : [null]).forEach(ch =>
+                        cursors.push({ params: { transaction_desc__ilike: `%${p.replace(/^@/, '')}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range }, cat: ch && ch.id, name: `«${p}»${ch ? ' · ' + ch.name : ''}`, next: 0, done: false })
+                    )
+                );
+        const S = (this._scan = {
+            label,
+            c,
+            list,
+            range,
+            cursors,
+            wanted: new Set(list.filter(p => /^@[a-z0-9_]{3,}$/i.test(p)).map(p => p.toLowerCase())),
+            chatIds: new Set(chats.map(x => String(x.id))),
+            rows: [],
+            seen: new Set(),
+            order: new Map(),
+            seq: 0,
+            banRows: null,
+            probed: new Map(),
+            spent: 0,
+            log: L,
+            view: { page: 0, hideBan: false, showWeak: false }
+        });
+        await this.pump(S, true);
+    },
+    // записи страницы → в найденные (только чаты из списка, без повторов, только с фразами)
+    take(S, arr, cat) {
+        arr.forEach(x => {
+            if (x.category_id == null && cat) x = Object.assign({}, x, { category_id: cat });
+            if (S.chatIds.size && x.category_id != null && !S.chatIds.has(String(x.category_id))) return;
+            const k = `${x.time}|${x.player_name}|${x.transaction_desc}`;
+            if (S.seen.has(k)) return;
+            S.seen.add(k);
+            const hit = Bots.match(x.transaction_desc, S.list);
+            // телеграмы — только из списка «Что ловить» и только через @; «@Gad_Om» tgHandles принимает за ник — берём и совпадения из списка
+            const tg = [...new Set([...tgHandles(x.transaction_desc, true), ...hit.map(p => p.toLowerCase())])].filter(h => S.wanted.has(h));
+            if (hit.length || tg.length) S.rows.push(Object.assign({ _hit: hit, _tg: tg, _tgAll: tgHandles(x.transaction_desc) }, x));
+        });
+    },
+    // аккаунтов в списке при текущих галочках (как фильтрует render)
+    visible(S) {
+        return S.arr ? S.arr.filter(g => (!S.view.hideBan || !g.banned) && (S.view.showWeak || !g.weak)) : [];
+    },
+    allDone(S) {
+        return S.cursors.every(x => x.done);
+    },
+    // одна порция: записи → разбор → блокировки → уровни и проверка по нику у показанной страницы
+    async pump(S, first) {
+        if (S.loading) return void (S.again = true);
+        const gen = this._gen;
+        const alive = () => this._scan === S && this._gen === gen;
+        S.loading = true;
+        this.busy = true;
+        this._busyGen = gen;
         this.goBtn(true);
-        // состояние просмотра (страница, галочки) переживает догрузку
-        let view = null;
+        const t = performance.now();
         try {
-            if (!list.length) throw new Error('список фраз пуст — добавь их в «Что ловить»');
-            const [t0, t1] = get();
-            const range = { time__gte: new Date(t0).toISOString(), time__lte: new Date(t1).toISOString() };
-            const seen = new Set(),
-                rows = [];
-            const wanted = new Set(list.filter(p => /^@[a-z0-9_]{3,}$/i.test(p)).map(p => p.toLowerCase()));
-            const chats = Bots.chats(c);
-            const chatIds = new Set(chats.map(x => String(x.id)));
-            if (!chats.length && Array.isArray(c.chats) && Bots.allChats().length) throw new Error('не выбран ни один чат — отметь их в «Что ловить»');
-            if (!chats.length) toast('Категории чатов ещё не известны — ищу во всех записях', 'info');
-            const take = (arr, cat) =>
-                arr.forEach(x => {
-                    if (x.category_id == null && cat) x = Object.assign({}, x, { category_id: cat });
-                    if (chatIds.size && x.category_id != null && !chatIds.has(String(x.category_id))) return;
-                    const k = `${x.time}|${x.player_name}|${x.transaction_desc}`;
-                    if (seen.has(k)) return;
-                    seen.add(k);
-                    const hit = Bots.match(x.transaction_desc, list);
-                    // телеграмы — только из списка «Что ловить» и только через @ (ссылки t.me не считаем)
-                    // «@Gad_Om» с большими буквами tgHandles принимает за ник игрока — берём и совпадения из списка
-                    const tg = [...new Set([...tgHandles(x.transaction_desc, true), ...hit.map(p => p.toLowerCase())])].filter(h => wanted.has(h));
-                    if (hit.length || tg.length) rows.push(Object.assign({ _hit: hit, _tg: tg, _tgAll: tgHandles(x.transaction_desc) }, x));
-                });
-            // первые найденные показываем сразу, остальное догружается в фоне (перерисовка не чаще раза в 3 с)
-            let shownAt = 0,
-                shownN = 0;
-            const partial = () => {
-                if (!rows.length || rows.length === shownN || performance.now() - shownAt < 3000) return;
-                shownAt = performance.now();
-                shownN = rows.length;
-                analyze(false).catch(() => {});
-            };
-            // 1) точные фразы — поиском сайта
-            // по каждому выбранному чату: иначе частые слова («бесплатно») забивают лимит системными записями
-            // фраза, в которой целиком есть другая фраза списка, ничего нового поиском не даст — её не ищем отдельно
-            // (её совпадения и так придут с короткой и проверятся по всем фразам);
-            // «похожие написания» читают чаты целиком — тогда поиск по фразам не нужен вовсе
-            const lowQ = p => p.replace(/^@/, '').toLowerCase();
-            const queries = c.fuzzy ? [] : list.filter(p => !list.some(q => q !== p && lowQ(q).length < lowQ(p).length && lowQ(p).includes(lowQ(q))));
-            for (const [i, p] of queries.entries()) {
-                // чатов много — одним запросом пошире (лишнее отбросит фильтр чатов)
-                for (const ch of chats.length && chats.length <= 3 ? chats : [null]) {
-                    // «@ник» ищем без @ (сайт ищет и так), лишнее отсеет проверка на @
+            const need = (S.view.page + 3) * 25;
+            let budget = S.c.fuzzy ? 30 : 15;
+            // по кругу, по 2 страницы сайта с каждого запроса — чтобы первая порция была не из одной фразы
+            while (budget > 0 && !this.allDone(S) && this.visible(S).length < need) {
+                for (const cur of S.cursors) {
+                    if (cur.done || budget <= 0) continue;
                     const r = await Api.all(
-                        { transaction_desc__ilike: `%${p.replace(/^@/, '')}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range },
-                        500,
+                        cur.params,
+                        2,
                         (pg, n, d) => {
-                            take(d, ch && ch.id);
-                            this.prog(`«${p}» (${i + 1}/${queries.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}, найдено ${rows.length}…`, gen);
-                            partial();
+                            this.take(S, d, cur.cat);
+                            budget--;
+                            this.prog(`${cur.name}: записей ${cur.next + n}, найдено ${S.rows.length}…`, gen);
                         },
                         null,
-                        alive
+                        alive,
+                        cur.next
                     );
                     if (!alive()) return;
-                    capped = capped || r.capped;
+                    cur.next = r.next;
+                    cur.done = !r.capped;
                 }
+                this.analyze(S);
             }
-            // 2) похожие написания — читаем чаты целиком
-            if (c.fuzzy) {
-                for (const ch of chats) {
-                    const r = await Api.all(
-                        { category_id__exact: ch.id, ...range },
-                        500,
-                        (pg, n, d) => {
-                            take(d, ch.id);
-                            this.prog(`${ch.name}: страница ${pg}, записей ${n}, найдено ${rows.length}…`, gen);
-                            partial();
-                        },
-                        null,
-                        alive
-                    );
-                    if (!alive()) return;
-                    capped = capped || r.capped;
-                }
+            this.analyze(S);
+            this.show(S, true);
+            // кто уже заблокирован: записи о блокировках за период — один раз за поиск, дальше применяются ко всем догруженным
+            if ((S.c.hideBanned || S.forceBan) && S.banRows == null && S.arr.length) {
+                await this.banLoad(S, gen, alive);
+                if (!alive()) return;
+                this.analyze(S);
+                this.show(S);
             }
-            this.prog('Разбираю найденное…', gen);
-            await analyze(true);
+            await this.checkPage(S, gen, alive);
             if (!alive()) return;
-            Notify.done(this.scrim, 'Поиск ботов готов', `${label}: найдено ${rows.length}`);
-            // разбор найденного: final=false — промежуточный показ без проверки блокировок и уровней (уровни — из памяти)
-            // eslint-disable-next-line no-inner-declarations
-            async function analyze(final) {
-            // подозреваемые: по нику
-            const sus = new Map();
-            const idByNick = new Map();
-            const hasId = x => x.player_id != null && x.player_id !== '';
-            rows.forEach(x => hasId(x) && x.player_name && idByNick.set(String(x.player_name).trim().toLowerCase(), x.player_id));
-            const knownNicks = new Set(rows.map(x => String(x.player_name || '').trim().toLowerCase()).filter(Boolean));
-            for (let i = rows.length - 1; i >= 0; i--) {
-                const x = rows[i];
-                x._tg = (x._tg || []).filter(h => !knownNicks.has(h.slice(1)));
-                if (!x._hit.length && !x._tg.length) rows.splice(i, 1);
-            }
-            rows.forEach(x => {
-                const n = String(x.player_name || '').trim();
-                if (!n) return;
-                const low = n.toLowerCase();
-                const k = hasId(x) ? 'id' + x.player_id : idByNick.has(low) ? 'id' + idByNick.get(low) : 'n' + low;
-                const g = sus.get(k) || { nick: n, id: x.player_id, n: 0, hits: new Set(), tg: new Set(), tgAll: new Set(), texts: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
-                g.key = k;
-                (g.nicks = g.nicks || new Set()).add(n);
-                if (g.id == null && hasId(x)) g.id = x.player_id;
-                g.n++;
-                x._hit.forEach(h => g.hits.add(h));
-                (x._tgAll || []).forEach(h => !knownNicks.has(h.slice(1)) && g.tgAll.add(h));
-                // текст без цифр и знаков — одинаковая рассылка с разных аккаунтов
-                const norm = botNorm(String(x.transaction_desc || '')).replace(/\d+/g, '');
-                if (norm.length >= 12) g.texts.add(norm);
-                (x._tg || []).forEach(h => !knownNicks.has(h.slice(1)) && g.tg.add(h));
-                if (x.player_ip) g.ips.add(x.player_ip);
-                g.cats.add(catName(x));
-                const t = new Date(x.time).getTime() || 0;
-                if (t >= g.last) {
-                    g.last = t;
-                    g.sample = String(x.transaction_desc || '');
-                }
-                sus.set(k, g);
-            });
-            // сколько подозреваемых на каждом IP
-            const byIp = new Map();
-            sus.forEach((g, k) => g.ips.forEach(ip => byIp.set(ip, (byIp.get(ip) || new Set()).add(k))));
-            const nickOf = new Map([...sus].map(([k, g]) => [k, g.nick]));
-            sus.forEach(g => (g.acc = Math.max(1, ...[...g.ips].map(ip => byIp.get(ip).size))));
-            const byTg = new Map();
-            sus.forEach((g, k) => g.tg.forEach(h => byTg.set(h, (byTg.get(h) || new Set()).add(k))));
-            sus.forEach(g => (g.tgAcc = Math.max(0, ...[...g.tg].map(h => byTg.get(h).size))));
-            const arr = [...sus.values()].sort((x, y) => y.tgAcc - x.tgAcc || y.acc - x.acc || y.n - x.n);
-            // кто уже заблокирован — сразу при поиске (можно выключить) и отдельной кнопкой в результатах
-            let blkInfo = '';
-            if (final && c.hideBanned && arr.length) {
-                blkInfo = await self.checkBans(arr, range, gen, alive);
-                if (blkInfo == null) return;
-            }
-            // уровни: последний вход/выход с «Уровень: N» — сначала у тех, кто рекламирует @ник или пишет с общего IP
-            if (!final) {
-                // промежуточно: уровни только из памяти, без запросов
-                const lc = Bots._lvl;
-                if (lc) arr.forEach(g => {
-                    const v = lc.get(g.nick.toLowerCase());
-                    if (v && Date.now() - v.at < 3600e3) g.level = v.v;
-                });
-            } else if (c.levels) {
-                let fails = 0;
-                // уровень — только у тех, кто похож на бота (реклама @ника, общий IP, несколько фраз или сообщений):
-                // у случайного игрока с одним словом уровень ничего не решает, а каждый запрос — ещё ~1,3 с
-                const susp = g => g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3;
-                const top = arr
-                    .filter(g => !g.banned && susp(g))
-                    .concat(arr.filter(g => !g.banned && !susp(g)))
-                    .slice(0, 60);
-                Bots._lvl = Bots._lvl || new Map();
-                for (const [i, g] of top.entries()) {
-                    if (!alive()) return;
-                    // уже узнавали в этой вкладке за последний час — не спрашиваем снова
-                    const lc = Bots._lvl.get(g.nick.toLowerCase());
-                    if (lc && Date.now() - lc.at < 3600e3) {
-                        g.level = lc.v;
-                        continue;
-                    }
-                    self.prog(`Проверяю уровень аккаунтов: ${i + 1} из ${top.length}…`, gen);
-                    try {
-                        // свежие входы: при сортировке «сначала старые» первая страница — давние записи, поэтому окно короче
-                        const since = new Date(Date.now() - (Api.order === 'time' ? 2 : 30) * 864e5).toISOString();
-                        const r = await Api.page({ player_name__exact: g.nick, category_id__exact: 38, transaction_desc__ilike: '%ровень%', time__gte: since }, 0);
-                        if (gen !== self._gen) return;
-                        const m = r
-                            .slice()
-                            .sort((x, y) => new Date(y.time) - new Date(x.time))
-                            .map(x => String(x.transaction_desc || '').match(/ровень\D{0,3}(\d+)/i))
-                            .find(Boolean);
-                        g.level = m ? +m[1] : null;
-                        Bots._lvl.set(g.nick.toLowerCase(), { v: g.level, at: Date.now() });
-                        fails = 0;
-                    } catch (e) {
-                        g.level = null;
-                        // сайт не пускает или просит реже — дальше по списку не мучаем его
-                        if (/не пускает|реже/.test(e.message) || ++fails >= 3) {
-                            toast('Уровни проверены не у всех: ' + e.message, 'info');
-                            break;
-                        }
-                    }
-                }
-            }
-            if (final) self.prog('', gen);
-            // общие признаки рассылки: один @ник/t.me (даже не из списка) или один и тот же текст у 2+ аккаунтов
-            const byAnyTg = new Map(),
-                byText = new Map();
-            sus.forEach((g, k) => {
-                g.tgAll.forEach(h => byAnyTg.set(h, (byAnyTg.get(h) || new Set()).add(k)));
-                g.texts.forEach(t => byText.set(t, (byText.get(t) || new Set()).add(k)));
-            });
-            arr.forEach(g => {
-                g.sharedTg = [...g.tgAll].filter(h => byAnyTg.get(h).size >= 2).sort((a, b) => byAnyTg.get(b).size - byAnyTg.get(a).size)[0] || '';
-                g.sameText = Math.max(0, ...[...g.texts].map(t => byText.get(t).size));
-            });
-            arr.forEach(g => {
-                g.why = [];
-                const topH = [...g.tg].sort((a, b) => byTg.get(b).size - byTg.get(a).size)[0];
-                if (g.tgAcc >= 2) g.why.push(`${topH} рекламируют ${g.tgAcc} акк.`);
-                else if (topH) g.why.push(`реклама ${topH}`);
-                if (g.level != null && g.level <= c.level) g.why.push(`уровень ${g.level}`);
-                if (g.acc >= c.minAcc) g.why.push(`${g.acc} акк. с одного IP`);
-                if (g.n >= 3) g.why.push(`${g.n} сообщ.`);
-                if (g.sharedTg && !g.tg.has(g.sharedTg)) g.why.push(`${g.sharedTg} у ${byAnyTg.get(g.sharedTg).size} акк.`);
-                if (g.sameText >= 2) g.why.push(`одинаковый текст у ${g.sameText} акк.`);
-                // бот: рекламирует @ник / t.me, рассылка (общий @ник или одинаковый текст), много аккаунтов с одного IP или низкий уровень
-                g.bot = g.tg.size > 0 || !!g.sharedTg || g.sameText >= 2 || g.acc >= c.minAcc || (g.level != null && g.level <= c.level);
-                // слабое совпадение: одно слово вроде «тг» без @ника, ссылки и других признаков — обычный игрок
-                g.weak = !g.bot && !g.tg.size && g.hits.size <= 1 && g.n < 3;
-            });
-            // общий IP с уже найденным ботом — тоже бот (второй аккаунт того же человека)
-            const botIps = new Map();
-            arr.forEach(g => g.bot && g.ips.forEach(ip => botIps.set(ip, g.nick)));
-            arr.forEach(g => {
-                if (g.bot) return;
-                const ip = [...g.ips].find(x => botIps.has(x));
-                if (!ip) return;
-                g.bot = true;
-                g.weak = false;
-                g.why.push(`общий IP с ботом ${botIps.get(ip)}`);
-            });
-            arr.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n);
-            const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
-            // страница и галочки — как выбрал смотрящий, пока догружалось
-            const took = Math.round((performance.now() - started) / 1000);
-            const tookS = took >= 60 ? `${Math.floor(took / 60)} мин ${took % 60} с` : `${took} с`;
-            view = Object.assign({ page: 0, hideBan: false, showWeak: false }, view && { page: view.page, hideBan: view.hideBan, showWeak: view.showWeak }, {
-                label: final ? `${label} · поиск занял ${tookS}` : `${label} · загружено ${rows.length}, ищу дальше…`,
-                partial: !final,
-                log: L,
-                arr,
-                rows,
-                c,
-                ips: byIp,
-                nickOf,
-                bannedKeys,
-                byTg,
-                capped,
-                blkInfo,
-                range
-            });
-            if (final) L.push(`Готово: записей ${rows.length}, аккаунтов ${arr.length}, похожи на ботов ${arr.filter(g => g.bot).length} · всего ${tookS}`);
-            self.render(out, view);
-            }
+            this.analyze(S);
+            if (first) Notify.done(this.scrim, 'Поиск ботов готов', `${S.label}: найдено ${S.arr.length}`);
         } catch (e) {
-            if (gen !== this._gen) return;
-            this.prog('', gen);
-            L.push('Ошибка: ' + e.message);
-            out.innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(e.message)}</div>`;
+            if (!alive()) return;
+            S.log.push('Ошибка: ' + e.message);
+            if (S.arr && S.arr.length) toast('Не получилось: ' + e.message, 'err');
+            else this.scrim.querySelector('.vdl-out').innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(e.message)}</div>`;
+            S.failed = true;
         } finally {
+            S.loading = false;
+            S.spent += performance.now() - t;
             if (this._busyGen === gen) {
                 this.busy = false;
                 this.goBtn(false);
             }
-        }
-    },
-    // кто из найденных уже заблокирован (или разбанен): отметка g.banned; вернёт строку «где искал» или null, если поиск устарел
-    async checkBans(arr, range, gen, alive) {
-        let blkInfo = '';
-        arr.forEach(g => (g.banned = null));
-        // уже заблокированные: записи «Админ-блокировок» и «Админ-супердействий» с начала периода до сейчас,
-        // где ник подозреваемого стоит в тексте блокировки (разбан снимает отметку)
-        // где искать блокировки: «Админ-блокировки», «Супер наказания» и «Админ-действия» (там /ban, /block)
-        const blkOf = () => AdminView.resolve().filter(x => ['block', 'super', 'act'].includes(x.k) && x.id);
-        let blk = blkOf();
-        // номера категорий ещё не узнаны — без них заблокированных не отличить: сначала ищем их на сайте
-        if (arr.length && !blk.some(x => x.k === 'block') && !CatLearn._blkTried) {
-            CatLearn._blkTried = true;
-            this.prog('Ищу категории блокировок…', gen);
-            CatLearn._disc = null;
-            await CatLearn.discover().catch(() => {});
-            if (!alive()) return null;
-            blk = blkOf();
-        }
-        if (arr.length) {
-            const byNick = new Map();
-            arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
-            const catOf = id => blk.find(x => String(x.id) === String(id));
-            // «бан» отдельным словом (не «банк», «банда»): \b в JS видит только латиницу, поэтому границы — вручную
-            const BAN = /заблок|забан|блокир|(^|[^а-яё])бан(а|у|е|ом|ы|ил[аи]?)?(?![а-яё])|\bban(ned)?\b|\bblock(ed)?\b/i;
-            const UN = /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)|сня(т|ли)\s+(бан|блок)/i;
-            let seenRows = 0;
-            // запись блокировки/разбана: ники в тексте или в поле «игрок» получают отметку
-            const apply = (rows, only) =>
-                rows
-                    .slice()
-                    .sort((x, y) => new Date(x.time) - new Date(y.time))
-                    .forEach(x => {
-                        const cat = catOf(x.category_id);
-                        const txt = String(x.transaction_desc || '');
-                        const un = UN.test(txt);
-                        // «Админ-блокировки» — любая запись; остальное — только со словами бан/блок
-                        if (!un && !(cat && cat.k === 'block') && !BAN.test(txt)) return;
-                        seenRows++;
-                        const seen = new Set();
-                        // любые «слова» латиницей: у ботов ники часто без подчёркивания (Arcanum777), их тоже ищем в тексте блокировки
-                        const fromText = txt.match(/[A-Za-z0-9_]{3,49}/g) || [];
-                        // запись не из админских категорий (сообщение в чате «Bot_X забанят») — считаем, только если это запись самого бота
-                        const cands = cat ? [...fromText, String(x.player_name || '')] : [String(x.player_name || '')];
-                        cands.forEach(n => {
-                            const g = n && byNick.get(n.toLowerCase());
-                            if (!g || seen.has(g) || (only && g !== only)) return;
-                            seen.add(g);
-                            g.banned = un ? null : banInfo(x.time, txt);
-                        });
-                    });
-            const until = new Date().toISOString();
-            const fix = (r, cat) => r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x));
-            let capped = false;
-            for (const [i, cat] of blk.entries()) {
-                // в «Админ-действиях» много всего — берём только записи со словами бан/блок
-                const qs = cat.k === 'act' ? [{ transaction_desc__ilike: '%бан%' }, { transaction_desc__ilike: '%блок%' }, { transaction_desc__ilike: '%ban%' }] : [{}];
-                for (const f of qs) {
-                    const r = await Api.all({ category_id__exact: cat.id, ...f, time__gte: range.time__gte, time__lte: until }, cat.k === 'act' ? 8 : 15, (pg, n) => this.prog(`Кто уже заблокирован: ${cat.name} (${i + 1}/${blk.length}), страница ${pg}, записей ${n}…`, gen), null, alive);
-                    if (!alive()) return null;
-                    capped = capped || r.capped;
-                    apply(fix(r, cat));
+            if (alive()) {
+                this.prog('', gen);
+                if (!S.failed || (S.arr && S.arr.length)) this.show(S);
+                S.failed = false;
+                if (this.allDone(S)) S.log.push(`Готово: записей ${S.rows.length}, аккаунтов ${S.arr.length}, похожи на ботов ${S.arr.filter(g => g.bot).length}`);
+                if (S.again) {
+                    S.again = false;
+                    setTimeout(() => this._scan === S && this.pump(S), 0);
                 }
             }
-            // самых заметных, кого не нашли, проверяем по нику точечно:
-            // блокировок за период больше, чем пролистали, — в категориях блокировок; и во всех записях (вдруг другая категория)
-            const left = arr.filter(g => !g.banned).slice(0, capped ? 30 : 15);
-            const hard = blk.filter(x => x.k !== 'act');
+        }
+    },
+    // показанная страница: уровни (у тех, кто ещё не бот) и точечная проверка блокировок по нику (у ботов)
+    async checkPage(S, gen, alive) {
+        const PER = 25;
+        const page = this.visible(S).slice(S.view.page * PER, S.view.page * PER + PER);
+        if ((S.c.hideBanned || S.forceBan) && S.banRows) {
+            const left = page.filter(g => g.bot && !g.banned && !S.probed.has(g.key)).slice(0, 10);
+            const hard = (S.blk || []).filter(x => x.k !== 'act');
             for (const [i, g] of left.entries()) {
-                if (!alive()) return null;
+                if (!alive()) return;
                 this.prog(`Проверяю блокировки по нику: ${i + 1} из ${left.length}…`, gen);
+                const got = [];
                 try {
                     const qs = [];
-                    if (capped) hard.forEach(cat => qs.push([cat, { transaction_desc__ilike: `%${g.nick}%` }], [cat, { player_name__exact: g.nick }]));
+                    if (S.banCapped) hard.forEach(cat => qs.push([cat, { transaction_desc__ilike: `%${g.nick}%` }], [cat, { player_name__exact: g.nick }]));
                     qs.push([null, { transaction_desc__ilike: `%${g.nick}%` }]);
                     for (const [cat, f] of qs) {
+                        const r = await Api.page({ ...(cat ? { category_id__exact: cat.id } : {}), ...f, time__gte: S.range.time__gte }, 0);
+                        if (!alive()) return;
+                        got.push(...(cat ? r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x)) : r));
+                        S.probed.set(g.key, got);
+                        this.banApply(S, [g]);
                         if (g.banned) break;
-                        const r = await Api.page({ ...(cat ? { category_id__exact: cat.id } : {}), ...f, time__gte: range.time__gte }, 0);
-                        if (!alive()) return null;
-                        apply(cat ? fix(r, cat) : r, g);
                     }
                 } catch (e) {
                     break;
                 }
             }
-            // срок блокировки уже вышел — снова активен, не скрываем
-            arr.forEach(g => g.banned && g.banned.until && g.banned.until < Date.now() && (g.banned = null));
-            blkInfo = blk.length
-                ? `Блокировки искал в: ${blk.map(x => x.name).join(', ')} · записей о блокировках: ${seenRows}`
-                : 'Категории блокировок не найдены — проверены только записи по нику. Номера можно вписать в «Админ-действия» → «Что считать».';
-            this.prog('', gen);
         }
-        return blkInfo;
+        if (S.c.levels) {
+            const susp = g => g.tg.size || g.acc >= S.c.minAcc || g.hits.size > 1 || g.n >= 3;
+            const todo = page.filter(g => !g.banned && !g.bot).sort((x, y) => susp(y) - susp(x));
+            Bots._lvl = Bots._lvl || new Map();
+            let fails = 0;
+            for (const [i, g] of todo.entries()) {
+                if (!alive()) return;
+                const lc = Bots._lvl.get(g.nick.toLowerCase());
+                if (lc && Date.now() - lc.at < 3600e3) continue;
+                this.prog(`Проверяю уровень аккаунтов: ${i + 1} из ${todo.length}…`, gen);
+                try {
+                    // свежие входы: при сортировке «сначала старые» первая страница — давние записи, поэтому окно короче
+                    const since = new Date(Date.now() - (Api.order === 'time' ? 2 : 30) * 864e5).toISOString();
+                    const r = await Api.page({ player_name__exact: g.nick, category_id__exact: 38, transaction_desc__ilike: '%ровень%', time__gte: since }, 0);
+                    if (!alive()) return;
+                    const m = r
+                        .slice()
+                        .sort((x, y) => new Date(y.time) - new Date(x.time))
+                        .map(x => String(x.transaction_desc || '').match(/ровень\D{0,3}(\d+)/i))
+                        .find(Boolean);
+                    Bots._lvl.set(g.nick.toLowerCase(), { v: m ? +m[1] : null, at: Date.now() });
+                    fails = 0;
+                } catch (e) {
+                    // сайт не пускает или просит реже — дальше по списку не мучаем его
+                    if (/не пускает|реже/.test(e.message) || ++fails >= 3) {
+                        toast('Уровни проверены не у всех: ' + e.message, 'info');
+                        break;
+                    }
+                }
+            }
+        }
+    },
+    // разбор найденного (без запросов): аккаунты, признаки, отметки блокировок, уровни из памяти
+    analyze(S) {
+        const { rows, c } = S;
+        const sus = new Map();
+        const idByNick = new Map();
+        const hasId = x => x.player_id != null && x.player_id !== '';
+        rows.forEach(x => hasId(x) && x.player_name && idByNick.set(String(x.player_name).trim().toLowerCase(), x.player_id));
+        const knownNicks = new Set(rows.map(x => String(x.player_name || '').trim().toLowerCase()).filter(Boolean));
+        for (let i = rows.length - 1; i >= 0; i--) {
+            const x = rows[i];
+            x._tg = (x._tg || []).filter(h => !knownNicks.has(h.slice(1)));
+            if (!x._hit.length && !x._tg.length) rows.splice(i, 1);
+        }
+        rows.forEach(x => {
+            const n = String(x.player_name || '').trim();
+            if (!n) return;
+            const low = n.toLowerCase();
+            const k = hasId(x) ? 'id' + x.player_id : idByNick.has(low) ? 'id' + idByNick.get(low) : 'n' + low;
+            const g = sus.get(k) || { nick: n, id: x.player_id, n: 0, hits: new Set(), tg: new Set(), tgAll: new Set(), texts: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
+            g.key = k;
+            (g.nicks = g.nicks || new Set()).add(n);
+            if (g.id == null && hasId(x)) g.id = x.player_id;
+            g.n++;
+            x._hit.forEach(h => g.hits.add(h));
+            (x._tgAll || []).forEach(h => !knownNicks.has(h.slice(1)) && g.tgAll.add(h));
+            // текст без цифр и знаков — одинаковая рассылка с разных аккаунтов
+            const norm = botNorm(String(x.transaction_desc || '')).replace(/\d+/g, '');
+            if (norm.length >= 12) g.texts.add(norm);
+            (x._tg || []).forEach(h => !knownNicks.has(h.slice(1)) && g.tg.add(h));
+            if (x.player_ip) g.ips.add(x.player_ip);
+            g.cats.add(catName(x));
+            const t = new Date(x.time).getTime() || 0;
+            if (t >= g.last) {
+                g.last = t;
+                g.sample = String(x.transaction_desc || '');
+            }
+            sus.set(k, g);
+        });
+        // сколько подозреваемых на каждом IP
+        const byIp = new Map();
+        sus.forEach((g, k) => g.ips.forEach(ip => byIp.set(ip, (byIp.get(ip) || new Set()).add(k))));
+        sus.forEach(g => (g.acc = Math.max(1, ...[...g.ips].map(ip => byIp.get(ip).size))));
+        const byTg = new Map();
+        sus.forEach((g, k) => g.tg.forEach(h => byTg.set(h, (byTg.get(h) || new Set()).add(k))));
+        sus.forEach(g => (g.tgAcc = Math.max(0, ...[...g.tg].map(h => byTg.get(h).size))));
+        // общие признаки рассылки: один @ник/t.me (даже не из списка) или один и тот же текст у 2+ аккаунтов
+        const byAnyTg = new Map(),
+            byText = new Map();
+        sus.forEach((g, k) => {
+            g.tgAll.forEach(h => byAnyTg.set(h, (byAnyTg.get(h) || new Set()).add(k)));
+            g.texts.forEach(t => byText.set(t, (byText.get(t) || new Set()).add(k)));
+        });
+        const arr = [...sus.values()];
+        const lvl = Bots._lvl || new Map();
+        arr.forEach(g => {
+            const lc = lvl.get(g.nick.toLowerCase());
+            g.level = lc && Date.now() - lc.at < 3600e3 ? lc.v : null;
+            g.sharedTg = [...g.tgAll].filter(h => byAnyTg.get(h).size >= 2).sort((a, b) => byAnyTg.get(b).size - byAnyTg.get(a).size)[0] || '';
+            g.sameText = Math.max(0, ...[...g.texts].map(t => byText.get(t).size));
+            g.why = [];
+            const topH = [...g.tg].sort((a, b) => byTg.get(b).size - byTg.get(a).size)[0];
+            if (g.tgAcc >= 2) g.why.push(`${topH} рекламируют ${g.tgAcc} акк.`);
+            else if (topH) g.why.push(`реклама ${topH}`);
+            if (g.level != null && g.level <= c.level) g.why.push(`уровень ${g.level}`);
+            if (g.acc >= c.minAcc) g.why.push(`${g.acc} акк. с одного IP`);
+            if (g.n >= 3) g.why.push(`${g.n} сообщ.`);
+            if (g.sharedTg && !g.tg.has(g.sharedTg)) g.why.push(`${g.sharedTg} у ${byAnyTg.get(g.sharedTg).size} акк.`);
+            if (g.sameText >= 2) g.why.push(`одинаковый текст у ${g.sameText} акк.`);
+            // бот: рекламирует @ник, рассылка (общий @ник или одинаковый текст), много аккаунтов с одного IP или низкий уровень
+            g.bot = g.tg.size > 0 || !!g.sharedTg || g.sameText >= 2 || g.acc >= c.minAcc || (g.level != null && g.level <= c.level);
+            // слабое совпадение: одно слово вроде «тг» без @ника, ссылки и других признаков — обычный игрок
+            g.weak = !g.bot && !g.tg.size && g.hits.size <= 1 && g.n < 3;
+        });
+        // общий IP с уже найденным ботом — тоже бот (второй аккаунт того же человека)
+        const botIps = new Map();
+        arr.forEach(g => g.bot && g.ips.forEach(ip => botIps.set(ip, g.nick)));
+        arr.forEach(g => {
+            if (g.bot) return;
+            const ip = [...g.ips].find(x => botIps.has(x));
+            if (!ip) return;
+            g.bot = true;
+            g.weak = false;
+            g.why.push(`общий IP с ботом ${botIps.get(ip)}`);
+        });
+        this.banApply(S, arr);
+        S.arr = arr;
+        S.sus = sus;
+        S.byIp = byIp;
+        S.byTg = byTg;
+    },
+    // перерисовать список; порядок не прыгает: новые аккаунты встают в конец, боты сверху — внутри своей порции
+    show(S, fresh) {
+        if (!this.scrim || this._scan !== S || !S.arr) return;
+        if (fresh) {
+            const add = S.arr.filter(g => !S.order.has(g.key));
+            add.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n).forEach(g => S.order.set(g.key, S.seq++));
+        }
+        S.arr.sort((x, y) => (S.order.has(x.key) ? S.order.get(x.key) : 1e9) - (S.order.has(y.key) ? S.order.get(y.key) : 1e9));
+        const done = this.allDone(S);
+        const sec = Math.round(S.spent / 1000);
+        const took = sec >= 60 ? `${Math.floor(sec / 60)} мин ${sec % 60} с` : `${sec} с`;
+        Object.assign(S.view, {
+            scan: S,
+            label: done ? `${S.label} · поиск занял ${took}` : `${S.label} · загружено сообщений ${S.rows.length}`,
+            more: !done,
+            banReady: !(S.c.hideBanned || S.forceBan) || !!S.banRows,
+            log: S.log,
+            arr: S.arr,
+            rows: S.rows,
+            c: S.c,
+            ips: S.byIp,
+            nickOf: new Map([...S.sus].map(([k, g]) => [k, g.nick])),
+            bannedKeys: new Set([...S.sus].filter(([, g]) => g.banned).map(([k]) => k)),
+            byTg: S.byTg,
+            capped: false,
+            blkInfo: S.blkInfo || '',
+            range: S.range
+        });
+        this.render(this.scrim.querySelector('.vdl-out'), S.view);
+    },
+    // записи о блокировках за период (с начала периода до сейчас) — один раз за поиск
+    async banLoad(S, gen, alive) {
+        // где искать: «Админ-блокировки», «Супер наказания» и «Админ-действия» (там /ban, /block)
+        const blkOf = () => AdminView.resolve().filter(x => ['block', 'super', 'act'].includes(x.k) && x.id);
+        let blk = blkOf();
+        // номера категорий ещё не узнаны — без них заблокированных не отличить: сначала ищем их на сайте
+        if (!blk.some(x => x.k === 'block') && !CatLearn._blkTried) {
+            CatLearn._blkTried = true;
+            this.prog('Ищу категории блокировок…', gen);
+            CatLearn._disc = null;
+            await CatLearn.discover().catch(() => {});
+            if (!alive()) return;
+            blk = blkOf();
+        }
+        const until = new Date().toISOString();
+        const rows = [];
+        let capped = false;
+        for (const [i, cat] of blk.entries()) {
+            // в «Админ-действиях» много всего — берём только записи со словами бан/блок
+            const qs = cat.k === 'act' ? [{ transaction_desc__ilike: '%бан%' }, { transaction_desc__ilike: '%блок%' }, { transaction_desc__ilike: '%ban%' }] : [{}];
+            for (const f of qs) {
+                const r = await Api.all({ category_id__exact: cat.id, ...f, time__gte: S.range.time__gte, time__lte: until }, cat.k === 'act' ? 8 : 15, (pg, n) => this.prog(`Кто уже заблокирован: ${cat.name} (${i + 1}/${blk.length}), страница ${pg}, записей ${n}…`, gen), null, alive);
+                if (!alive()) return;
+                capped = capped || r.capped;
+                rows.push(...r.map(x => (x.category_id == null ? Object.assign({}, x, { category_id: cat.id }) : x)));
+            }
+        }
+        S.blk = blk;
+        S.banCapped = capped;
+        S.banRows = rows.sort((x, y) => new Date(x.time) - new Date(y.time));
+        S.blkInfo = blk.length
+            ? `Блокировки искал в: ${blk.map(x => x.name).join(', ')}`
+            : 'Категории блокировок не найдены — проверены только записи по нику. Номера можно вписать в «Админ-действия» → «Что считать».';
+    },
+    // отметки «заблокирован» по загруженным записям (без запросов); разбан снимает отметку
+    banApply(S, arr) {
+        arr.forEach(g => (g.banned = null));
+        if (!S.banRows) return;
+        const blk = S.blk || [];
+        const byNick = new Map();
+        arr.forEach(g => [...(g.nicks || [g.nick])].forEach(n => byNick.set(n.toLowerCase(), g)));
+        const catOf = id => blk.find(x => String(x.id) === String(id));
+        // «бан» отдельным словом (не «банк», «банда»): \b в JS видит только латиницу, поэтому границы — вручную
+        const BAN = /заблок|забан|блокир|(^|[^а-яё])бан(а|у|е|ом|ы|ил[аи]?)?(?![а-яё])|\bban(ned)?\b|\bblock(ed)?\b/i;
+        const UN = /разбан|разблок|unban|unblock|снял[аи]?\s+(бан|блок)|сня(т|ли)\s+(бан|блок)/i;
+        const apply = (rows, only) =>
+            rows.forEach(x => {
+                const cat = catOf(x.category_id);
+                const txt = String(x.transaction_desc || '');
+                const un = UN.test(txt);
+                // «Админ-блокировки» — любая запись; остальное — только со словами бан/блок
+                if (!un && !(cat && cat.k === 'block') && !BAN.test(txt)) return;
+                const seen = new Set();
+                // любые «слова» латиницей: у ботов ники часто без подчёркивания (Arcanum777), их тоже ищем в тексте блокировки
+                const fromText = txt.match(/[A-Za-z0-9_]{3,49}/g) || [];
+                // запись не из админских категорий (сообщение в чате «Bot_X забанят») — считаем, только если это запись самого бота
+                const cands = cat ? [...fromText, String(x.player_name || '')] : [String(x.player_name || '')];
+                cands.forEach(n => {
+                    const g = n && byNick.get(n.toLowerCase());
+                    if (!g || seen.has(g) || (only && g !== only)) return;
+                    seen.add(g);
+                    g.banned = un ? null : banInfo(x.time, txt);
+                });
+            });
+        apply(S.banRows);
+        arr.forEach(g => {
+            const p = !g.banned && S.probed.get(g.key);
+            if (p) apply(p.slice().sort((x, y) => new Date(x.time) - new Date(y.time)), g);
+            // срок блокировки уже вышел — снова активен
+            if (g.banned && g.banned.until && g.banned.until < Date.now()) g.banned = null;
+        });
     },
     render(out, d) {
         const { rows, c, ips } = d;
@@ -5209,16 +5247,14 @@ const BotView = {
         const shownKeys = new Set(arr.map(g => g.key));
         // «похожи на ботов» и «Ники ботов» — только те, кто ещё не заблокирован: их и надо блокировать
         const bots = arr.filter(g => g.bot && !g.banned);
-        // активные сверху, заблокированные — в конце списка
-        arr.sort((x, y) => !!x.banned - !!y.banned);
         const PER = 25;
         const pages = Math.max(1, Math.ceil(arr.length / PER));
         d.page = Math.min(Math.max(0, d.page || 0), pages - 1);
         const pageRows = arr.slice(d.page * PER, d.page * PER + PER);
-        const pager = pages > 1 ? `<div class="vdl-pager"><button class="btn" data-pg="${d.page - 1}" ${d.page ? '' : 'disabled'}>‹</button>${[...Array(pages).keys()]
+        const pager = pages > 1 || d.more ? `<div class="vdl-pager"><button class="btn" data-pg="${d.page - 1}" ${d.page ? '' : 'disabled'}>‹</button>${[...Array(pages).keys()]
             .filter(i => i === 0 || i === pages - 1 || Math.abs(i - d.page) <= 2)
             .map((i, k, a) => `${k && i - a[k - 1] > 1 ? '<span class="muted">…</span>' : ''}<button class="btn${i === d.page ? ' pri' : ''}" data-pg="${i}">${i + 1}</button>`)
-            .join('')}<button class="btn" data-pg="${d.page + 1}" ${d.page < pages - 1 ? '' : 'disabled'}>›</button><span class="muted" style="margin-left:6px">${d.page * PER + 1}–${Math.min(arr.length, d.page * PER + PER)} из ${arr.length}</span></div>` : '';
+            .join('')}<button class="btn" data-pg="${d.page + 1}" ${d.page < pages - 1 || d.more ? '' : 'disabled'}>›</button><span class="muted" style="margin-left:6px">${arr.length ? d.page * PER + 1 : 0}–${Math.min(arr.length, d.page * PER + PER)} из ${arr.length}${d.more ? '+' : ''}</span></div>` : '';
         const groups = [...ips.values()].filter(s => [...s].filter(k => shownKeys.has(k)).length >= c.minAcc).length;
         const nMsg = arr.reduce((a, g) => a + g.n, 0);
         // IP, с которых писало больше всего подозреваемых аккаунтов
@@ -5297,7 +5333,7 @@ const BotView = {
                         .map(
                             g => `<div class="vdl-row vdl-botrow ${g.banned ? 'is-banned' : g.bot ? 'is-bot' : ''}"><div class="main">
                       <div class="ttl"><span class="vdl-nick" data-nick="${U.esc(g.nick)}">${U.esc(g.nick)}</span>${g.id != null && g.id !== '' ? `<button class="vdl-idchip" data-id="${U.esc(String(g.id))}" title="Игровой ID — ник можно сменить, ID нет. Нажми, чтобы скопировать">ID ${U.esc(String(g.id))}</button><button class="vdl-idchip vdl-botcmd" data-cmd="/bot ${U.esc(String(g.id))}" title="Скопировать команду /bot ${U.esc(String(g.id))}">/bot</button>` : ''}
-                        ${g.banned ? `<span class="vdl-tag" style="--c:#8b8f9a" title="${U.esc(fmtDate(g.banned.t) + ' — ' + g.banned.desc.slice(0, 160))}">заблокирован ${U.esc(fmtDate(g.banned.t).split(',')[0])}${g.banned.until ? ' до ' + U.esc(fmtDate(g.banned.until).split(',')[0]) : ''}</span>` : g.bot ? '<span class="vdl-tag" style="--c:#e5484d">похож на бота</span>' : ''}
+                        ${g.banned ? `<span class="vdl-tag" style="--c:#8b8f9a" title="${U.esc(fmtDate(g.banned.t) + ' — ' + g.banned.desc.slice(0, 160))}">заблокирован ${U.esc(fmtDate(g.banned.t).split(',')[0])}${g.banned.until ? ' до ' + U.esc(fmtDate(g.banned.until).split(',')[0]) : ''}</span>` : g.bot ? (d.banReady ? '<span class="vdl-tag" style="--c:#e5484d">похож на бота</span>' : '<span class="vdl-tag" style="--c:#8b8f9a">проверяю…</span>') : ''}
                         ${g.level != null ? `<span class="vdl-tag" style="--c:${g.level <= c.level ? '#e5484d' : '#8b8f9a'}">ур. ${g.level}</span>` : ''}
                         ${[...g.ips].slice(0, 2).map(ip => `<span class="vdl-tag" style="--c:${ips.get(ip).size >= c.minAcc ? '#f5a524' : '#3aa0ff'}">${U.esc(ip)}${ips.get(ip).size > 1 ? ` · ${ips.get(ip).size} акк.` : ''}</span>`).join('')}
                         ${[...(g.tg || [])].slice(0, 2).map(h => `<span class="vdl-tag" style="--c:#a970ff">${U.esc(h)}${d.byTg && d.byTg.get(h) && d.byTg.get(h).size > 1 ? ` · ${d.byTg.get(h).size} акк.` : ''}</span>`).join('')}
@@ -5320,6 +5356,8 @@ const BotView = {
                     this.render(out, d);
                     const l = out.querySelector('[data-l="list"]');
                     if (l) l.scrollIntoView({ block: 'nearest' });
+                    // ближе к концу загруженного — догружаем; у показанной страницы — блокировки и уровни
+                    if (d.scan) this.pump(d.scan);
                 })
         );
         const wx = out.querySelector('[data-a="weak"]');
@@ -5328,6 +5366,7 @@ const BotView = {
                 d.showWeak = wx.checked;
                 d.page = 0;
                 this.render(out, d);
+                if (d.scan) this.pump(d.scan);
             };
         const bx = out.querySelector('[data-a="ban"]');
         if (bx)
@@ -5335,30 +5374,19 @@ const BotView = {
                 d.hideBan = bx.checked;
                 d.page = 0;
                 this.render(out, d);
+                if (d.scan) this.pump(d.scan);
             };
         const kb = out.querySelector('[data-a="chkban"]');
         if (kb)
-            kb.onclick = async () => {
-                if (this.busy && this._busyGen === this._gen) return toast('Подожди, поиск ещё идёт', 'info');
-                this.busy = true;
-                const gen = (this._busyGen = this._gen);
-                const alive = () => gen === this._gen;
-                kb.disabled = true;
-                try {
-                    const info = await this.checkBans(d.arr, d.range, gen, alive);
-                    if (info == null || !alive()) return;
-                    d.blkInfo = info;
-                    this.prog('', gen);
-                    this.render(out, d);
-                    const n = d.arr.filter(g => g.banned).length;
-                    toast(n ? `Заблокированных: ${n}` : 'Заблокированных среди найденных нет');
-                } catch (e) {
-                    this.prog('', gen);
-                    toast('Не получилось проверить: ' + e.message, 'err');
-                } finally {
-                    if (this._busyGen === gen) this.busy = false;
-                    if (kb.isConnected) kb.disabled = false;
-                }
+            kb.onclick = () => {
+                const S = d.scan;
+                if (!S) return;
+                if (S.loading) return toast('Подожди, поиск ещё идёт', 'info');
+                // заново: записи о блокировках и проверки по нику
+                S.banRows = null;
+                S.probed.clear();
+                S.forceBan = true;
+                this.pump(S);
             };
         out.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
         out.querySelectorAll('.vdl-idchip').forEach(
