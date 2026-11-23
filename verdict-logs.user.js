@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.80
+// @version      1.2.81
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.80
+// @version      1.2.81
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.80';
+const VERSION = '1.2.81';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -4856,7 +4856,7 @@ const BotView = {
                     // телеграмы — только из списка «Что ловить» и только через @ (ссылки t.me не считаем)
                     // «@Gad_Om» с большими буквами tgHandles принимает за ник игрока — берём и совпадения из списка
                     const tg = [...new Set([...tgHandles(x.transaction_desc, true), ...hit.map(p => p.toLowerCase())])].filter(h => wanted.has(h));
-                    if (hit.length || tg.length) rows.push(Object.assign({ _hit: hit, _tg: tg }, x));
+                    if (hit.length || tg.length) rows.push(Object.assign({ _hit: hit, _tg: tg, _tgAll: tgHandles(x.transaction_desc) }, x));
                 });
             // 1) точные фразы — поиском сайта
             // по каждому выбранному чату: иначе частые слова («бесплатно») забивают лимит системными записями
@@ -4900,12 +4900,16 @@ const BotView = {
                 if (!n) return;
                 const low = n.toLowerCase();
                 const k = hasId(x) ? 'id' + x.player_id : idByNick.has(low) ? 'id' + idByNick.get(low) : 'n' + low;
-                const g = sus.get(k) || { nick: n, id: x.player_id, n: 0, hits: new Set(), tg: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
+                const g = sus.get(k) || { nick: n, id: x.player_id, n: 0, hits: new Set(), tg: new Set(), tgAll: new Set(), texts: new Set(), ips: new Set(), sample: '', last: 0, cats: new Set() };
                 g.key = k;
                 (g.nicks = g.nicks || new Set()).add(n);
                 if (g.id == null && hasId(x)) g.id = x.player_id;
                 g.n++;
                 x._hit.forEach(h => g.hits.add(h));
+                (x._tgAll || []).forEach(h => !knownNicks.has(h.slice(1)) && g.tgAll.add(h));
+                // текст без цифр и знаков — одинаковая рассылка с разных аккаунтов
+                const norm = botNorm(String(x.transaction_desc || '')).replace(/\d+/g, '');
+                if (norm.length >= 12) g.texts.add(norm);
                 (x._tg || []).forEach(h => !knownNicks.has(h.slice(1)) && g.tg.add(h));
                 if (x.player_ip) g.ips.add(x.player_ip);
                 g.cats.add(catName(x));
@@ -4936,7 +4940,11 @@ const BotView = {
                 let fails = 0;
                 // уровень — только у тех, кто похож на бота (реклама @ника, общий IP, несколько фраз или сообщений):
                 // у случайного игрока с одним словом уровень ничего не решает, а каждый запрос — ещё ~1,3 с
-                const top = arr.filter(g => !g.banned && (g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3)).slice(0, 30);
+                const susp = g => g.tg.size || g.acc >= c.minAcc || g.hits.size > 1 || g.n >= 3;
+                const top = arr
+                    .filter(g => !g.banned && susp(g))
+                    .concat(arr.filter(g => !g.banned && !susp(g)))
+                    .slice(0, 60);
                 Bots._lvl = Bots._lvl || new Map();
                 for (const [i, g] of top.entries()) {
                     if (!alive()) return;
@@ -4971,6 +4979,17 @@ const BotView = {
                 }
             }
             this.prog('', gen);
+            // общие признаки рассылки: один @ник/t.me (даже не из списка) или один и тот же текст у 2+ аккаунтов
+            const byAnyTg = new Map(),
+                byText = new Map();
+            sus.forEach((g, k) => {
+                g.tgAll.forEach(h => byAnyTg.set(h, (byAnyTg.get(h) || new Set()).add(k)));
+                g.texts.forEach(t => byText.set(t, (byText.get(t) || new Set()).add(k)));
+            });
+            arr.forEach(g => {
+                g.sharedTg = [...g.tgAll].filter(h => byAnyTg.get(h).size >= 2).sort((a, b) => byAnyTg.get(b).size - byAnyTg.get(a).size)[0] || '';
+                g.sameText = Math.max(0, ...[...g.texts].map(t => byText.get(t).size));
+            });
             arr.forEach(g => {
                 g.why = [];
                 const topH = [...g.tg].sort((a, b) => byTg.get(b).size - byTg.get(a).size)[0];
@@ -4979,10 +4998,23 @@ const BotView = {
                 if (g.level != null && g.level <= c.level) g.why.push(`уровень ${g.level}`);
                 if (g.acc >= c.minAcc) g.why.push(`${g.acc} акк. с одного IP`);
                 if (g.n >= 3) g.why.push(`${g.n} сообщ.`);
-                // бот: рекламирует @ник / t.me, много аккаунтов с одного IP или низкий уровень
-                g.bot = g.tg.size > 0 || g.acc >= c.minAcc || (g.level != null && g.level <= c.level);
+                if (g.sharedTg && !g.tg.has(g.sharedTg)) g.why.push(`${g.sharedTg} у ${byAnyTg.get(g.sharedTg).size} акк.`);
+                if (g.sameText >= 2) g.why.push(`одинаковый текст у ${g.sameText} акк.`);
+                // бот: рекламирует @ник / t.me, рассылка (общий @ник или одинаковый текст), много аккаунтов с одного IP или низкий уровень
+                g.bot = g.tg.size > 0 || !!g.sharedTg || g.sameText >= 2 || g.acc >= c.minAcc || (g.level != null && g.level <= c.level);
                 // слабое совпадение: одно слово вроде «тг» без @ника, ссылки и других признаков — обычный игрок
                 g.weak = !g.bot && !g.tg.size && g.hits.size <= 1 && g.n < 3;
+            });
+            // общий IP с уже найденным ботом — тоже бот (второй аккаунт того же человека)
+            const botIps = new Map();
+            arr.forEach(g => g.bot && g.ips.forEach(ip => botIps.set(ip, g.nick)));
+            arr.forEach(g => {
+                if (g.bot) return;
+                const ip = [...g.ips].find(x => botIps.has(x));
+                if (!ip) return;
+                g.bot = true;
+                g.weak = false;
+                g.why.push(`общий IP с ботом ${botIps.get(ip)}`);
             });
             arr.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n);
             const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
