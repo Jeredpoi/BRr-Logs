@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.81
+// @version      1.2.82
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.81
+// @version      1.2.82
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.81';
+const VERSION = '1.2.82';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -123,6 +123,7 @@ input, textarea { font: inherit; color: inherit; }
 .btn:hover { background: rgba(255,255,255,.12); }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.pri { background: var(--acc); color: #fff; border-color: transparent; }
+.btn.pri.danger { background: #e5484d; }
 .btns { display: flex; align-items: center; gap: 8px; }
 .icon-btn { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; color: var(--tx-2); }
 .icon-btn:hover { background: rgba(255,255,255,.08); color: #fff; }
@@ -1158,7 +1159,7 @@ const Api = {
                 Store.set('pageSize2', prev);
             }
             out.push(...d);
-            if (onPage) onPage(i + 1, out.length);
+            if (onPage) onPage(i + 1, out.length, d);
             if (!d.length) break;
             off += d.length;
             prev = d.length;
@@ -3404,13 +3405,10 @@ const AdminView = {
                     // запись сайта могла прийти без номера категории — проставляем тот, по которому искали
                     own.push(r.category_id == null ? Object.assign({}, r, { category_id: cat.id }) : r);
                 });
-            // ВРЕМЕННО: подробный лог подсчёта для сверки с официальным числом
-            const dbg = { req: [], repAll: null, at: Date.now() };
             for (const [i, cat] of ready.entries()) {
                 const step = `${cat.name} (${i + 1}/${ready.length})`;
                 // как считает куратор: фильтр сайта «ник + категория» за период — число записей
                 const r = await Api.all({ player_name__exact: nick, category_id__exact: cat.id, ...range }, 60, (p, n) => this.prog(`${step}: страница ${p}, записей ${n}…`, gen), null, alive, 0, { strict: true });
-                dbg.req.push({ cat: cat.name, id: cat.id, n: r.length, capped: !!r.capped, noAccess: !!r.noAccess, wrongCat: r.filter(x => x.category_id != null && String(x.category_id) !== String(cat.id)).length });
                 // нет доступа к категории у этой учётной записи — считаем остальные и пишем об этом
                 if (r.noAccess) {
                     noAccess.push(cat.name);
@@ -3429,8 +3427,6 @@ const AdminView = {
                 // все записи админа в жалобах за период: считаются закрытия и муты репорта, остальное — для справки
                 const r = await Api.all({ player_name__exact: nick, category_id__exact: repCat.id, ...range }, 60, (p, n) => this.prog(`Жалобы/вопросы: страница ${p}, записей ${n}…`, gen), null, alive, 0, { strict: true });
                 if (!alive()) return;
-                dbg.req.push({ cat: 'Жалобы/Вопросы', id: repCat.id, n: r.length, capped: !!r.capped, noAccess: !!r.noAccess, wrongCat: 0 });
-                dbg.repAll = r;
                 const RM = /действие:\s*выдача\s+мута\s+репорта/i,
                     CL = /тип:\s*закрыта\.\s*причина:[^.]*закрыл\s+обращение/i;
                 const T = x => String(x.transaction_desc || '');
@@ -3462,7 +3458,7 @@ const AdminView = {
             if (!alive()) return;
             this.prog('', gen);
             Notify.done(this.scrim, 'Админ-действия готовы', `${nick}: ${own.length} ${plural(own.length, 'запись', 'записи', 'записей')} за период`);
-            this.render(out, { dbg, nick, a, b, ta, tb, range, all: own, own, events, spec, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
+            this.render(out, { nick, a, b, ta, tb, range, all: own, own, events, spec, cats, capped, more, addRows, repInfo, noAccess, tab: (this.last && this.last.tab) || 'cat' });
         } catch (e) {
             if (!alive()) return;
             this.prog('', gen);
@@ -3551,64 +3547,6 @@ const AdminView = {
             });
         }
         return out;
-    },
-    // ВРЕМЕННО: файл с разбором подсчёта — что загружено, что засчитано, по какому правилу, что нет и почему
-    dbgLog(d, own, off) {
-        const msk = t => new Date(new Date(t).getTime() + 3 * 3600e3).toISOString().replace('T', ' ').slice(0, 19);
-        const name = k => (COUNT_TYPES.find(x => x.k === k) || {}).name || k;
-        const p0 = this.dayStart(d.a) + (this.hm(d.ta) || 0),
-            p1 = this.hm(d.tb) != null ? this.dayStart(d.b) + this.hm(d.tb) + 59999 : this.dayStart(d.b) + 864e5 - 1;
-        const key = r => `${r.time}|${r.category_id}|${r.player_name}|${r.transaction_desc}`;
-        const seenK = new Map();
-        d.own.forEach(r => seenK.set(key(r), (seenK.get(key(r)) || 0) + 1));
-        const L = [];
-        L.push('VERDICT Логи — подробный лог подсчёта админ-действий');
-        L.push(`Админ: ${d.nick}`);
-        L.push(`Период: ${d.a} ${d.ta || '00:00'} — ${d.b} ${d.tb || '23:59'} МСК (запрос к сайту: ${d.range.time__gte} — ${d.range.time__lte} UTC)`);
-        L.push(`Сервер: ${Api.server() || '?'} · выгружено ${msk(Date.now())} МСК · версия скрипта ${typeof GM_info !== 'undefined' ? GM_info.script.version : '?'}`);
-        L.push('');
-        L.push(`ИТОГО ЗАСЧИТАНО: ${own.length}`);
-        L.push('');
-        L.push('ЗАПРОСЫ К САЙТУ (категория — записей; обрезано = упёрлись в предел страниц):');
-        d.dbg.req.forEach(q => L.push(`  ${q.cat} [#${q.id}] — ${q.n}${q.capped ? ' · ОБРЕЗАНО' : ''}${q.noAccess ? ' · НЕТ ДОСТУПА' : ''}${q.wrongCat ? ` · пришло из другой категории: ${q.wrongCat} (отброшены)` : ''}`));
-        L.push('');
-        L.push('ПО ВИДАМ (засчитано):');
-        COUNT_TYPES.forEach(t => {
-            const n = d.own.filter(r => r._cnt === t.k).length;
-            if (n) L.push(`  ${t.name}: ${n}${off.types.has(t.k) ? ' — ВЫКЛЮЧЕНО куратором, не в итоге' : ''}`);
-        });
-        const notC = d.own.filter(r => !r._cnt);
-        const outP = d.own.filter(r => {
-            const t = new Date(r.time).getTime();
-            return t < p0 || t > p1;
-        });
-        const dups = [...seenK.values()].filter(n => n > 1).reduce((a, n) => a + n - 1, 0);
-        L.push('');
-        L.push(`НЕ ЗАСЧИТАНО (загружено, но вид не из списка): ${notC.length}`);
-        L.push(`ПОВТОРЫ (одинаковые время, категория, ник и текст; засчитаны каждый раз, как на сайте): ${dups}`);
-        L.push(`ВНЕ ПЕРИОДА (время записи не попадает в выбранный период): ${outP.length}`);
-        if (d.dbg.repAll) {
-            const rest = d.dbg.repAll.filter(x => !COUNT_REP.test(String(x.transaction_desc || '')));
-            L.push(`ЖАЛОБЫ/ВОПРОСЫ: всего ${d.dbg.repAll.length}, засчитано (закрыл/PM) ${d.dbg.repAll.length - rest.length}, не засчитано ${rest.length}`);
-        }
-        L.push('');
-        L.push('ВСЕ ЗАПИСИ (табуляция; можно открыть в Excel):');
-        L.push(['время МСК', 'категория', '№ кат.', 'считается', 'вид', 'почему', 'повтор', 'вне периода', 'текст'].join('\t'));
-        const rows = d.own.concat(d.dbg.repAll ? d.dbg.repAll.filter(x => !COUNT_REP.test(String(x.transaction_desc || ''))).map(x => Object.assign({}, x, { _repOut: true })) : []);
-        rows.sort((x, y) => new Date(x.time) - new Date(y.time)).forEach(r => {
-            const t = new Date(r.time).getTime();
-            const counted = !r._repOut && r._cnt && !off.types.has(r._cnt);
-            const why = r._repOut ? 'жалобы: не закрыл/PM (взял в работу, мут репорта, ответ и т.п.)' : !r._cnt ? 'вид не из списка' : off.types.has(r._cnt) ? 'вид выключен куратором' : r._cnt === 'chat' ? 'сообщение в админ-чате' : r._cnt === 'reports' ? 'работа с жалобами' : 'совпало с видом по тексту';
-            L.push([msk(r.time), catName(r), r.category_id, counted ? 'да' : 'нет', r._repOut ? '' : r._cnt ? name(r._cnt) : '', why, (seenK.get(key(r)) || 0) > 1 ? 'да' : '', t < p0 || t > p1 ? 'да' : '', String(r.transaction_desc || '').replace(/\s+/g, ' ')].join('\t'));
-        });
-        const blob = new Blob(['\ufeff' + L.join('\r\n')], { type: 'text/plain;charset=utf-8' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `verdict-count_${d.nick}_${d.a}_${d.b}.txt`;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => (URL.revokeObjectURL(a.href), a.remove()), 1000);
-        toast('Лог подсчёта скачан');
     },
     // что куратор исключил кликом по строке: { cats: ['chat'], types: ['auth'] }
     off() {
@@ -3773,10 +3711,7 @@ const AdminView = {
             <div class="sub vdl-jr-info" data-l="jinfo"></div>
             <div class="vdl-jr-wrap"><div class="card" data-l="list"></div><div class="vdl-dlg" data-l="dlg" hidden></div></div>
           </div>
-          <div class="btns" style="margin-top:12px"><span style="flex:1"></span>${d.dbg ? `<button class="btn" data-a="dbglog" title="Подробно: каждая запись — считается или нет и почему">${icon('download', 14)}Скачать лог подсчёта</button>` : ''}<button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
-        // ВРЕМЕННО: выгрузка подробного лога подсчёта
-        const dl = out.querySelector('[data-a="dbglog"]');
-        if (dl) dl.onclick = () => this.dbgLog(d, own, off);
+          <div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copy">${icon('download', 14)}Скопировать отчёт</button></div>`;
         out.querySelectorAll('[data-tog]').forEach(
             el =>
                 (el.onclick = () => {
@@ -4811,7 +4746,8 @@ const BotView = {
             const ru = x => x.split('-').reverse().join('.');
             return [`${a === b ? ru(a) : `${ru(a)} — ${ru(b)}`}${v('btfrom') || v('btto') ? ` · ${v('btfrom') || '00:00'}–${v('btto') || '23:59'} МСК` : ''}`, () => [t0, t1]];
         };
-        scrim.querySelector('[data-a="go"]').onclick = () => {
+        scrim.querySelector('[data-a="go"]').onclick = e => {
+            if (e.currentTarget.dataset.run && this.busy) return this.stop();
             if (r !== 'custom') return this.search(this.RANGES[r]);
             const cr = customRange();
             if (!cr) return toast('Выбери даты', 'err');
@@ -4820,7 +4756,42 @@ const BotView = {
         CatLearn.discover().catch(() => {});
     },
     prog(t, gen) {
-        if (this.scrim && gen === this._gen) this.scrim.querySelector('.vdl-prog').textContent = t;
+        if (gen !== this._gen) return;
+        // лог поиска: каждый шаг со временем от прошлого шага — видно, что тормозит
+        const L = this._log;
+        if (L && t) {
+            const now = performance.now();
+            L.push(`${((now - L.t0) / 1000).toFixed(1).padStart(7)} с  +${String(Math.round(now - L.last)).padStart(5)} мс  ${t}`);
+            L.last = now;
+        }
+        if (this.scrim) this.scrim.querySelector('.vdl-prog').textContent = t;
+    },
+    // скачать лог поиска: что и сколько грузилось
+    saveLog(L) {
+        const blob = new Blob([L.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `verdict-bots-log_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    },
+    // «Искать» ↔ «Прервать» на той же кнопке
+    goBtn(run) {
+        const b = this.scrim && this.scrim.querySelector('[data-a="go"]');
+        if (!b) return;
+        b.dataset.run = run ? '1' : '';
+        b.classList.toggle('danger', !!run);
+        b.innerHTML = run ? `${icon('x', 14)}Прервать` : `${icon('search', 14)}Искать`;
+    },
+    stop() {
+        this._gen++;
+        this.busy = false;
+        this.goBtn(false);
+        if (this._log) this._log.push('— прервано —');
+        if (this.scrim) this.scrim.querySelector('.vdl-prog').textContent = '';
+        toast('Поиск прерван', 'info');
     },
     async search([label, get]) {
         if (this.busy && this._busyGen === this._gen) return toast('Подожди, поиск ещё идёт', 'info');
@@ -4834,6 +4805,12 @@ const BotView = {
         Bots.reset();
         const list = Bots.phrases(c);
         const started = performance.now();
+        const self = this;
+        const L = (this._log = Object.assign([], { t0: started, last: started }));
+        L.push(`Поиск ботов: ${label} · фраз ${list.length} · похожие написания: ${c.fuzzy ? 'да' : 'нет'} · уровни: ${c.levels ? 'да' : 'нет'} · заблокированные: ${c.hideBanned ? 'да' : 'нет'}`);
+        this.goBtn(true);
+        // состояние просмотра (страница, галочки) переживает догрузку
+        let view = null;
         try {
             if (!list.length) throw new Error('список фраз пуст — добавь их в «Что ловить»');
             const [t0, t1] = get();
@@ -4858,6 +4835,15 @@ const BotView = {
                     const tg = [...new Set([...tgHandles(x.transaction_desc, true), ...hit.map(p => p.toLowerCase())])].filter(h => wanted.has(h));
                     if (hit.length || tg.length) rows.push(Object.assign({ _hit: hit, _tg: tg, _tgAll: tgHandles(x.transaction_desc) }, x));
                 });
+            // первые найденные показываем сразу, остальное догружается в фоне (перерисовка не чаще раза в 3 с)
+            let shownAt = 0,
+                shownN = 0;
+            const partial = () => {
+                if (!rows.length || rows.length === shownN || performance.now() - shownAt < 3000) return;
+                shownAt = performance.now();
+                shownN = rows.length;
+                analyze(false).catch(() => {});
+            };
             // 1) точные фразы — поиском сайта
             // по каждому выбранному чату: иначе частые слова («бесплатно») забивают лимит системными записями
             // фраза, в которой целиком есть другая фраза списка, ничего нового поиском не даст — её не ищем отдельно
@@ -4869,21 +4855,46 @@ const BotView = {
                 // чатов много — одним запросом пошире (лишнее отбросит фильтр чатов)
                 for (const ch of chats.length && chats.length <= 3 ? chats : [null]) {
                     // «@ник» ищем без @ (сайт ищет и так), лишнее отсеет проверка на @
-                    const r = await Api.all({ transaction_desc__ilike: `%${p.replace(/^@/, '')}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range }, 500, (pg, n) => this.prog(`«${p}» (${i + 1}/${queries.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}…`, gen), null, alive);
+                    const r = await Api.all(
+                        { transaction_desc__ilike: `%${p.replace(/^@/, '')}%`, ...(ch ? { category_id__exact: ch.id } : {}), ...range },
+                        500,
+                        (pg, n, d) => {
+                            take(d, ch && ch.id);
+                            this.prog(`«${p}» (${i + 1}/${queries.length})${ch ? ' · ' + ch.name : ''}: страница ${pg}, записей ${n}, найдено ${rows.length}…`, gen);
+                            partial();
+                        },
+                        null,
+                        alive
+                    );
                     if (!alive()) return;
                     capped = capped || r.capped;
-                    take(r, ch && ch.id);
                 }
             }
             // 2) похожие написания — читаем чаты целиком
             if (c.fuzzy) {
                 for (const ch of chats) {
-                    const r = await Api.all({ category_id__exact: ch.id, ...range }, 500, (pg, n) => this.prog(`${ch.name}: страница ${pg}, записей ${n}…`, gen), null, alive);
+                    const r = await Api.all(
+                        { category_id__exact: ch.id, ...range },
+                        500,
+                        (pg, n, d) => {
+                            take(d, ch.id);
+                            this.prog(`${ch.name}: страница ${pg}, записей ${n}, найдено ${rows.length}…`, gen);
+                            partial();
+                        },
+                        null,
+                        alive
+                    );
                     if (!alive()) return;
                     capped = capped || r.capped;
-                    take(r, ch.id);
                 }
             }
+            this.prog('Разбираю найденное…', gen);
+            await analyze(true);
+            if (!alive()) return;
+            Notify.done(this.scrim, 'Поиск ботов готов', `${label}: найдено ${rows.length}`);
+            // разбор найденного: final=false — промежуточный показ без проверки блокировок и уровней (уровни — из памяти)
+            // eslint-disable-next-line no-inner-declarations
+            async function analyze(final) {
             // подозреваемые: по нику
             const sus = new Map();
             const idByNick = new Map();
@@ -4931,12 +4942,19 @@ const BotView = {
             const arr = [...sus.values()].sort((x, y) => y.tgAcc - x.tgAcc || y.acc - x.acc || y.n - x.n);
             // кто уже заблокирован — сразу при поиске (можно выключить) и отдельной кнопкой в результатах
             let blkInfo = '';
-            if (c.hideBanned && arr.length) {
-                blkInfo = await this.checkBans(arr, range, gen, alive);
+            if (final && c.hideBanned && arr.length) {
+                blkInfo = await self.checkBans(arr, range, gen, alive);
                 if (blkInfo == null) return;
             }
             // уровни: последний вход/выход с «Уровень: N» — сначала у тех, кто рекламирует @ник или пишет с общего IP
-            if (c.levels) {
+            if (!final) {
+                // промежуточно: уровни только из памяти, без запросов
+                const lc = Bots._lvl;
+                if (lc) arr.forEach(g => {
+                    const v = lc.get(g.nick.toLowerCase());
+                    if (v && Date.now() - v.at < 3600e3) g.level = v.v;
+                });
+            } else if (c.levels) {
                 let fails = 0;
                 // уровень — только у тех, кто похож на бота (реклама @ника, общий IP, несколько фраз или сообщений):
                 // у случайного игрока с одним словом уровень ничего не решает, а каждый запрос — ещё ~1,3 с
@@ -4954,12 +4972,12 @@ const BotView = {
                         g.level = lc.v;
                         continue;
                     }
-                    this.prog(`Проверяю уровень аккаунтов: ${i + 1} из ${top.length}…`, gen);
+                    self.prog(`Проверяю уровень аккаунтов: ${i + 1} из ${top.length}…`, gen);
                     try {
                         // свежие входы: при сортировке «сначала старые» первая страница — давние записи, поэтому окно короче
                         const since = new Date(Date.now() - (Api.order === 'time' ? 2 : 30) * 864e5).toISOString();
                         const r = await Api.page({ player_name__exact: g.nick, category_id__exact: 38, transaction_desc__ilike: '%ровень%', time__gte: since }, 0);
-                        if (gen !== this._gen) return;
+                        if (gen !== self._gen) return;
                         const m = r
                             .slice()
                             .sort((x, y) => new Date(y.time) - new Date(x.time))
@@ -4978,7 +4996,7 @@ const BotView = {
                     }
                 }
             }
-            this.prog('', gen);
+            if (final) self.prog('', gen);
             // общие признаки рассылки: один @ник/t.me (даже не из списка) или один и тот же текст у 2+ аккаунтов
             const byAnyTg = new Map(),
                 byText = new Map();
@@ -5018,15 +5036,37 @@ const BotView = {
             });
             arr.sort((x, y) => y.bot - x.bot || y.tgAcc - x.tgAcc || y.why.length - x.why.length || y.n - x.n);
             const bannedKeys = new Set([...sus].filter(([, g]) => g.banned).map(([k]) => k));
+            // страница и галочки — как выбрал смотрящий, пока догружалось
             const took = Math.round((performance.now() - started) / 1000);
-            this.render(out, { label: `${label} · поиск занял ${took >= 60 ? `${Math.floor(took / 60)} мин ${took % 60} с` : `${took} с`}`, arr, rows, c, ips: byIp, nickOf, bannedKeys, byTg, capped, page: 0, hideBan: false, showWeak: false, blkInfo, range });
-            Notify.done(this.scrim, 'Поиск ботов готов', `${label}: найдено ${rows.length}`);
+            const tookS = took >= 60 ? `${Math.floor(took / 60)} мин ${took % 60} с` : `${took} с`;
+            view = Object.assign({ page: 0, hideBan: false, showWeak: false }, view && { page: view.page, hideBan: view.hideBan, showWeak: view.showWeak }, {
+                label: final ? `${label} · поиск занял ${tookS}` : `${label} · загружено ${rows.length}, ищу дальше…`,
+                partial: !final,
+                log: L,
+                arr,
+                rows,
+                c,
+                ips: byIp,
+                nickOf,
+                bannedKeys,
+                byTg,
+                capped,
+                blkInfo,
+                range
+            });
+            if (final) L.push(`Готово: записей ${rows.length}, аккаунтов ${arr.length}, похожи на ботов ${arr.filter(g => g.bot).length} · всего ${tookS}`);
+            self.render(out, view);
+            }
         } catch (e) {
             if (gen !== this._gen) return;
             this.prog('', gen);
+            L.push('Ошибка: ' + e.message);
             out.innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(e.message)}</div>`;
         } finally {
-            if (this._busyGen === gen) this.busy = false;
+            if (this._busyGen === gen) {
+                this.busy = false;
+                this.goBtn(false);
+            }
         }
     },
     // кто из найденных уже заблокирован (или разбанен): отметка g.banned; вернёт строку «где искал» или null, если поиск устарел
@@ -5232,7 +5272,9 @@ const BotView = {
                   : `<div class="vdl-row"><div class="main sub">${!d.arr.length ? 'За этот период рекламных сообщений не найдено' : nWeak && !d.showWeak ? 'Есть только слабые совпадения — включи «Показать слабые совпадения»' : 'Все найденные заблокированы — сними «Скрыть заблокированных», чтобы увидеть их'}</div></div>`
           }</div>
           ${pager}
-          ${arr.length ? `<div class="btns" style="margin-top:12px"><span style="flex:1"></span><button class="btn" data-a="copyb">${icon('download', 14)}Ники ботов</button><button class="btn" data-a="copy">${icon('download', 14)}Весь список</button></div>` : ''}`;
+          ${arr.length || (d.log && !d.partial) ? `<div class="btns" style="margin-top:12px"><span style="flex:1"></span>${d.log && !d.partial ? `<button class="btn" data-a="botlog" title="Что и сколько грузилось — чтобы понять, что тормозит">${icon('download', 14)}Лог поиска</button>` : ''}${arr.length ? `<button class="btn" data-a="copyb">${icon('download', 14)}Ники ботов</button><button class="btn" data-a="copy">${icon('download', 14)}Весь список</button>` : ''}</div>` : ''}`;
+        const lg = out.querySelector('[data-a="botlog"]');
+        if (lg) lg.onclick = () => this.saveLog(d.log);
         out.querySelectorAll('[data-pg]').forEach(
             b =>
                 (b.onclick = () => {
