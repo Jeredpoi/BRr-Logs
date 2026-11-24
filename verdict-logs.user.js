@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.84
+// @version      1.2.85
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -23,7 +23,7 @@
 // ==UserScript==
 // @name         VERDICT Логи
 // @namespace    verdict.br.logs
-// @version      1.2.84
+// @version      1.2.85
 // @description  Аналитика по игроку (IP, устройства, платформа, сессии, деньги, трейды), подсчёт админ-действий для кураторов, подсветка повторов, просмотр трейдов на logs.blackrussia.online. Работает вместе с VERDICT.
 // @author       Максим Паль!?
 // @match        https://logs.blackrussia.online/*
@@ -40,7 +40,7 @@
 // @noframes
 // ==/UserScript==
 
-const VERSION = '1.2.84';
+const VERSION = '1.2.85';
 const MAIL = 'https://script.google.com/macros/s/AKfycbytX0c4kEDYpUj_6-gMYPcuMeTQr79idfeeR0RTe3jd0StcKkJ-DGAaPppysbUx7aLmUA/exec';
 const BRAND = { version: VERSION, dev: { mail: MAIL } };
 
@@ -3372,6 +3372,8 @@ const AdminView = {
             const ta = tfrom.value || '',
                 tb = tto.value || '';
             if (a === b && ta && tb && ta > tb) return this.msg('Время «с» позже времени «по»');
+            // другой период или ник во время подсчёта — прежний останавливается, считаем заново
+            if (this.busy && this._busyGen === this._gen) this._gen = (this._gen || 0) + 1;
             this.count(nk, a, b, ta, tb);
         };
         $('[data-a="go"]').onclick = go;
@@ -4918,7 +4920,10 @@ const BotView = {
         if (S.loading) return void (S.again = true);
         const gen = this._gen;
         const alive = () => this._scan === S && this._gen === gen;
-        S.loading = true;
+        S.loading = gen;
+        // «Проверить заблокированных» во время загрузки: сначала блокировки у загруженных, потом загрузка продолжится
+        const banFirst = S.banFirst;
+        S.banFirst = false;
         this.busy = true;
         this._busyGen = gen;
         this.goBtn(true);
@@ -4927,7 +4932,7 @@ const BotView = {
             const need = (S.view.page + 3) * 25;
             let budget = S.c.fuzzy ? 30 : 15;
             // по кругу, по 2 страницы сайта с каждого запроса — чтобы первая порция была не из одной фразы
-            while (budget > 0 && !this.allDone(S) && this.visible(S).length < need) {
+            while (!banFirst && budget > 0 && !this.allDone(S) && this.visible(S).length < need) {
                 for (const cur of S.cursors) {
                     if (cur.done || budget <= 0) continue;
                     const r = await Api.all(
@@ -4968,8 +4973,9 @@ const BotView = {
             else this.scrim.querySelector('.vdl-out').innerHTML = `<div class="card" style="padding:14px">${icon('x', 14)} Не получилось: ${U.esc(e.message)}</div>`;
             S.failed = true;
         } finally {
-            S.loading = false;
+            if (S.loading === gen) S.loading = false;
             S.spent += performance.now() - t;
+            if (banFirst && alive() && !this.allDone(S)) S.again = true;
             if (this._busyGen === gen) {
                 this.busy = false;
                 this.goBtn(false);
@@ -5381,11 +5387,18 @@ const BotView = {
             kb.onclick = () => {
                 const S = d.scan;
                 if (!S) return;
-                if (S.loading) return toast('Подожди, поиск ещё идёт', 'info');
                 // заново: записи о блокировках и проверки по нику
                 S.banRows = null;
                 S.probed.clear();
                 S.forceBan = true;
+                S.banFirst = true;
+                // идёт загрузка — ставим её на паузу (продолжится после проверки)
+                if (S.loading) {
+                    this._gen++;
+                    S.loading = false;
+                    S.again = false;
+                    this.analyze(S);
+                }
                 this.pump(S);
             };
         out.querySelectorAll('.vdl-nick').forEach(el => copyNick(el, el.dataset.nick));
